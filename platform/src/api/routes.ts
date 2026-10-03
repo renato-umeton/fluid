@@ -23,7 +23,7 @@ import type { Json } from "../lib/json.ts";
 import { shortRef } from "../runtime/refs.ts";
 import { headOf, openRepo } from "../runtime/repo-files.ts";
 import { DEMO_OVERLAY, demoReleaseFiles } from "../stock/releases.ts";
-import { appExports, repoRemote, startGateInstance } from "../workflows/common.ts";
+import { appExports, ensureRun, repoRemote, startGateInstance } from "../workflows/common.ts";
 import { upgradeTargets } from "../workflows/upgrade.ts";
 import { decodeParam, HttpError, json, readJson, requireJsonPost, requireString } from "./http.ts";
 import { askRef, parsePreferences } from "./validate.ts";
@@ -463,6 +463,8 @@ route("POST", "/api/forks/:repo/repairs/:sha/apply", async (rc, { repo, sha }) =
 	}
 	if (!commit) throw new HttpError(404, `${branch} not found`);
 	const started = await startGateInstance(appExports(rc.ctx).GateWorkflow, gateInstanceId(name, `apply:${branch}`, commit), { repo: name, branch, commit, mode: "merge", source: "repair-apply" });
+	// The run record exists as soon as this returns, so the caller can poll it right away.
+	await ensureRun(rc.env, { id: started.runId, kind: "gate", repo: name, fields: { branch, commit, mode: "merge", source: "repair-apply", parentRunId: null, regateOf: null } });
 	return json({ runId: started.runId, branch, commit, created: started.created }, started.created ? 202 : 200);
 });
 
@@ -485,7 +487,7 @@ route("POST", "/api/admin/release", async (rc) => {
 	} else {
 		if (compareSemverDesc(tag, latest) >= 0) throw new HttpError(409, `${tag} must be newer than the latest tag ${latest}`);
 		const current = await readStockFiles(rc.env, latest);
-		const { files, changed } = demoReleaseFiles(current);
+		const { files, changed } = demoReleaseFiles(current, tag);
 		const intentId = newIntentId();
 		const tightened = changed.includes("tests/invariants/manifest.json") ? DEMO_OVERLAY.probes.map((p) => p.id) : [];
 		const intent = { id: intentId, author: "mothership:clinical-informatics", agent: null, request: `Release ${tag}${safety ? " (safety release)" : ""}`, purpose: cleanText(notes, 400) || `Stock release ${tag}`, modes_affected: ["research", "administrative"], files: changed, tests_added: tightened.map((id) => `tests/invariants/manifest.json#${id}`), stock_tag: tag };
