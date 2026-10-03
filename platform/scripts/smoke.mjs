@@ -1,5 +1,5 @@
 // End-to-end check against a running platform with real Artifacts:
-//   1. publish stock v1.0.0 (admin route, idempotent)
+//   1. publish the bundled stock release (admin route, idempotent)
 //   2. start a demo session and provision a fork
 //   3. ask the spec section 2 dosing question with a chart open (clinical, no dose)
 //      and with a manuscript open off service (research, dose, 2+ sources)
@@ -45,8 +45,9 @@ const session = await call("POST", "/api/session", { persona: "hospitalist-resea
 check("session issued", typeof session.data.userId === "string" && cookie.startsWith("fluid_session="), session.data.userId);
 const userId = session.data.userId;
 
+const latestTag = (await call("GET", "/api/fleet")).data.stockTags.at(-1);
 const fork = await call("POST", "/api/forks", {});
-check("fork provisioned", fork.data.repo === `user-${userId}` && fork.data.stockTag === "v1.0.0", `${fork.data.repo}, tau ${fork.data.tau}, ${fork.ms} ms`);
+check("fork provisioned on the latest stock tag", fork.data.repo === `user-${userId}` && fork.data.stockTag === latestTag, `${fork.data.repo} on ${fork.data.stockTag}, tau ${fork.data.tau}, ${fork.ms} ms`);
 
 const intents = await call("GET", `/api/intents/${fork.data.repo}`);
 check("onboarding intent recorded", intents.data.some((i) => i.agent === "onboarding") && intents.data.some((i) => i.id === "int_2026_10_03_0001"), `${intents.data.length} records`);
