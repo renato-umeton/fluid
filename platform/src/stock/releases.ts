@@ -80,16 +80,18 @@ export function hasDemoTightening(invariantsText: string | null | undefined): bo
  *   the research cross-check fail only at the new tag;
  * - harvest_opt_in = false in stock's fluid.toml (harvesting is opt-in).
  */
-export function demoReleaseFiles(files: Record<string, string>): { files: Record<string, string>; changed: string[] } {
+export function demoReleaseFiles(files: Record<string, string>, tag?: string): { files: Record<string, string>; changed: string[] } {
 	const path = "app/cards.ts";
 	const text = files[path];
 	if (text === undefined) throw new Error("stock has no app/cards.ts");
 	const lines = text.split("\n");
 	const index = lines.findIndex((line) => line.startsWith(MULTI_FRAMING_PREFIX) || line.includes("is below the threshold ${decision.tau}; "));
 	if (index === -1) throw new Error("demo release: the multi-intent framing line was not found in app/cards.ts");
-	const current = lines[index]!;
+	const current = lines[index]!.replace(/\s*\/\/ wording revised in \S+$/, "");
 	const ending = MULTI_FRAMING_ENDINGS.find((e) => !current.endsWith(e)) ?? MULTI_FRAMING_ENDINGS[0]!;
-	lines[index] = `${MULTI_FRAMING_PREFIX}${ending}`;
+	// The trailing comment names the release, so the line differs from every earlier release's
+	// (a fork pinned several releases back still conflicts if it customized this line).
+	lines[index] = `${MULTI_FRAMING_PREFIX}${ending}${tag ? ` // wording revised in ${tag}` : ""}`;
 	const out: Record<string, string> = { ...files, [path]: lines.join("\n") };
 	const changed = [path];
 

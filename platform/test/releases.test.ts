@@ -36,6 +36,15 @@ describe("demoReleaseFiles", () => {
 		expect(diff[0]).toContain("is below the threshold");
 	});
 
+	it("marks the reworded line with the release, so it differs from every earlier release", () => {
+		const a = demoReleaseFiles(files, "v1.6.0").files["app/cards.ts"]!;
+		const c = demoReleaseFiles(demoReleaseFiles(demoReleaseFiles(files, "v1.6.0").files, "v1.7.0").files, "v1.8.0").files["app/cards.ts"]!;
+		expect(a).toContain("// wording revised in v1.6.0");
+		expect(c).toContain("// wording revised in v1.8.0");
+		expect(c.split("\n").filter((l) => l.includes("wording revised"))).toHaveLength(1);
+		expect(c).not.toBe(a);
+	});
+
 	it("produces a different line again on the next release", () => {
 		const once = demoReleaseFiles(files).files;
 		const twice = demoReleaseFiles(once).files;
