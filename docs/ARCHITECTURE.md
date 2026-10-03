@@ -66,8 +66,8 @@ flowchart TB
   2. Read the invariant and functional manifests and `tests/runner.ts` from `stock` at that tag (`platform/src/stock/suite.ts`). Copies of `tests/` inside the fork are never loaded.
   3. Load stock's runner in its own isolate, built only from stock files. Load the fork in a separate isolate. The runner reaches the fork only through a time-boxed `ask` callback.
   4. Run tier 1 (invariants, every sample must pass), tier 2 (functional, majority of samples), and tier 3 (the fork's `tests/user/manifest.json`, with disabled probes logged).
-  5. On a pass, merge the branch into `main` with isomorphic-git and push. On a fail, leave `main` alone and start a `RepairWorkflow`.
-- **Merge rules.** Only the gate merges into `main`. `repair/*` branches are gated in check mode and never merged automatically. `upgrade/*` branches are gated by their own upgrade workflow. A fork's pinned stock tag only moves forward: a change that pins an older tag than the one on `main` cannot merge.
+  5. On a pass, fast-forward `main` to exactly the gated commit and push. If `main` moved in the meantime, merge `main` into the work branch, push it there, and gate that new commit. On a fail, leave `main` alone and start a `RepairWorkflow`.
+- **Merge rules.** Only the gate moves `main`, and only by fast-forward to a gated commit. `repair/*` branches are gated in check mode and never merged automatically. `upgrade/*` branches are gated by their own upgrade workflow. A fork's pinned stock tag only moves forward: a change that pins an older tag than the one on `main` cannot merge.
 - **Primitives.** Artifacts event subscriptions, Queues, Workflows, Worker Loader, isomorphic-git over an in-memory filesystem (`platform/src/git/ops.ts`, `platform/src/git/memory-fs.ts`) with repo-scoped tokens.
 
 ### Intent engine and mode contracts (spec 5)
