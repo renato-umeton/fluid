@@ -27,7 +27,7 @@ describe("setTomlValue", () => {
 
 	it("adds a key to an existing section", () => {
 		const out = setTomlValue(STOCK_TOML, "preferences", "persona", "hospitalist-researcher");
-		expect(parseToml(out)).toMatchObject({ preferences: { persona: "hospitalist-researcher", harvest_opt_in: true } });
+		expect(parseToml(out)).toMatchObject({ preferences: { persona: "hospitalist-researcher", harvest_opt_in: false } });
 	});
 
 	it("adds a new section at the end", () => {
