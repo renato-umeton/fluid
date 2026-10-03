@@ -4,6 +4,8 @@ import {
 	checkoutBranch,
 	commitChanges,
 	createTag,
+	fastForward,
+	firstParent,
 	headCommit,
 	initRepo,
 	listTags,
@@ -188,5 +190,43 @@ describe("mergeInto", () => {
 		const resolved = await commitChanges(ws, { message: "Merge stock v1.1.0", parents: [userHead, stockCommit], intentId: "int_repair" });
 		const { commit } = await git.readCommit({ fs: ws.fs, dir: ws.dir, oid: resolved });
 		expect(commit.parent).toEqual([userHead, stockCommit]);
+	});
+});
+
+describe("fastForward", () => {
+	it("moves a branch forward to a descendant commit", async () => {
+		const { ws, base } = await seeded();
+		await checkoutBranch(ws, "work/a", { create: true });
+		await writeFiles(ws, { "app/a.ts": "export const a = 1;\n" });
+		const tip = await commitChanges(ws, { message: "a" });
+		expect(await fastForward(ws, "main", tip)).toEqual({ outcome: "fast-forward", oid: tip });
+		expect(await headCommit(ws, "main")).toBe(tip);
+		expect(base).not.toBe(tip);
+	});
+
+	it("reports a commit main already has", async () => {
+		const { ws, base } = await seeded();
+		expect(await fastForward(ws, "main", base)).toEqual({ outcome: "already", oid: base });
+	});
+
+	it("refuses to move main when the commit does not contain main's head", async () => {
+		const { ws, base } = await seeded();
+		await checkoutBranch(ws, "work/a", { create: true });
+		await writeFiles(ws, { "app/a.ts": "export const a = 1;\n" });
+		const tip = await commitChanges(ws, { message: "a" });
+		await checkoutBranch(ws, "main");
+		await writeFiles(ws, { "app/b.ts": "export const b = 1;\n" });
+		const moved = await commitChanges(ws, { message: "main moved" });
+		expect(await fastForward(ws, "main", tip)).toEqual({ outcome: "diverged", oid: moved });
+		expect(await headCommit(ws, "main")).toBe(moved);
+		expect(base).not.toBe(moved);
+	});
+
+	it("first parent of a merge commit is the branch it merged into", async () => {
+		const { ws, base } = await seeded();
+		await checkoutBranch(ws, "work/a", { create: true });
+		await writeFiles(ws, { "app/a.ts": "export const a = 1;\n" });
+		await commitChanges(ws, { message: "a" });
+		expect(await firstParent(ws, await headCommit(ws, "work/a"))).toBe(base);
 	});
 });

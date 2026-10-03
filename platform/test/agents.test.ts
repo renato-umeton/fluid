@@ -7,7 +7,7 @@ import synthetic from "../src/generated/synthetic.json";
 import { clusterRecords, eligibility, forksIn, proposalOf, deterministicLabel, type HarvestRecord } from "../src/agents/harvest-cluster.ts";
 import { buildIntent, cleanText, slugify } from "../src/agents/intent.ts";
 import { diffEntries, lineStats } from "../src/agents/diff.ts";
-import { matchRecipe, protocolsFor, redcapChange, tauChange, tauTarget } from "../src/agents/recipes.ts";
+import { matchRecipe, protocolsFor, redcapChange, replanOnMovedMain, tauChange, tauTarget } from "../src/agents/recipes.ts";
 import { planRepair } from "../src/agents/repair-plan.ts";
 import { fallbackSuggestion, mergeUserManifest, suggestionsFromModel, suggestTests, touchedAreas, validateProbe } from "../src/agents/suggester.ts";
 import { requestFor, seedChange, seedPlan, type SeedKind } from "../src/fleet/seed-catalog.ts";
@@ -266,5 +266,29 @@ describe("intent records and diffs", () => {
 	it("counts changed lines", () => {
 		expect(lineStats("a\nb\nc\n", "a\nB\nc\nd\n")).toEqual({ additions: 2, deletions: 1 });
 		expect(diffEntries({ x: "1\n", y: null }, { x: "1\n2\n", y: "new\n" }).map((d) => [d.path, d.status])).toEqual([["x", "modified"], ["y", "added"]]);
+	});
+});
+
+describe("replanOnMovedMain", () => {
+	const toml = files["fluid.toml"]!;
+	const tau = tauChange(toml, { kind: "tau", value: 0.9, direction: "raise" });
+
+	it("keeps the planned files when main did not touch them", () => {
+		const result = replanOnMovedMain({ change: tau, request: "Raise my confidence threshold to 0.9", before: { "fluid.toml": toml }, current: { "fluid.toml": toml }, protocols });
+		expect(result).toEqual({ files: tau.files, replanned: [] });
+	});
+
+	it("reapplies a recipe on main's current files instead of writing over them", () => {
+		const moved = toml.replace("auto_upgrade = false", "auto_upgrade = true");
+		const result = replanOnMovedMain({ change: tau, request: "Raise my confidence threshold to 0.9", before: { "fluid.toml": toml }, current: { "fluid.toml": moved }, protocols });
+		expect("files" in result && result.files["fluid.toml"]).toContain("auto_upgrade = true");
+		expect("files" in result && result.files["fluid.toml"]).toMatch(/tau = 0\.9/);
+		expect("files" in result && result.replanned).toEqual(["fluid.toml"]);
+	});
+
+	it("refuses a model plan whose files changed on main", () => {
+		const change = { summary: "s", purpose: "p", modes_affected: [], files: { "app/index.ts": "x" }, notes: {}, recipe: "model" as const };
+		const result = replanOnMovedMain({ change, request: "r", before: { "app/index.ts": "a" }, current: { "app/index.ts": "b" }, protocols });
+		expect(result).toEqual({ error: expect.stringContaining("app/index.ts") });
 	});
 });

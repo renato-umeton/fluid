@@ -5,11 +5,11 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { diffEntries } from "../agents/diff.ts";
 import { buildIntent, cleanText, intentJson, intentPath, slugify } from "../agents/intent.ts";
-import { matchRecipe, protocolsFor, redcapChange, tauChange, type PlannedChange } from "../agents/recipes.ts";
+import { matchRecipe, protocolsFor, redcapChange, replanOnMovedMain, tauChange, type PlannedChange } from "../agents/recipes.ts";
 import { fallbackSuggestion, mergeUserManifest, suggestionsFromModel, suggestTests, SUGGESTION_SCHEMA, USER_MANIFEST, type Probe, type Suggestion } from "../agents/suggester.ts";
 import { fnv1a, gateInstanceId } from "../events/filter.ts";
 import synthetic from "../generated/synthetic.json";
-import { checkoutBranch, cloneRepo, commitChanges, headCommit, pushBranch, readWorkspaceFile, writeFiles } from "../git/ops.ts";
+import { checkoutBranch, cloneRepo, commitChanges, fetchBranch, headCommit, listRemoteRefs, parseTrailers, pushBranch, readCommitMessage, readWorkspaceFile, writeFiles } from "../git/ops.ts";
 import { readIntents } from "../forks/provision.ts";
 import { newIntentId } from "../lib/names.ts";
 import { pinnedTagOf } from "../stock/releases.ts";
@@ -19,13 +19,14 @@ import { askCard, FORK_CALL_TIMEOUT_MS, loadForkRuntime, withTimeout } from "../
 import { isRuntimePath, transformTs } from "../runtime/modules.ts";
 import { headOf, openRepo, readCommitFiles } from "../runtime/repo-files.ts";
 import { runsStub } from "../stubs.ts";
-import { repairRunId } from "./gate.ts";
-import { appExports, ensureRun, errorText, GIT_STEP, repoRemote, runLog, startGateInstance, guarded, steps, type CustomizeParams } from "./common.ts";
+import { appExports, ensureRun, errorText, GIT_STEP, linkGateParent, repoRemote, runLog, startGateInstance, guarded, steps, type CustomizeParams, type Steps } from "./common.ts";
 
 export const MODEL_LIMITS = { maxFiles: 3, maxFileChars: 16_000 };
 const MODEL_PATH = /^(app|intent|policies|connectors)\/[A-Za-z0-9_-]+(\/[A-Za-z0-9_-]+)*\.(ts|json)$/;
 const DECISION_TIMEOUT = "1 hour";
-const GATE_POLLS = 150;
+/** Waiting for the gate or repair: up to WAIT_ROUNDS event waits of WAIT_EACH each (about 30 minutes). */
+const WAIT_ROUNDS = 30;
+const WAIT_EACH = "1 minute";
 
 const PLAN_SCHEMA = {
 	type: "object",
@@ -161,10 +162,31 @@ export class CustomizeWorkflow extends WorkflowEntrypoint<Env, CustomizeParams> 
 			await log.step("Commit and push to a work branch", "running");
 			const remote = await repoRemote(this.env, p.repo, "write");
 			const ws = await cloneRepo({ ...remote, ref: "main", singleBranch: true });
-			await checkoutBranch(ws, recorded.branch, { create: true });
+
+			// A retried step may find its own commit already pushed: reuse it instead of committing again.
+			const existing = (await listRemoteRefs(remote, undefined, { prefix: `refs/heads/${recorded.branch}` })).find((r) => r.ref === `refs/heads/${recorded.branch}`);
+			if (existing) {
+				await fetchBranch(ws, remote, recorded.branch);
+				if (parseTrailers(await readCommitMessage(ws, existing.oid))["Intent-Id"] === recorded.intentId) {
+					await log.step("Commit and push to a work branch", "done", `${recorded.branch} at ${existing.oid.slice(0, 7)} (already pushed for ${recorded.intentId})`);
+					return { commit: existing.oid, error: null as string | null };
+				}
+			}
+
+			// main may have moved while the user decided: never write the plan over newer work on main.
+			const current: Record<string, string | null> = {};
+			for (const path of Object.keys(change.files)) current[path] = await readWorkspaceFile(ws, path);
+			const rebased = replanOnMovedMain({ change, request, before: fork.files, current, protocols: protocolsFor((synthetic as { personas: unknown }).personas, p.persona) });
+			if ("error" in rebased) {
+				await log.step("Commit and push to a work branch", "failed", rebased.error);
+				return { commit: null as string | null, error: rebased.error };
+			}
+			if (rebased.replanned.length) await log.step("Commit and push to a work branch", "running", `main moved since the plan; reapplied the ${change.recipe} recipe to ${rebased.replanned.join(", ")}`);
+
+			await checkoutBranch(ws, recorded.branch, { create: true, from: "main" });
 			const testsAdded = probes.map((pr) => `${USER_MANIFEST}#${pr.id}`);
 			const intent = { ...recorded.intent, tests_added: testsAdded };
-			await writeFiles(ws, { ...change.files, [intentPath(recorded.intentId)]: intentJson(intent) });
+			await writeFiles(ws, { ...rebased.files, [intentPath(recorded.intentId)]: intentJson(intent) });
 			await commitChanges(ws, { message: `${change.summary}\n\nRequested: ${cleanText(request, 200)}`, intentId: recorded.intentId, author: { name: `user:${p.userId}`, email: `${p.userId}@users.fluid.invalid` } });
 			let diffAdd: { path: string; status: string; additions: number; deletions: number; summary: string }[] = [];
 			if (probes.length > 0) {
@@ -175,52 +197,84 @@ export class CustomizeWorkflow extends WorkflowEntrypoint<Env, CustomizeParams> 
 				diffAdd = [{ path: USER_MANIFEST, status: before === null ? "added" : "modified", additions: probes.length, deletions: 0, summary: `Tier 3 tests: ${probes.map((pr) => pr.id).join(", ")}` }];
 			}
 			const commit = await headCommit(ws);
+			// Recorded before the push: the push event may start the gate before this workflow does.
+			await linkGateParent(this.env, p.repo, recorded.branch, commit, { parentRunId: p.runId, source: "customize" });
 			await pushBranch(ws, remote, recorded.branch, { force: true });
 			const diff = [...((run?.diff ?? []) as unknown as unknown[]), ...diffAdd];
 			await log.update({ commit, intent, diff });
 			await log.step("Commit and push to a work branch", "done", `${recorded.branch} at ${commit.slice(0, 7)}; the push event (or this direct trigger) starts the gate`);
-			return { commit };
+			return { commit: commit as string | null, error: null as string | null };
 		});
 
+		if (pushed.error || !pushed.commit) {
+			await step.do("finish without a push", async () => {
+				await log.status("failed", { error: pushed.error ?? "nothing was pushed" });
+				return true;
+			});
+			return { passed: false, branch: recorded.branch, commit: null };
+		}
+		const commit = pushed.commit;
+
 		const gate = await step.do("start the gate", async () => {
-			const started = await startGateInstance(exports.GateWorkflow, gateInstanceId(p.repo, recorded.branch, pushed.commit), { repo: p.repo, branch: recorded.branch, commit: pushed.commit, mode: "merge", source: "customize", parentRunId: p.runId });
+			const started = await startGateInstance(exports.GateWorkflow, gateInstanceId(p.repo, recorded.branch, commit), { repo: p.repo, branch: recorded.branch, commit, mode: "merge", source: "customize", parentRunId: p.runId });
 			await log.step("Gate", "running", `${started.runId}${started.created ? "" : " (already started by the push event)"}`);
 			return { runId: started.runId };
 		});
 
-		let final: { status: string; passed: boolean | null } = { status: "running", passed: null };
-		for (let i = 0; i < GATE_POLLS && final.status === "running"; i++) {
-			await step.sleep(`wait for gate ${i}`, "2 seconds");
-			final = await step.do(`check gate ${i}`, async () => {
-				const run = await runsStub(this.env, gate.runId).get();
-				if (!run || run.status === "running" || run.status === "queued") return { status: "running", passed: null };
-				return { status: run.status, passed: run.status === "passed" };
-			});
-		}
+		// The gate reports back with an event (gate-finished). A re-gate after main moved hands the
+		// report to the next gate run, so the final run id comes from the event or the run chain.
+		const final = await this.waitForRun(step, "gate", "gate-finished", gate.runId, (run) => (typeof run.regateRunId === "string" ? run.regateRunId : null));
 
-		if (final.passed === false) {
-			const repairId = repairRunId(p.repo, pushed.commit);
-			for (let i = 0; i < GATE_POLLS; i++) {
-				await step.sleep(`wait for repair ${i}`, "2 seconds");
-				const done = await step.do(`check repair ${i}`, async () => {
-					const run = await runsStub(this.env, repairId).get();
-					return Boolean(run && run.status !== "running" && run.status !== "queued");
-				});
-				if (done) break;
-			}
+		if (final.passed === false && final.repairRunId) {
+			await this.waitForRun(step, "repair", "repair-finished", final.repairRunId, () => null);
 		}
 
 		await step.do("finish", async () => {
-			const gateRun = await runsStub(this.env, gate.runId).get();
-			const passed = final.passed === true;
-			await log.step("Gate", passed ? "done" : "failed", passed ? "All three tiers passed" : `Gate ${final.status === "running" ? "did not finish in time" : "failed"}`);
-			if (passed) await log.step("Merge to main", gateRun?.mergedCommit ? "done" : "failed", gateRun?.mergedCommit ? `main is now ${String(gateRun.mergedCommit).slice(0, 7)}` : "The gate passed but main could not be updated");
+			const gateRun = await runsStub(this.env, final.runId).get();
+			const passed = final.passed === true && Boolean(gateRun?.mergedCommit);
+			await log.step("Gate", final.passed ? "done" : "failed", final.passed ? "All three tiers passed" : `Gate ${final.status === "running" ? "did not finish in time" : "failed"}`);
+			if (final.passed) await log.step("Merge to main", gateRun?.mergedCommit ? "done" : "failed", gateRun?.mergedCommit ? `main is now ${String(gateRun.mergedCommit).slice(0, 7)}` : "The gate passed but main could not be fast-forwarded");
 			else await log.step("Merge blocked", "failed", `${recorded.branch} stays unmerged; main is untouched`);
-			await log.status(passed && gateRun?.mergedCommit ? "passed" : "failed", { gate: (gateRun?.gate ?? null) as never, gateRunId: gate.runId });
+			await log.status(passed ? "passed" : "failed", { gate: (gateRun?.gate ?? null) as never, gateRunId: final.runId });
 			return true;
 		});
-		return { passed: final.passed, branch: recorded.branch, commit: pushed.commit };
+		return { passed: final.passed, branch: recorded.branch, commit };
 	}
+
+	/**
+	 * Waits for a gate or repair run to finish: the run sends an event when it
+	 * does, and the run record is checked after each wait, so a lost or early
+	 * event only costs one wait. Bounded to WAIT_ROUNDS waits of WAIT_EACH,
+	 * two steps per round, well inside the per-instance step limit.
+	 */
+	private async waitForRun(step: Steps, label: string, eventType: string, firstRunId: string, next: (run: Record<string, unknown>) => string | null): Promise<{ runId: string; status: string; passed: boolean | null; repairRunId: string | null }> {
+		let runId = firstRunId;
+		for (let i = 0; i < WAIT_ROUNDS; i++) {
+			const state = await step.do(`check ${label} ${i}`, async () => {
+				let id = runId;
+				for (let hops = 0; hops < 4; hops++) {
+					const run = await runsStub(this.env, id).get();
+					if (!run || run.status === "running" || run.status === "queued") return { runId: id, done: false, status: "running", passed: null as boolean | null, repairRunId: null as string | null };
+					const forward = next(run as unknown as Record<string, unknown>);
+					if (forward) {
+						id = forward;
+						continue;
+					}
+					return { runId: id, done: true, status: run.status, passed: run.status === "passed" || run.status === "waiting", repairRunId: typeof run.repairRunId === "string" ? run.repairRunId : null };
+				}
+				return { runId: id, done: false, status: "running", passed: null as boolean | null, repairRunId: null as string | null };
+			});
+			runId = state.runId;
+			if (state.done) return state;
+			try {
+				await step.waitForEvent(`${label} finished ${i}`, { type: eventType, timeout: WAIT_EACH });
+			} catch {
+				// Timed out: the next round checks the run record again.
+			}
+		}
+		return { runId, status: "running", passed: null, repairRunId: null };
+	}
+
 
 	private async modelPlan(request: string, files: Record<string, string>, sha: string, runId: string): Promise<PlannedChange> {
 		const log = runLog(this.env, runId);

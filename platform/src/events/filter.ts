@@ -3,7 +3,8 @@
 // account-wide, so everything outside namespace "fluid" and outside user
 // forks is dropped. Pushes to main come from the gate itself (merge on pass);
 // tag pushes are releases; upgrade branches are gated by their own Upgrade
-// workflow; a deleted branch has nothing to gate.
+// workflow; repair branches are checked by the Repair workflow and merged
+// only through the apply route; a deleted branch has nothing to gate.
 
 export const PUSH_EVENT_TYPE = "cf.artifacts.repo.pushed";
 export const FLUID_NAMESPACE = "fluid";
@@ -40,6 +41,7 @@ export function filterPushEvent(body: unknown): FilterResult {
 	const branch = ref.slice("refs/heads/".length);
 	if (branch === PRODUCTION_BRANCH) return { gate: false, reason: "push to the production branch (made by the gate)" };
 	if (branch.startsWith("upgrade/")) return { gate: false, reason: "upgrade branches are gated by their Upgrade workflow" };
+	if (branch.startsWith("repair/")) return { gate: false, reason: "repair branches are gated by the repair workflow; applying one is an explicit request" };
 	if (typeof after !== "string" || !/^[0-9a-f]{40}$/.test(after)) return { gate: false, reason: "no commit" };
 	if (ZERO_SHA.test(after)) return { gate: false, reason: "branch deleted" };
 	return { gate: true, trigger: { repo, branch, commit: after, mode: gateModeFor(branch) } };

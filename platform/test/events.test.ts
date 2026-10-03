@@ -25,6 +25,7 @@ describe("filterPushEvent", () => {
 		["a tag push", push({ ref: "refs/tags/v1.2.0" }), /tag push/],
 		["an upgrade branch", push({ ref: "refs/heads/upgrade/v1.2.0" }), /Upgrade workflow/],
 		["a deleted branch", push({ after: "0".repeat(40) }), /deleted/],
+		["a repair branch (the repair workflow gates it; applying it is explicit)", push({ ref: "refs/heads/repair/51e4fce" }), /repair workflow/],
 		["another event type", push({ type: "cf.artifacts.repo.created" }), /event type/],
 		["garbage", null, /not an object/],
 	])("ignores %s", (_label, body, reason) => {
@@ -33,9 +34,8 @@ describe("filterPushEvent", () => {
 		if (!result.gate) expect(result.reason).toMatch(reason);
 	});
 
-	it("gates repair branches in check mode only", () => {
-		const result = filterPushEvent(push({ ref: "refs/heads/repair/51e4fce" }));
-		expect(result.gate && result.trigger.mode).toBe("check");
+	it("keeps repair branches in check mode when gated directly", () => {
+		expect(gateModeFor("repair/51e4fce")).toBe("check");
 		expect(gateModeFor("work/x")).toBe("merge");
 	});
 });

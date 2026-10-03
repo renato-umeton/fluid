@@ -339,6 +339,30 @@ export async function mergeInto(ws: Workspace, options: { ours: string; theirs: 
 	}
 }
 
+/**
+ * Moves local branch `branch` to `commit` only when that is a fast-forward
+ * (the commit contains the branch head). "already": the branch already
+ * contains the commit. "diverged": the branch moved on; nothing changes and
+ * `oid` is the branch head. Pushing the result without force is then a
+ * compare-and-swap: the remote refuses it if its branch moved meanwhile.
+ */
+export async function fastForward(ws: Workspace, branch: string, commit: string): Promise<{ outcome: "fast-forward" | "already" | "diverged"; oid: string }> {
+	await checkoutBranch(ws, branch);
+	const head = await headCommit(ws, branch);
+	const target = await peelToCommit(ws, await resolveAnyRef(ws, commit));
+	if (head === target || (await git.isDescendent({ fs: ws.fs, dir: ws.dir, oid: head, ancestor: target, depth: -1 }))) return { outcome: "already", oid: head };
+	if (!(await git.isDescendent({ fs: ws.fs, dir: ws.dir, oid: target, ancestor: head, depth: -1 }))) return { outcome: "diverged", oid: head };
+	await git.writeRef({ fs: ws.fs, dir: ws.dir, ref: `refs/heads/${branch}`, value: target, force: true });
+	await git.checkout({ fs: ws.fs, dir: ws.dir, ref: branch, force: true });
+	return { outcome: "fast-forward", oid: target };
+}
+
+/** First parent of a commit (the branch a merge was made on), or null for a root commit. */
+export async function firstParent(ws: Workspace, oid: string): Promise<string | null> {
+	const { commit } = await git.readCommit({ fs: ws.fs, dir: ws.dir, oid });
+	return commit.parent[0] ?? null;
+}
+
 export interface ConflictVersions {
 	path: string;
 	base: string | null;

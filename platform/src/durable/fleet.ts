@@ -39,6 +39,20 @@ export interface RunSummary {
 	[key: string]: Json;
 }
 
+/** A gated upgrade waiting for the user's one-tap approval (auto_upgrade off). Kept apart from lastRun, which later runs overwrite. */
+export interface PendingUpgrade {
+	tag: string;
+	commit: string;
+	runId: string;
+}
+
+/** Stock release a fork is served from after a safety grace period ends (spec 7). */
+export interface SafetyFallback {
+	tag: string;
+	from: string;
+	graceUntil: string;
+}
+
 export interface FleetFork {
 	repo: string;
 	userId: string;
@@ -46,6 +60,7 @@ export interface FleetFork {
 	pinnedTag: string;
 	status: ForkStatus;
 	lastRun: RunSummary | null;
+	pendingUpgrade: PendingUpgrade | null;
 	seeded: boolean;
 	createdAt: string;
 	updatedAt: string;
@@ -97,6 +112,8 @@ export class Fleet extends DurableObject<Env> {
 			"CREATE TABLE IF NOT EXISTS forks (repo TEXT PRIMARY KEY, user_id TEXT NOT NULL, persona TEXT NOT NULL, pinned_tag TEXT NOT NULL, status TEXT NOT NULL, last_run TEXT, seeded INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
 		);
 		sql.exec("CREATE INDEX IF NOT EXISTS forks_user ON forks (user_id)");
+		const columns = sql.exec("PRAGMA table_info(forks)").toArray().map((r) => r.name as string);
+		if (!columns.includes("pending_upgrade")) sql.exec("ALTER TABLE forks ADD COLUMN pending_upgrade TEXT");
 		sql.exec("CREATE TABLE IF NOT EXISTS stock_tags (tag TEXT PRIMARY KEY, published_at TEXT NOT NULL)");
 		sql.exec("CREATE TABLE IF NOT EXISTS releases (tag TEXT PRIMARY KEY, record TEXT NOT NULL)");
 		sql.exec("CREATE TABLE IF NOT EXISTS gates (seq INTEGER PRIMARY KEY AUTOINCREMENT, repo TEXT NOT NULL, at TEXT NOT NULL, result TEXT NOT NULL)");
@@ -161,15 +178,16 @@ export class Fleet extends DurableObject<Env> {
 		return { outcome: "claimed", fork };
 	}
 
-	/** Updates status, pinned tag, and/or last run, then notifies subscribers. */
-	update(repo: string, patch: { status?: ForkStatusInput; pinnedTag?: string; lastRun?: RunSummary | null }): FleetFork | null {
+	/** Updates status, pinned tag, last run, and/or the pending upgrade, then notifies subscribers. */
+	update(repo: string, patch: { status?: ForkStatusInput; pinnedTag?: string; lastRun?: RunSummary | null; pendingUpgrade?: PendingUpgrade | null }): FleetFork | null {
 		const current = this.get(repo);
 		if (!current) return null;
 		this.ctx.storage.sql.exec(
-			"UPDATE forks SET status = ?, pinned_tag = ?, last_run = ?, updated_at = ? WHERE repo = ?",
+			"UPDATE forks SET status = ?, pinned_tag = ?, last_run = ?, pending_upgrade = ?, updated_at = ? WHERE repo = ?",
 			patch.status ? normalizeStatus(patch.status) : current.status,
 			patch.pinnedTag ?? current.pinnedTag,
 			JSON.stringify(patch.lastRun === undefined ? current.lastRun : patch.lastRun),
+			JSON.stringify(patch.pendingUpgrade === undefined ? current.pendingUpgrade : patch.pendingUpgrade),
 			new Date().toISOString(),
 			repo,
 		);
@@ -212,6 +230,25 @@ export class Fleet extends DurableObject<Env> {
 		return this.ctx.storage.sql.exec("SELECT record FROM releases").toArray().map((r) => JSON.parse(r.record as string) as ReleaseRecord);
 	}
 
+	/**
+	 * Safety fallback (spec 7): once the grace period of the newest safety
+	 * release that has expired is over, a fork still pinned below that
+	 * release is served by stock at that tag until it upgrades or a repair
+	 * merges. A fork whose upgrade to that tag passed and only waits for
+	 * approval keeps its own code (it already passed the new floor).
+	 */
+	safetyFallback(repo: string, now = Date.now()): SafetyFallback | null {
+		const fork = this.get(repo);
+		if (!fork) return null;
+		const expired = this.releases()
+			.filter((r) => r.safety && r.graceUntil && Date.parse(r.graceUntil) <= now)
+			.sort((a, b) => compareTagsAsc(a.tag, b.tag));
+		const latest = expired[expired.length - 1];
+		if (!latest || compareTagsAsc(fork.pinnedTag, latest.tag) >= 0) return null;
+		if (fork.pendingUpgrade && compareTagsAsc(fork.pendingUpgrade.tag, latest.tag) >= 0) return null;
+		return { tag: latest.tag, from: fork.pinnedTag, graceUntil: latest.graceUntil! };
+	}
+
 	/** Stores a gate result for GET /api/gates/:repo, keeping the most recent per repo. */
 	addGate(repo: string, result: Record<string, Json>): void {
 		const sql = this.ctx.storage.sql;
@@ -245,12 +282,13 @@ export class Fleet extends DurableObject<Env> {
 			stockTags: this.stockTags(),
 			releases,
 			counts: this.counts(),
-			forks: this.list().map(({ repo, persona, pinnedTag, status, lastRun, updatedAt, seeded }) => ({
+			forks: this.list().map(({ repo, persona, pinnedTag, status, lastRun, pendingUpgrade, updatedAt, seeded }) => ({
 				repo,
 				persona,
 				pinnedTag,
 				status,
 				lastRun,
+				pendingUpgrade,
 				updatedAt,
 				seeded,
 				// A pinned fork that failed a safety release shows when its stock-mode fallback starts (spec 7).
@@ -345,6 +383,7 @@ function toFork(row: Record<string, unknown>): FleetFork {
 		pinnedTag: row.pinned_tag as string,
 		status: normalizeStatus(row.status as string),
 		lastRun: row.last_run ? (JSON.parse(row.last_run as string) as RunSummary | null) : null,
+		pendingUpgrade: row.pending_upgrade ? (JSON.parse(row.pending_upgrade as string) as PendingUpgrade | null) : null,
 		seeded: row.seeded === 1,
 		createdAt: row.created_at as string,
 		updatedAt: row.updated_at as string,

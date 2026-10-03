@@ -190,3 +190,29 @@ export function withEnrollment(card: AnswerCard, request: AskRequest, data: Synt
 }
 `;
 }
+
+/**
+ * main can move while the user decides on suggested tests (up to an hour).
+ * Before committing, the planned files are checked against main's current
+ * files: untouched files keep the plan; a recipe is applied again on the
+ * current files; a model plan whose files changed is refused (rerun the
+ * request), so a customization never writes over newer work on main.
+ */
+export function replanOnMovedMain(input: {
+	change: PlannedChange;
+	request: string;
+	before: Record<string, string | null | undefined>;
+	current: Record<string, string | null | undefined>;
+	protocols: string[];
+}): { files: Record<string, string>; replanned: string[] } | { error: string } {
+	const moved = Object.keys(input.change.files).filter((path) => (input.current[path] ?? null) !== (input.before[path] ?? null));
+	if (moved.length === 0) return { files: input.change.files, replanned: [] };
+	const recipe = matchRecipe(input.request);
+	if (input.change.recipe === "redcap" && recipe?.kind === "redcap") {
+		return { files: redcapChange({ indexSource: input.current["app/index.ts"] ?? "", protocols: input.protocols }).files, replanned: moved };
+	}
+	if (input.change.recipe === "tau" && recipe?.kind === "tau") {
+		return { files: tauChange(input.current["fluid.toml"] ?? "", recipe).files, replanned: moved };
+	}
+	return { error: `main changed ${moved.join(", ")} after the change was planned; run the request again on the new main` };
+}

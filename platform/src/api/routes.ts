@@ -10,18 +10,20 @@ import { bundledStockRelease, compareSemverDesc, listStockTags, publishStockRele
 import type { ReleaseMetadata } from "../stock/releases.ts";
 import { runGate } from "../gate/run.ts";
 import type { RunTimeRecord } from "../durable/user-ledger.ts";
+import type { RunSummary } from "../durable/fleet.ts";
 import { ledgerStub, quotaStub, runsStub } from "../stubs.ts";
 import { cleanText } from "../agents/intent.ts";
 import { validateProbe, type Suggestion } from "../agents/suggester.ts";
 import { newRunId } from "../durable/runs.ts";
 import { gateInstanceId, gateModeFor } from "../events/filter.ts";
 import { isSeededRepo, SEED_DEFAULT, SEED_MAX } from "../fleet/seed-catalog.ts";
-import { cloneRepo, fetchBranch, mergeInto, pushBranch } from "../git/ops.ts";
+import { cloneRepo, fastForward, fetchBranch, pushBranch } from "../git/ops.ts";
 import type { Json } from "../lib/json.ts";
 import { shortRef } from "../runtime/refs.ts";
 import { headOf, openRepo } from "../runtime/repo-files.ts";
 import { DEMO_OVERLAY, demoReleaseFiles } from "../stock/releases.ts";
 import { appExports, repoRemote, startGateInstance } from "../workflows/common.ts";
+import { upgradeTargets } from "../workflows/upgrade.ts";
 import { decodeParam, HttpError, json, readJson, requireJsonPost, requireString } from "./http.ts";
 import { askRef, parsePreferences } from "./validate.ts";
 
@@ -407,26 +409,41 @@ route("POST", "/api/gates/:repo", async (rc, { repo }) => {
 	return json({ runId: started.runId, instanceId: started.id, created: started.created, commit }, started.created ? 202 : 200);
 });
 
-// One-tap upgrade: merge a gated upgrade/<tag> branch into main.
+// One-tap upgrade: fast-forward main to the gated upgrade/<tag> commit recorded as the fork's pending upgrade.
+// It is refused when main moved since the upgrade was gated (main no longer an ancestor of the gated commit).
 route("POST", "/api/forks/:repo/upgrade", async (rc, { repo }) => {
 	const name = repoParam(repo!);
 	await requireForkAccess(rc, name);
 	const fleet = fleetStub(rc.env);
 	const entry = await fleet.get(name);
-	const last = entry?.lastRun;
-	if (!entry || !last || last.kind !== "upgrade" || last.status !== "passed" || last.applied !== false || typeof last.tag !== "string" || typeof last.commit !== "string") {
-		throw new HttpError(409, "no gated upgrade is waiting for approval on this fork");
-	}
-	const tag = last.tag;
+	const pending = entry?.pendingUpgrade;
+	if (!entry || !pending) throw new HttpError(409, "no gated upgrade is waiting for approval on this fork");
 	const remote = await repoRemote(rc.env, name, "write");
 	const ws = await cloneRepo({ ...remote, ref: "main", singleBranch: true });
-	await fetchBranch(ws, remote, `upgrade/${tag}`);
-	const outcome = await mergeInto(ws, { ours: "main", theirs: last.commit, message: `Upgrade to stock ${tag}\n\nApproved by the user after the gate passed on upgrade/${tag} at ${last.commit.slice(0, 7)}.` });
-	if (!outcome.ok) throw new HttpError(409, `main moved since the upgrade was gated (${outcome.conflicts.filepaths.join(", ")}); a new upgrade run is needed`);
-	if (!outcome.alreadyMerged) await pushBranch(ws, remote, "main");
-	const updated = await fleet.update(name, { status: "passed", pinnedTag: tag, lastRun: { ...last, applied: true, at: new Date().toISOString() } });
+	await fetchBranch(ws, remote, `upgrade/${pending.tag}`);
+	const ff = await fastForward(ws, "main", pending.commit);
+	if (ff.outcome === "diverged") throw new HttpError(409, `main moved since upgrade/${pending.tag} was gated at ${pending.commit.slice(0, 7)}; a new upgrade run is needed`);
+	if (ff.outcome === "fast-forward") await pushBranch(ws, remote, "main");
+	const lastRun: RunSummary = entry.lastRun?.runId === pending.runId ? { ...entry.lastRun, applied: true, at: new Date().toISOString() } : { runId: pending.runId, kind: "upgrade", tag: pending.tag, status: "passed", applied: true, commit: pending.commit, at: new Date().toISOString() };
+	const updated = await fleet.update(name, { status: "passed", pinnedTag: pending.tag, pendingUpgrade: null, lastRun });
 	forkInfoCache.delete(name);
-	return json({ repo: name, tag, commit: outcome.oid, fork: updated });
+	return json({ repo: name, tag: pending.tag, commit: pending.commit, fork: updated });
+});
+
+// Apply a repair branch: gate repair/<sha> in merge mode; main fast-forwards to it only if it passes.
+route("POST", "/api/forks/:repo/repairs/:sha/apply", async (rc, { repo, sha }) => {
+	const name = repoParam(repo!);
+	await requireForkAccess(rc, name);
+	if (!/^[0-9a-f]{7}$/.test(sha!)) throw new HttpError(400, "repair id must be the 7 hex characters of repair/<sha>");
+	const branch = `repair/${sha}`;
+	let commit: string | null;
+	{
+		using handle = await openRepo(rc.env.ARTIFACTS, name);
+		commit = await headOf(handle, branch);
+	}
+	if (!commit) throw new HttpError(404, `${branch} not found`);
+	const started = await startGateInstance(appExports(rc.ctx).GateWorkflow, gateInstanceId(name, `apply:${branch}`, commit), { repo: name, branch, commit, mode: "merge", source: "repair-apply" });
+	return json({ runId: started.runId, branch, commit, created: started.created }, started.created ? 202 : 200);
 });
 
 route("POST", "/api/admin/release", async (rc) => {
@@ -455,7 +472,7 @@ route("POST", "/api/admin/release", async (rc) => {
 		result = await publishStockRelease(rc.env, { tag, files: { ...files, [`.intent/${intentId}.json`]: `${JSON.stringify(intent, null, 2)}\n` }, intentId, notes, safety });
 	}
 	await recordRelease(rc.env, tag, result.release, result.commit);
-	const repos = (await fleetStub(rc.env).list()).filter((f) => f.status !== "provisioning").map((f) => f.repo);
+	const repos = upgradeTargets(tag, await fleetStub(rc.env).list());
 	const runId = newRunId("release");
 	await runsStub(rc.env, runId).create({ id: runId, kind: "release", status: "running", fields: { tag, safety, forks: repos.length } });
 	await appExports(rc.ctx).ReleaseWorkflow.create({ id: runId, params: { runId, tag, safety: result.release?.safety ?? safety, graceUntil: result.release?.graceUntil ?? null, repos } });

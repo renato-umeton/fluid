@@ -16,7 +16,7 @@ import { AGENT_MODEL, callModel } from "../runtime/llm.ts";
 import { openRepo, readTextFile } from "../runtime/repo-files.ts";
 import { runsStub } from "../stubs.ts";
 import { logTiers } from "./gate.ts";
-import { appExports, ensureRun, errorText, GATE_STEP, GIT_STEP, repoRemote, runLog, setFleet, guarded, steps, type RepairParams } from "./common.ts";
+import { appExports, ensureRun, errorText, GATE_STEP, GIT_STEP, notifyParent, repoRemote, runLog, setFleet, guarded, steps, type RepairParams } from "./common.ts";
 
 const EXPLAIN_SCHEMA = { type: "object", properties: { explanation: { type: "string" } }, required: ["explanation"] } as const;
 
@@ -141,7 +141,8 @@ export class RepairWorkflow extends WorkflowEntrypoint<Env, RepairParams> {
 			if (p.customizeRunId) {
 				const parent = runLog(this.env, p.customizeRunId);
 				await parent.step("Repair agent", plan.fixSummary ? "done" : "failed", `${branch}: ${plan.fixSummary ?? "explanation only"}`);
-				await parent.update({ repair: { runId: p.runId, branch, explanation, intentRefs: plan.intentRefs } });
+				await parent.update({ repair: { runId: p.runId, branch, explanation, intentRefs: plan.intentRefs, repairGatePassed: repairGate?.passed ?? null } });
+				await notifyParent(this.env, appExports(this.ctx), p.customizeRunId, "repair-finished", { repairRunId: p.runId, branch });
 			}
 			return true;
 		});

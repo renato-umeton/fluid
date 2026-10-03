@@ -161,3 +161,53 @@ describe("UserLedger", () => {
 		expect(state.alarmAt).toBeGreaterThanOrEqual(before + LEDGER_COMMIT_INTERVAL_MS);
 	});
 });
+
+describe("Fleet pending upgrades", () => {
+	it("keeps a waiting one-tap upgrade apart from lastRun", () => {
+		const { instance: fleet } = construct(Fleet);
+		fleet.register({ ...fork("user-a"), status: "pinned" });
+		fleet.update("user-a", { status: "passed", pendingUpgrade: { tag: "v1.2.0", commit: "c".repeat(40), runId: "run_u" } });
+		fleet.update("user-a", { lastRun: { runId: "run_g", kind: "gate", status: "passed", at: "now" } });
+		expect(fleet.get("user-a")?.pendingUpgrade).toEqual({ tag: "v1.2.0", commit: "c".repeat(40), runId: "run_u" });
+		fleet.update("user-a", { pendingUpgrade: null, pinnedTag: "v1.2.0" });
+		expect(fleet.get("user-a")?.pendingUpgrade).toBeNull();
+	});
+});
+
+describe("Fleet.safetyFallback", () => {
+	const t0 = Date.parse("2026-10-03T00:00:00Z");
+	const day = 86_400_000;
+	const safety = (tag: string, graceUntil: string) => ({ tag, notes: "", safety: true, date: "2026-10-01T00:00:00.000Z", graceDays: 14, graceUntil, commit: null });
+
+	function fleetWith(pinnedTag: string) {
+		const { instance: fleet } = construct(Fleet);
+		fleet.register({ ...fork("user-a"), pinnedTag, status: "repair_open" });
+		fleet.addRelease(safety("v1.3.0", new Date(t0 + 2 * day).toISOString()));
+		return fleet;
+	}
+
+	it("serves the fork itself during the grace period", () => {
+		expect(fleetWith("v1.2.0").safetyFallback("user-a", t0)).toBeNull();
+	});
+
+	it("serves stock at the safety tag once the grace period is over and the fork is still pinned below it", () => {
+		expect(fleetWith("v1.2.0").safetyFallback("user-a", t0 + 3 * day)).toEqual({ tag: "v1.3.0", from: "v1.2.0", graceUntil: new Date(t0 + 2 * day).toISOString() });
+	});
+
+	it("does not fall back for a fork already on the safety tag", () => {
+		expect(fleetWith("v1.3.0").safetyFallback("user-a", t0 + 3 * day)).toBeNull();
+	});
+
+	it("does not fall back when an upgrade to the safety tag passed and only waits for approval", () => {
+		const fleet = fleetWith("v1.2.0");
+		fleet.update("user-a", { pendingUpgrade: { tag: "v1.3.0", commit: "c".repeat(40), runId: "run_u" } });
+		expect(fleet.safetyFallback("user-a", t0 + 3 * day)).toBeNull();
+	});
+
+	it("ignores feature releases and unknown forks", () => {
+		const fleet = fleetWith("v1.2.0");
+		fleet.addRelease({ tag: "v1.4.0", notes: "", safety: false, date: "", graceDays: null, graceUntil: null, commit: null });
+		expect(fleet.safetyFallback("user-a", t0 + 3 * day)?.tag).toBe("v1.3.0");
+		expect(fleet.safetyFallback("user-zz", t0 + 3 * day)).toBeNull();
+	});
+});

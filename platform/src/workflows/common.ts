@@ -8,7 +8,8 @@ import type { PlatformExports } from "../runtime/loader.ts";
 import { openRepo } from "../runtime/repo-files.ts";
 import type { RunKind, RunStatus, StepStatus } from "../durable/runs.ts";
 import { fleetStub, runsStub } from "../stubs.ts";
-import type { RunSummary, ForkStatusInput } from "../durable/fleet.ts";
+import type { PendingUpgrade, RunSummary, ForkStatusInput } from "../durable/fleet.ts";
+import { fnv1a } from "../events/filter.ts";
 
 export interface InstanceHandle {
 	id: string;
@@ -27,9 +28,11 @@ export interface GateParams {
 	branch: string;
 	commit: string;
 	mode: "merge" | "check";
-	source: "event" | "customize" | "direct" | "repair";
+	source: "event" | "customize" | "direct" | "repair" | "repair-apply" | "seed";
 	runId?: string;
 	parentRunId?: string;
+	/** Set when this gate checks the merge of main into the branch after main moved (fast-forward-only main). */
+	regateOf?: string;
 }
 
 export interface CustomizeParams {
@@ -114,18 +117,72 @@ export async function startInstance<P>(binding: WorkflowBinding<P>, id: string, 
 }
 
 /**
- * Starts the gate for one push. A gate for the same (repo, branch, commit)
- * that is running or finished counts as started; one that errored (for
- * example, Artifacts was unreachable) is started again under a new id.
+ * Starts an instance under a deterministic id. An instance with that id that
+ * is running or finished counts as started; one that errored (for example,
+ * Artifacts was unreachable) is started again under a new id.
  */
-export async function startGateInstance(binding: WorkflowBinding<GateParams>, id: string, params: Omit<GateParams, "runId">): Promise<{ id: string; runId: string; created: boolean }> {
-	const first = await startInstance(binding, id, { ...params, runId: `run_${id}` });
-	if (first.created) return { id, runId: `run_${id}`, created: true };
+export async function startOrRetryInstance<P>(binding: WorkflowBinding<P>, id: string, paramsFor: (instanceId: string) => P): Promise<{ id: string; created: boolean }> {
+	const first = await startInstance(binding, id, paramsFor(id));
+	if (first.created) return { id, created: true };
 	const status = await (await binding.get(id)).status().catch(() => ({ status: "unknown" }));
-	if (status.status !== "errored" && status.status !== "terminated") return { id, runId: `run_${id}`, created: false };
+	if (status.status !== "errored" && status.status !== "terminated") return { id, created: false };
 	const retryId = `${id.slice(0, 54)}-r${Date.now().toString(36).slice(-6)}`;
-	await binding.create({ id: retryId, params: { ...params, runId: `run_${retryId}` } });
-	return { id: retryId, runId: `run_${retryId}`, created: true };
+	await binding.create({ id: retryId, params: paramsFor(retryId) });
+	return { id: retryId, created: true };
+}
+
+/** Starts the gate for one push: one gate per (repo, branch, commit); an errored one is started again. */
+export async function startGateInstance(binding: WorkflowBinding<GateParams>, id: string, params: Omit<GateParams, "runId">): Promise<{ id: string; runId: string; created: boolean }> {
+	const started = await startOrRetryInstance(binding, id, (instanceId) => ({ ...params, runId: `run_${instanceId}` }));
+	return { id: started.id, runId: `run_${started.id}`, created: started.created };
+}
+
+/** Name of the record that links a push to the run that made it (see linkGateParent). */
+export function gateLinkName(repo: string, branch: string, commit: string): string {
+	return `gatelink_${repo}_${commit}_${fnv1a(branch)}`;
+}
+
+export interface GateLink {
+	parentRunId: string;
+	source: GateParams["source"];
+}
+
+/**
+ * Records, before a push, which run made it. The push event can start the
+ * gate before the pushing workflow does (queue delivery is not ordered with
+ * the workflow), so the gate reads this record at start and still reports
+ * to its parent and links the repair to it.
+ */
+export async function linkGateParent(env: Env, repo: string, branch: string, commit: string, link: GateLink): Promise<void> {
+	const id = gateLinkName(repo, branch, commit);
+	const stub = runsStub(env, id);
+	if (await stub.get()) return;
+	try {
+		await stub.create({ id, kind: "gate", repo, status: "passed", fields: { parentRunId: link.parentRunId, source: link.source, branch, commit } });
+	} catch (error) {
+		if (!/already exists/.test(String((error as Error).message))) throw error;
+	}
+}
+
+export async function gateLinkOf(env: Env, repo: string, branch: string, commit: string): Promise<GateLink | null> {
+	const run = await runsStub(env, gateLinkName(repo, branch, commit)).get();
+	if (!run || typeof run.parentRunId !== "string") return null;
+	return { parentRunId: run.parentRunId, source: (run.source as GateParams["source"]) ?? "customize" };
+}
+
+/**
+ * Tells a waiting customization run that its gate (or repair) finished. Only
+ * customize runs wait for events; other parents are skipped. A failure to
+ * deliver is logged, never thrown: the parent also checks the run record.
+ */
+export async function notifyParent(env: Env, exports: AppExports, parentRunId: string, type: "gate-finished" | "repair-finished", payload: Record<string, unknown>): Promise<void> {
+	try {
+		const parent = await runsStub(env, parentRunId).get();
+		if (parent?.kind !== "customize") return;
+		await (await exports.CustomizeWorkflow.get(parentRunId)).sendEvent({ type, payload });
+	} catch (error) {
+		console.warn(`notify ${parentRunId} (${type}) failed: ${errorText(error)}`);
+	}
 }
 
 export function asJson<T>(value: T): Json {
@@ -164,7 +221,7 @@ export function runLog(env: Env, runId: string): RunLog {
 	};
 }
 
-export async function setFleet(env: Env, repo: string, patch: { status?: ForkStatusInput; pinnedTag?: string; lastRun?: Record<string, unknown> | null }): Promise<void> {
+export async function setFleet(env: Env, repo: string, patch: { status?: ForkStatusInput; pinnedTag?: string; lastRun?: Record<string, unknown> | null; pendingUpgrade?: PendingUpgrade | null }): Promise<void> {
 	const lastRun = patch.lastRun ? ({ at: new Date().toISOString(), ...patch.lastRun } as RunSummary) : patch.lastRun;
 	await fleetStub(env).update(repo, { ...patch, lastRun: lastRun as RunSummary | null | undefined });
 }

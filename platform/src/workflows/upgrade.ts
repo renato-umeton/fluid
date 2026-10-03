@@ -2,30 +2,45 @@
 // per fork in paced batches. Each Upgrade creates upgrade/<tag> in its fork,
 // merges the stock tag (a merge agent resolves textual conflicts from the
 // fork's intent records), runs the gate with tiers 1 and 2 at the new tag,
-// and then merges to main (auto_upgrade) or waits for a one-tap approval.
+// and then fast-forwards main (auto_upgrade) or waits for a one-tap approval
+// (recorded as the fork's pendingUpgrade). main only fast-forwards: if it
+// moved, main is merged into upgrade/<tag> and that commit is gated again.
 // On failure the fork stays pinned and a repair branch is opened.
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { buildIntent, intentJson, intentPath } from "../agents/intent.ts";
 import { acceptModelResolutions, fallbackResolution, MERGE_SCHEMA, mergePrompt, type Resolution } from "../agents/merge-resolve.ts";
 import { fnv1a } from "../events/filter.ts";
-import { checkoutBranch, cloneRepo, commitChanges, fetchBranch, fetchStockTag, headCommit, mergeInto, mergeWithResolver, pushBranch, readWorkspaceFile, writeFiles, type ConflictVersions } from "../git/ops.ts";
+import { checkoutBranch, cloneRepo, commitChanges, fastForward, fetchBranch, fetchStockTag, headCommit, mergeInto, mergeWithResolver, pushBranch, readWorkspaceFile, writeFiles, type ConflictVersions } from "../git/ops.ts";
 import { preferencesOf, readIntents, type BuildTimeIntent } from "../forks/provision.ts";
 import { runGate } from "../gate/run.ts";
-import { gateBrief } from "../gate/tiers.ts";
+import { gateBrief, type GateResult } from "../gate/tiers.ts";
 import { newIntentId, STOCK_REPO, userIdFromForkRepo } from "../lib/names.ts";
 import { parseToml, setTomlValue } from "../lib/toml.ts";
 import { AGENT_MODEL, callModel } from "../runtime/llm.ts";
 import { pinnedTagOf } from "../stock/releases.ts";
 import { quotaStub } from "../stubs.ts";
 import { logTiers, persistGate, repairRunId } from "./gate.ts";
-import { appExports, ensureRun, errorText, GATE_STEP, GIT_STEP, repoRemote, runLog, setFleet, startInstance, guarded, steps, type ReleaseParams, type UpgradeParams } from "./common.ts";
+import { appExports, ensureRun, errorText, GATE_STEP, GIT_STEP, repoRemote, runLog, setFleet, startInstance, startOrRetryInstance, guarded, steps, type ReleaseParams, type UpgradeParams } from "./common.ts";
 
 /** Upgrades created per batch, and the pause between batches. */
 export const FAN_OUT = { batchSize: 20, pause: "1 second" };
 export const MERGE_MODEL_LIMIT = { maxFiles: 3, maxChars: 40_000, perMinute: 30 };
 
-export function upgradeInstanceId(tag: string, repo: string, nonce: string): string {
-	return `upg-${tag.replace(/[^A-Za-z0-9]/g, "-")}-${fnv1a(repo)}-${nonce}`.slice(0, 64);
+/** One upgrade per (tag, fork): re-running a release never upgrades a fork twice. */
+export function upgradeInstanceId(tag: string, repo: string): string {
+	return `upg-${tag.replace(/[^A-Za-z0-9]/g, "-")}-${fnv1a(repo)}`.slice(0, 64);
+}
+
+/** Rounds of "main moved, merge it into the upgrade branch, gate again" before an auto upgrade gives up. */
+export const MAX_REGATES = 2;
+
+/** Forks a release still has to upgrade: not already on the tag, not waiting to approve it, and not already handled at it. */
+export function upgradeTargets(tag: string, forks: { repo: string; status: string; pinnedTag: string; lastRun: { tag?: unknown; kind?: string } | null; pendingUpgrade: { tag: string } | null }[]): string[] {
+	return forks
+		.filter((f) => f.status !== "provisioning")
+		.filter((f) => f.pinnedTag !== tag && f.pendingUpgrade?.tag !== tag)
+		.filter((f) => !(f.lastRun?.tag === tag && (f.lastRun.kind === "upgrade" || f.lastRun.kind === "repair")))
+		.map((f) => f.repo);
 }
 
 export class ReleaseWorkflow extends WorkflowEntrypoint<Env, ReleaseParams> {
@@ -39,7 +54,6 @@ export class ReleaseWorkflow extends WorkflowEntrypoint<Env, ReleaseParams> {
 		const p = event.payload;
 		const log = runLog(this.env, p.runId);
 		const exports = appExports(this.ctx);
-		const nonce = fnv1a(p.runId).slice(0, 6);
 		await step.do("start", async () => {
 			await ensureRun(this.env, { id: p.runId, kind: "release", fields: { tag: p.tag, safety: p.safety, graceUntil: p.graceUntil, forks: p.repos.length } });
 			await log.step(`Fan out upgrades to ${p.repos.length} forks`, "running", `Batches of ${FAN_OUT.batchSize}`);
@@ -50,16 +64,17 @@ export class ReleaseWorkflow extends WorkflowEntrypoint<Env, ReleaseParams> {
 			const batch = p.repos.slice(i, i + FAN_OUT.batchSize);
 			started += await step.do(`fan out ${i}`, GIT_STEP, async () => {
 				const items = batch.map((repo) => {
-					const id = upgradeInstanceId(p.tag, repo, nonce);
+					const id = upgradeInstanceId(p.tag, repo);
 					return { id, params: { runId: `run_${id}`, repo, tag: p.tag, safety: p.safety, graceUntil: p.graceUntil, releaseRunId: p.runId } };
 				});
+				// Queued goes first: an upgrade cannot start before its instance exists, so its own updates always come later.
+				for (const item of items) await setFleet(this.env, item.params.repo, { status: "upgrading", lastRun: { runId: item.params.runId, kind: "upgrade", tag: p.tag, branch: `upgrade/${p.tag}`, status: "queued" } });
 				try {
 					await exports.UpgradeWorkflow.createBatch(items);
 				} catch {
-					// A retried batch may have partly succeeded; create the rest one by one.
-					for (const item of items) await startInstance(exports.UpgradeWorkflow, item.id, item.params);
+					// A retried batch may have partly succeeded; create the rest one by one (an errored one gets a fresh id).
+					for (const item of items) await startOrRetryInstance(exports.UpgradeWorkflow, item.id, (id) => ({ ...item.params, runId: `run_${id}` }));
 				}
-				for (const item of items) await setFleet(this.env, item.params.repo, { status: "upgrading", lastRun: { runId: item.params.runId, kind: "upgrade", tag: p.tag, branch: `upgrade/${p.tag}`, status: "queued" } });
 				return items.length;
 			});
 			if (i + FAN_OUT.batchSize < p.repos.length) await step.sleep(`pace ${i}`, FAN_OUT.pause);
@@ -157,49 +172,55 @@ export class UpgradeWorkflow extends WorkflowEntrypoint<Env, UpgradeParams> {
 			return { repo: p.repo, outcome: "already-current" };
 		}
 
-		const gate = await step.do("gate", GATE_STEP, async () => {
-			await setFleet(this.env, p.repo, { status: "gating", lastRun: lastRun({ status: "gating" }) });
-			await log.step(`Gate ${branch} at ${p.tag}`, "running");
-			const result = await runGate({ env: this.env, exports }, { repo: p.repo, ref: branch, commit: merged.commit, mode: "merge" });
-			await logTiers(this.env, p.runId, result);
-			await persistGate(this.env, result, p.runId);
-			await log.step(`Gate ${branch} at ${p.tag}`, result.passed ? "done" : "failed", result.passed ? "All three tiers passed" : (gateBrief(result).firstFailure ?? "failed"));
-			return result;
-		});
-
-		if (gate.passed) {
-			const applied = await step.do("apply", GIT_STEP, async () => {
+		let commit = merged.commit;
+		let gate: GateResult | null = null;
+		for (let round = 0; round <= MAX_REGATES; round++) {
+			const at = commit;
+			const suffix = round === 0 ? "" : ` ${round}`;
+			gate = await step.do(`gate${suffix}`, GATE_STEP, async () => {
+				await setFleet(this.env, p.repo, { status: "gating", lastRun: lastRun({ status: "gating" }) });
+				await log.step(`Gate ${branch} at ${p.tag}${suffix}`, "running", round ? `main moved; gating the merge of main into ${branch} at ${at.slice(0, 7)}` : undefined);
+				const result = await runGate({ env: this.env, exports }, { repo: p.repo, ref: branch, commit: at, mode: "merge" });
+				await logTiers(this.env, p.runId, result);
+				await persistGate(this.env, result, p.runId);
+				await log.step(`Gate ${branch} at ${p.tag}${suffix}`, result.passed ? "done" : "failed", result.passed ? "All three tiers passed" : (gateBrief(result).firstFailure ?? "failed"));
+				return result;
+			});
+			if (!gate.passed) break;
+			const applied = await step.do(`apply${suffix}`, GIT_STEP, async () => {
 				if (!merged.autoUpgrade) {
-					await log.step("Your approval", "waiting", `auto_upgrade is off: one tap merges ${branch} into main`);
-					return false;
+					await log.step("Your approval", "waiting", `auto_upgrade is off: one tap fast-forwards main to ${branch}`);
+					return { applied: false, regate: null as string | null };
 				}
-				await log.step("Merge to main", "running");
-				const remote = await repoRemote(this.env, p.repo, "write");
-				const ws = await cloneRepo({ ...remote, ref: "main", singleBranch: true });
-				await fetchBranch(ws, remote, branch);
-				const outcome = await mergeInto(ws, { ours: "main", theirs: merged.commit, message: `Upgrade to stock ${p.tag}\n\nThe gate passed all three tiers on ${branch}.` });
-				if (!outcome.ok) throw new Error(`main moved during the upgrade: ${outcome.conflicts.filepaths.join(", ")}`);
-				if (!outcome.alreadyMerged) await pushBranch(ws, remote, "main");
-				await log.step("Merge to main", "done", `main is now ${outcome.oid.slice(0, 7)} on ${p.tag}`);
+				return this.advanceMain(p.repo, branch, at, p.tag, p.runId);
+			});
+			if (applied.regate) {
+				if (round === MAX_REGATES) throw new Error(`main kept moving during the upgrade to ${p.tag}; run the release again`);
+				commit = applied.regate;
+				continue;
+			}
+			await step.do(`finish pass${suffix}`, async () => {
+				await log.status("passed", { applied: applied.applied, commit: at });
+				await setFleet(this.env, p.repo, {
+					status: "passed",
+					...(applied.applied ? { pinnedTag: p.tag, pendingUpgrade: null } : { pendingUpgrade: { tag: p.tag, commit: at, runId: p.runId } }),
+					lastRun: lastRun({ status: "passed", applied: applied.applied, commit: at, conflicts: merged.conflicts.filter((c) => c !== "fluid.toml").length }),
+				});
 				return true;
 			});
-			await step.do("finish pass", async () => {
-				await log.status("passed", { applied });
-				await setFleet(this.env, p.repo, { status: "passed", ...(applied ? { pinnedTag: p.tag } : {}), lastRun: lastRun({ status: "passed", applied, commit: merged.commit, conflicts: merged.conflicts.filter((c) => c !== "fluid.toml").length }) });
-				return true;
-			});
-			return { repo: p.repo, outcome: applied ? "applied" : "ready", conflicts: merged.conflicts };
+			return { repo: p.repo, outcome: applied.applied ? "applied" : "ready", conflicts: merged.conflicts };
 		}
 
+		const failed = gate!;
 		await step.do("hand off to repair", async () => {
-			const repairId = repairRunId(p.repo, merged.commit);
+			const repairId = repairRunId(p.repo, commit);
 			await log.step("Stay pinned", "failed", `The fork stays on ${merged.fromTag}; ${repairId} opens a repair branch`);
-			await setFleet(this.env, p.repo, { status: "failed", lastRun: lastRun({ status: "failed", ...gateBrief(gate) }) });
+			await setFleet(this.env, p.repo, { status: "failed", lastRun: lastRun({ status: "failed", ...gateBrief(failed) }) });
 			await startInstance(exports.RepairWorkflow, repairId.replace(/^run_/, ""), {
 				runId: repairId,
 				repo: p.repo,
 				branch,
-				commit: merged.commit,
+				commit,
 				reason: "upgrade",
 				gateRunId: p.runId,
 				tag: p.tag,
@@ -211,6 +232,27 @@ export class UpgradeWorkflow extends WorkflowEntrypoint<Env, UpgradeParams> {
 			return true;
 		});
 		return { repo: p.repo, outcome: "pinned" };
+	}
+
+	/** Fast-forwards main to the gated upgrade commit, or merges a moved main into the upgrade branch for another gate. */
+	private async advanceMain(repo: string, branch: string, commit: string, tag: string, runId: string): Promise<{ applied: boolean; regate: string | null }> {
+		const log = runLog(this.env, runId);
+		await log.step("Merge to main", "running");
+		const remote = await repoRemote(this.env, repo, "write");
+		const ws = await cloneRepo({ ...remote, ref: "main", singleBranch: true });
+		await fetchBranch(ws, remote, branch);
+		const ff = await fastForward(ws, "main", commit);
+		if (ff.outcome !== "diverged") {
+			if (ff.outcome === "fast-forward") await pushBranch(ws, remote, "main");
+			await log.step("Merge to main", "done", `main fast-forwarded to ${commit.slice(0, 7)} on ${tag}`);
+			return { applied: true, regate: null };
+		}
+		await checkoutBranch(ws, branch);
+		const outcome = await mergeInto(ws, { ours: branch, theirs: "main", message: `Merge main into ${branch}\n\nmain moved to ${ff.oid.slice(0, 7)} during the upgrade to ${tag}; the merge is gated before main moves.` });
+		if (!outcome.ok) throw new Error(`main moved during the upgrade and conflicts in ${outcome.conflicts.filepaths.join(", ")}; run the release again`);
+		await pushBranch(ws, remote, branch, { force: true });
+		await log.step("Merge to main", "info", `main moved to ${ff.oid.slice(0, 7)}; merged it into ${branch} as ${outcome.oid.slice(0, 7)} for another gate`);
+		return { applied: false, regate: outcome.oid };
 	}
 
 	/** Model resolution within a budget; deterministic fallback otherwise or on any model problem. */
