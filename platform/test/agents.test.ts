@@ -180,6 +180,18 @@ describe("harvest clustering", () => {
 	});
 });
 
+describe("harvest floor files", () => {
+	const cluster = (files: string[]) => clusterRecords([0, 1, 2, 3].map((i) => rec(`user-f${i}`, `int_f${i}`, "Add a shared helper for research answers", files, "customization-agent", ["research"])))[0]!;
+
+	it.each([["app/toml.ts"], ["app/types.ts"], ["tests/runner.ts"], ["tests/invariants/manifest.json"], ["policies/research.ts"], ["intent/classifier.ts"], ["fluid.toml"]])("never drafts a cluster that touches %s", (path) => {
+		expect(eligibility(cluster(["connectors/helper.ts", path]))).toMatchObject({ eligible: false });
+	});
+
+	it("still drafts ordinary connector clusters", () => {
+		expect(eligibility(cluster(["connectors/helper.ts", "app/index.ts"])).eligible).toBe(true);
+	});
+});
+
 describe("repair planning", () => {
 	const intents: BuildTimeIntent[] = [
 		{ id: "int_tau", author: "user:x", agent: "customization-agent", request: "Lower my threshold to 0.6", purpose: "p", modes_affected: [], files: ["fluid.toml"], tests_added: [], stock_tag: "v1.1.0" },

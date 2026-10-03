@@ -39,8 +39,14 @@ const STOPWORDS = new Set(
 );
 export const MIN_DRAFT_COUNT = 3;
 const SIMILARITY = 0.3;
-/** Files whose change touches the floor: never drafted into stock automatically. */
-const FLOOR_FILES = /^(fluid\.toml|intent\/|policies\/contracts\.ts|policies\/clinical|policies\/dose\.ts)/;
+/**
+ * Files whose change touches the floor: never drafted into stock
+ * automatically. Includes the gate runner and the stock modules it imports
+ * (app/toml.ts, app/types.ts), every stock suite under tests/ (a fork's own
+ * tests/user/ is not floor), and the research numeric path the invariants
+ * check.
+ */
+const FLOOR_FILES = /^(fluid\.toml|intent\/|policies\/contracts\.ts|policies\/clinical|policies\/dose\.ts|policies\/research|policies\/registry|app\/toml\.ts|app\/types\.ts|tests\/(?!user\/))/;
 
 export function harvestable(intent: BuildTimeIntent): boolean {
 	return intent.agent !== null && HARVESTABLE_AGENTS.has(intent.agent);
@@ -129,10 +135,15 @@ export function proposedFilesOf(cluster: Cluster): string[] {
 	return [...counts.entries()].filter(([, n]) => n * 2 >= cluster.records.length).map(([f]) => f).sort();
 }
 
+/** Floor files any member touched (a single fork touching the floor is enough to keep the cluster out). */
+export function floorFilesOf(cluster: Cluster): string[] {
+	return [...new Set(cluster.records.flatMap((r) => r.intent.files).filter((f) => FLOOR_FILES.test(f)))].sort();
+}
+
 export function eligibility(cluster: Cluster): { eligible: boolean; reason: string } {
 	const forks = forksIn(cluster).length;
 	const files = proposedFilesOf(cluster);
-	const floor = files.filter((f) => FLOOR_FILES.test(f));
+	const floor = floorFilesOf(cluster);
 	if (floor.length > 0) return { eligible: false, reason: `Touches the floor (${floor.join(", ")}); a stock change here goes through the safety review, not the harvester.` };
 	const modes = new Set(cluster.records.flatMap((r) => r.intent.modes_affected));
 	if (modes.has("clinical")) return { eligible: false, reason: "Changes clinical behavior; needs clinical informatics review before a stock draft." };
