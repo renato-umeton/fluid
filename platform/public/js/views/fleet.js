@@ -1,7 +1,7 @@
 // Fleet: tag a stock release and watch every fork upgrade, gate, pass, or open a repair.
 import { api, adminKey, setAdminKey } from "../api.js";
 import { h, mount, fmtTime, statusTag } from "../dom.js";
-import { renderTimeline, renderDiff, renderGate, renderIntent } from "./shared.js";
+import { renderTimeline, renderDiff, renderGate, renderIntent, repairApply } from "./shared.js";
 
 export const title = "Fleet";
 export const sub = "The mothership view. A stock release fans out one upgrade run per fork; each fork moves only when all three test tiers pass on the new stock.";
@@ -248,6 +248,7 @@ async function renderDrill(repo) {
     summary(f, run),
     run?.explanation ? h("div", { class: "explain" }, h("strong", {}, run.kind === "repair" ? "Repair agent: " : ""), run.explanation) : null,
     run?.safety ? h("div", { class: "explain", style: { borderColor: "var(--fail)", background: "var(--fail-bg)" } }, run.safety) : null,
+    run?.kind === "repair" && run.branch ? repairApply(repo, run.branch, { gatePassed: run.repairGate?.passed ?? null }) : null,
     run?.steps ? h("div", {}, h("h3", { class: "small", style: { marginBottom: "8px" } }, "Run steps"), renderTimeline(run.steps)) : null,
     run?.diff?.length ? h("div", {}, h("h3", { class: "small" }, "Proposed fix"), renderDiff(run.diff)) : null,
     run?.gate ? h("div", {}, h("h3", { class: "small", style: { marginBottom: "8px" } }, "Gate on the upgrade branch"), renderGate(run.gate)) : null,

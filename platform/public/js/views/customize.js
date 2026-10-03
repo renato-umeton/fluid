@@ -1,7 +1,7 @@
 // Customize: request a change, watch the agent run, review suggested tests, see the gate.
 import { api } from "../api.js";
 import { h, mount, json, statusTag } from "../dom.js";
-import { renderTimeline, renderDiff, renderGate, renderIntent } from "./shared.js";
+import { renderTimeline, renderDiff, renderGate, renderIntent, repairApply } from "./shared.js";
 
 export const title = "Customize";
 export const sub = "Ask for a change in plain words. An agent writes it on a work branch with an intent record, proposes tests, and the gate decides whether it merges.";
@@ -99,8 +99,15 @@ function paint(run) {
   mount($("#run-branch"), run.branch ? h("code", {}, `${run.branch}${run.commit ? ` at ${run.commit.slice(0, 7)}` : ""}`) : "");
   mount($("#run-diff"), renderDiff(run.diff));
   mount($("#run-suggestions"), run.suggestions?.length ? run.suggestions.map((s) => suggestion(run, s)) : h("p", { class: "empty" }, "Suggestions appear after the change is pushed."));
-  mount($("#run-gate"), renderGate(run.gate));
+  mount($("#run-gate"), renderGate(run.gate), run.repair?.branch ? repairBox(run) : null);
   mount($("#run-intent"), run.intent ? renderIntent(run.intent) : h("p", { class: "empty" }, "Written by the agent before it commits."));
+}
+
+function repairBox(run) {
+  return h("div", { class: "stack", style: { marginTop: "12px" } },
+    h("h3", { class: "small" }, `Repair branch ${run.repair.branch}`),
+    run.repair.explanation ? h("div", { class: "explain" }, h("strong", {}, "Repair agent: "), run.repair.explanation) : null,
+    repairApply(run.repo, run.repair.branch, { gatePassed: run.repair.repairGatePassed ?? null }));
 }
 
 function suggestion(run, s) {

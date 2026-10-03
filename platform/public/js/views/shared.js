@@ -1,5 +1,40 @@
 // Renderers shared by several views: intent records, run timelines, diffs, gate results.
-import { h, fmtTime } from "../dom.js";
+import { api } from "../api.js";
+import { h, fmtTime, mount } from "../dom.js";
+
+/**
+ * "Apply repair" control for a repair/<sha> branch. Applying gates the branch
+ * in merge mode; main fast-forwards to it only if every tier passes.
+ */
+export function repairApply(repo, branch, { gatePassed = null } = {}) {
+  const sha = /^repair\/([0-9a-f]{7})$/.exec(branch || "")?.[1];
+  if (!repo || !sha) return null;
+  const status = h("span", { class: "small muted", role: "status" },
+    gatePassed === false ? "The proposed fix still fails its check; applying it will be refused by the gate." : "Applying runs the gate on this branch; main moves only if it passes.");
+  const button = h("button", { type: "button", class: "btn btn-primary" }, `Apply ${branch}`);
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    mount(status, "Starting the gate...");
+    try {
+      const { runId } = await api.applyRepair(repo, sha);
+      for (let i = 0; i < 300; i++) {
+        const run = await api.run(runId).catch(() => null);
+        if (run && (run.status === "passed" || run.status === "failed")) {
+          if (run.regateRunId) { mount(status, "main moved; gating the merge of main into the repair branch..."); await new Promise((r) => setTimeout(r, 1500)); continue; }
+          mount(status, run.status === "passed" && run.mergedCommit ? `Applied: main is now ${String(run.mergedCommit).slice(0, 7)}.` : `Not applied: the gate ${run.status === "passed" ? "passed but main could not move" : "failed"} (${runId}).`);
+          return;
+        }
+        mount(status, `Gate ${runId} is running...`);
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+      mount(status, `Still running; see run ${runId}.`);
+    } catch (err) {
+      mount(status, err.message);
+      button.disabled = false;
+    }
+  });
+  return h("div", { class: "row" }, button, status);
+}
 
 export function renderIntent(r, { related = false } = {}) {
   return h("article", { class: `intent-rec${related ? " related" : ""}`, "aria-label": `Intent record ${r.id}` },
