@@ -4,7 +4,8 @@ import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import stockSource from "../src/generated/stock-source.json";
 import synthetic from "../src/generated/synthetic.json";
-import { APP_MODULE, ENTRY_MODULE, RUNNER_ENTRY_MODULE, buildModuleMap, buildRunnerModuleMap, entrySource, isRuntimePath, moduleName, transformTs } from "../src/runtime/modules.ts";
+import { APP_MODULE, ENTRY_MODULE, ForkCodeError, RUNNER_ENTRY_MODULE, buildModuleMap, buildRunnerModuleMap, entrySource, isRuntimePath, moduleName, transformTs } from "../src/runtime/modules.ts";
+import { askCard, MAX_CARD_CHARS } from "../src/runtime/loader.ts";
 
 const files = stockSource.files as Record<string, string>;
 
@@ -142,5 +143,28 @@ describe("transformed stock runtime", () => {
 		expect(card.mode).toBe("research");
 		expect(card.computed_dose).toMatchObject({ value: 7, unit: "mg" });
 		expect(card.sources.length).toBeGreaterThanOrEqual(2);
+	});
+});
+
+describe("card serialization across RPC", () => {
+	const fork = (value: unknown) => ({ ask: async () => value as string });
+
+	it("the generated entry returns the card as a JSON string", () => {
+		expect(entrySource()).toContain("return JSON.stringify(card);");
+	});
+
+	it("parses a JSON card into plain data", async () => {
+		expect(await askCard(fork(JSON.stringify({ mode: "clinical", computed_dose: null })), {})).toEqual({ mode: "clinical", computed_dose: null });
+	});
+
+	it("refuses anything that is not a JSON object string", async () => {
+		await expect(askCard(fork({ mode: "clinical" }), {})).rejects.toThrow(/JSON card/);
+		await expect(askCard(fork("[1]"), {})).rejects.toThrow(/not a JSON object/);
+		await expect(askCard(fork(`"${"x".repeat(MAX_CARD_CHARS)}"`), {})).rejects.toThrow(/larger than/);
+	});
+
+	it("marks fork code that does not build as the fork's fault", () => {
+		expect(() => buildModuleMap({ "app/other.ts": "export const x = 1;" })).toThrow(ForkCodeError);
+		expect(() => transformTs("export const = ;", "app/bad.ts")).toThrow(ForkCodeError);
 	});
 });

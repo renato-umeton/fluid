@@ -29,9 +29,26 @@ export interface AskOptions {
 	useModel?: boolean;
 }
 
-/** RPC surface of the generated entry module (see modules.ts entrySource). */
+/** RPC surface of the generated entry module (see modules.ts entrySource). The card crosses RPC as a JSON string. */
 export interface ForkEntrypoint {
-	ask(request: unknown, options?: AskOptions): Promise<AnswerCardLike>;
+	ask(request: unknown, options?: AskOptions): Promise<string>;
+}
+
+/** Largest card text accepted from a fork. */
+export const MAX_CARD_CHARS = 256 * 1024;
+
+/**
+ * Asks a fork and parses its card. The fork serializes the card itself, so
+ * the platform and the gate only ever see plain JSON data: no RPC stubs,
+ * getters, or toJSON methods that could answer differently on each read.
+ */
+export async function askCard(fork: ForkEntrypoint, request: unknown, options?: AskOptions): Promise<AnswerCardLike> {
+	const text: unknown = await fork.ask(request, options);
+	if (typeof text !== "string") throw new Error("the fork answered with something other than a JSON card");
+	if (text.length > MAX_CARD_CHARS) throw new Error(`the fork's card is larger than ${MAX_CARD_CHARS} characters`);
+	const card = JSON.parse(text) as unknown;
+	if (typeof card !== "object" || card === null || Array.isArray(card)) throw new Error("the fork's card is not a JSON object");
+	return card as AnswerCardLike;
 }
 
 export interface RunnerOptions {
@@ -58,7 +75,11 @@ export interface AnswerCardLike {
 export interface LoadOptions {
 	/** Files that replace or add to the fork's files before building (e.g. a candidate change under validation). */
 	extraFiles?: Record<string, string>;
-	/** Required with extraFiles: distinguishes the isolate id so cached code is never reused for different inputs. */
+	/**
+	 * Required with extraFiles: distinguishes the isolate id so cached code is
+	 * never reused for different inputs. Also used alone to get a fresh isolate
+	 * (the gate runs in its own variant, never in the production isolate).
+	 */
 	variant?: string;
 	/** Give the isolate the LLM capability (a separate ":llm" isolate). */
 	useModel?: boolean;
@@ -91,7 +112,8 @@ export function isolateId(repo: string, sha: string, variant?: string, useModel 
 }
 
 async function buildFor(env: Env, repoName: string, sha: string, options: LoadOptions): Promise<CachedBuild> {
-	const key = isolateId(repoName, sha, options.variant);
+	// The module map depends only on the files: a variant without extra files reuses the commit's build.
+	const key = options.extraFiles ? isolateId(repoName, sha, options.variant) : isolateId(repoName, sha);
 	const cached = builds.get(key);
 	if (cached) return cached;
 	using repo = await openRepo(env.ARTIFACTS, repoName);
@@ -140,7 +162,7 @@ export interface AskForkInput {
 export async function askFork(deps: RuntimeDeps, input: AskForkInput): Promise<{ card: AnswerCardLike; sha: string; ref: string }> {
 	const useModel = input.useModel ?? false;
 	const loaded = await loadForkRuntime(deps, input.repo, input.ref ?? "main", { useModel });
-	const card = await withTimeout(loaded.fork.ask(input.request, { useModel }), FORK_CALL_TIMEOUT_MS, `fork ${input.repo} did not answer`);
+	const card = await withTimeout(askCard(loaded.fork, input.request, { useModel }), FORK_CALL_TIMEOUT_MS, `fork ${input.repo} did not answer`);
 	return { card, sha: loaded.sha, ref: loaded.ref };
 }
 

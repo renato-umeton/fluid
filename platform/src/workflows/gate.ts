@@ -68,7 +68,7 @@ export class GateWorkflow extends WorkflowEntrypoint<Env, GateParams> {
 		});
 
 		const gate = await step.do("run tiers", GATE_STEP, async () => {
-			const result = await runGate({ env: this.env, exports }, { repo: p.repo, ref: p.branch, commit: p.commit });
+			const result = await runGate({ env: this.env, exports }, { repo: p.repo, ref: p.branch, commit: p.commit, mode: p.mode });
 			await log.step(`Gate ${p.branch} at ${p.commit.slice(0, 7)}`, "done", `Stock ${result.stockTag ?? "?"} suites loaded from stock; fork and runner in separate isolates (${result.durationMs} ms)`);
 			await logTiers(this.env, runId, result);
 			await persistGate(this.env, result, runId, p.parentRunId);

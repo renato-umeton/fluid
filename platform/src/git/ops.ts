@@ -274,10 +274,10 @@ export async function fetchBranch(ws: Workspace, remote: Remote, branch: string)
 	await git.fetch({ fs: ws.fs, http: ws.http, dir: ws.dir, url: remote.url, ref: branch, remoteRef: branch, singleBranch: true, tags: false, onAuth: onAuthFor(remote.token) });
 }
 
-/** Lists refs on a remote without cloning. */
-export async function listRemoteRefs(remote: Remote, http: GitHttp = webHttp): Promise<{ ref: string; oid: string }[]> {
-	const refs = await git.listServerRefs({ http, url: remote.url, onAuth: onAuthFor(remote.token) });
-	return refs.map((r) => ({ ref: r.ref, oid: r.oid }));
+/** Lists refs on a remote without cloning. With peelTags, annotated tags carry the commit they point at in `peeled`. */
+export async function listRemoteRefs(remote: Remote, http: GitHttp = webHttp, options: { prefix?: string; peelTags?: boolean } = {}): Promise<{ ref: string; oid: string; peeled?: string }[]> {
+	const refs = await git.listServerRefs({ http, url: remote.url, onAuth: onAuthFor(remote.token), ...(options.prefix ? { prefix: options.prefix } : {}), ...(options.peelTags ? { peelTags: true } : {}) });
+	return refs.map((r) => ({ ref: r.ref, oid: r.oid, ...(r.peeled ? { peeled: r.peeled } : {}) }));
 }
 
 /**

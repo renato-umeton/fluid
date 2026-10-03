@@ -160,7 +160,7 @@ export class UpgradeWorkflow extends WorkflowEntrypoint<Env, UpgradeParams> {
 		const gate = await step.do("gate", GATE_STEP, async () => {
 			await setFleet(this.env, p.repo, { status: "gating", lastRun: lastRun({ status: "gating" }) });
 			await log.step(`Gate ${branch} at ${p.tag}`, "running");
-			const result = await runGate({ env: this.env, exports }, { repo: p.repo, ref: branch, commit: merged.commit });
+			const result = await runGate({ env: this.env, exports }, { repo: p.repo, ref: branch, commit: merged.commit, mode: "merge" });
 			await logTiers(this.env, p.runId, result);
 			await persistGate(this.env, result, p.runId);
 			await log.step(`Gate ${branch} at ${p.tag}`, result.passed ? "done" : "failed", result.passed ? "All three tiers passed" : (gateBrief(result).firstFailure ?? "failed"));

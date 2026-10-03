@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import stockSource from "../src/generated/stock-source.json";
 import synthetic from "../src/generated/synthetic.json";
-import { capFailures, clipValue, emptyUserTier, gateBrief, prepareUserManifest, summarizeTier, verdict, type GateFailure, type RunnerManifestResult } from "../src/gate/tiers.ts";
+import { capFailures, clipValue, emptyUserTier, gateBrief, prepareUserManifest, summarizeTier, USER_LIMITS, verdict, type GateFailure, type RunnerManifestResult } from "../src/gate/tiers.ts";
 import { setTomlValue } from "../src/lib/toml.ts";
 import { APP_MODULE, ENTRY_MODULE, RUNNER_ENTRY_MODULE, buildModuleMap, buildRunnerModuleMap } from "../src/runtime/modules.ts";
 import { materialize } from "./helpers/materialize.ts";
@@ -74,6 +74,28 @@ describe("prepareUserManifest", () => {
 
 	it("reports invalid JSON", () => {
 		expect(prepareUserManifest("{").error).toMatch(/invalid JSON/);
+	});
+
+	const probe = (id: string, extra: Record<string, unknown> = {}) => ({ id, request: { question: "q", context: {} }, assert: [{ path: "mode", exists: true }], ...extra });
+
+	it("caps the manifest and per-probe sample counts", () => {
+		const prepared = prepareUserManifest(JSON.stringify({ samples: 500, probes: [probe("a", { samples: 1000 }), probe("b", { samples: 2 })] }));
+		expect(prepared.manifest?.samples).toBe(USER_LIMITS.maxSamples);
+		expect(prepared.manifest?.probes.map((p) => p.samples)).toEqual([USER_LIMITS.maxSamples, 2]);
+	});
+
+	it("caps the number of user probes and says so", () => {
+		const many = Array.from({ length: USER_LIMITS.maxProbes + 5 }, (_, i) => probe(`p${i}`));
+		const prepared = prepareUserManifest(JSON.stringify({ probes: many }));
+		expect(prepared.manifest?.probes).toHaveLength(USER_LIMITS.maxProbes);
+		expect(prepared.dropped).toBe(5);
+	});
+
+	it("rejects a malformed probe before the runner sees it", () => {
+		expect(prepareUserManifest(JSON.stringify({ probes: [probe("a", { assert: [] })] })).error).toMatch(/probe a/);
+		expect(prepareUserManifest(JSON.stringify({ probes: [probe("a"), probe("a")] })).error).toMatch(/duplicate/);
+		expect(prepareUserManifest(JSON.stringify({ samples: 0, probes: [probe("a")] })).error).toMatch(/samples/);
+		expect(prepareUserManifest(JSON.stringify({ probes: [probe("a", { samples: 1.5 })] })).error).toMatch(/samples/);
 	});
 
 	it("treats a manifest where every probe is disabled as nothing to run", () => {

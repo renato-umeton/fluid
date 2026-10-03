@@ -15,7 +15,7 @@ import { newIntentId } from "../lib/names.ts";
 import { pinnedTagOf } from "../stock/releases.ts";
 import { loadStockSuite } from "../stock/suite.ts";
 import { AGENT_MODEL, callModel } from "../runtime/llm.ts";
-import { FORK_CALL_TIMEOUT_MS, loadForkRuntime, withTimeout } from "../runtime/loader.ts";
+import { askCard, FORK_CALL_TIMEOUT_MS, loadForkRuntime, withTimeout } from "../runtime/loader.ts";
 import { isRuntimePath, transformTs } from "../runtime/modules.ts";
 import { headOf, openRepo, readCommitFiles } from "../runtime/repo-files.ts";
 import { runsStub } from "../stubs.ts";
@@ -254,7 +254,7 @@ export async function validateInIsolate(env: Env, exports: Parameters<typeof loa
 	}
 	const variant = `candidate-${fnv1a(JSON.stringify(files))}`;
 	const loaded = await loadForkRuntime({ env, exports }, repo, sha, { extraFiles: files, variant });
-	const card = (await withTimeout(loaded.fork.ask({ question: "What is the formulary status of Morphinex?", context: {} }, { useModel: false }), FORK_CALL_TIMEOUT_MS, "candidate fork did not answer")) as { override_available?: unknown; ledger?: unknown };
+	const card = (await withTimeout(askCard(loaded.fork, { question: "What is the formulary status of Morphinex?", context: {} }, { useModel: false }), FORK_CALL_TIMEOUT_MS, "candidate fork did not answer")) as { override_available?: unknown; ledger?: unknown };
 	if (card?.override_available !== true || !card.ledger) throw new Error("the changed fork answered without the card contract (override and ledger)");
 }
 

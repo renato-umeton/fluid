@@ -4,6 +4,8 @@
 // a probe marked disabled is skipped and logged. The pass rules themselves
 // live in stock's runner; this module only summarizes and decides.
 
+import { validateProbe, type Probe } from "../agents/suggester.ts";
+
 export type TierName = "invariant" | "functional" | "user";
 export const TIER_NAMES: readonly TierName[] = ["invariant", "functional", "user"];
 export const USER_MANIFEST_PATH = "tests/user/manifest.json";
@@ -127,13 +129,21 @@ export interface PreparedUserManifest {
 	/** Manifest to run (tier forced to "user"), or null when nothing is enabled. */
 	manifest: { tier: "user"; samples?: number; probes: Record<string, unknown>[] } | null;
 	disabled: { id: string; reason: string }[];
+	/** Enabled probes left out because the manifest has more than USER_LIMITS.maxProbes. */
+	dropped?: number;
 	error?: string;
 }
+
+/** Bounds on tier 3, so a fork's own tests cannot make a gate run for minutes. */
+export const USER_LIMITS = { maxSamples: 10, maxProbes: 20 };
 
 /**
  * Reads the fork's tier 3 manifest. Probes with `disabled: true` are skipped
  * and logged with their `disabledReason`. The tier is always "user",
- * whatever the file says.
+ * whatever the file says. Enabled probes are validated here (the same rules
+ * as stock's runner), so a runner failure later is never the fork's fault.
+ * Sample counts are capped at USER_LIMITS.maxSamples and the probe list at
+ * USER_LIMITS.maxProbes.
  */
 export function prepareUserManifest(text: string | null): PreparedUserManifest {
 	if (text === null) return { manifest: null, disabled: [] };
@@ -145,8 +155,11 @@ export function prepareUserManifest(text: string | null): PreparedUserManifest {
 	}
 	const probes = (parsed as { probes?: unknown } | null)?.probes;
 	if (!Array.isArray(probes)) return { manifest: null, disabled: [], error: "probes must be an array" };
+	const samples = (parsed as { samples?: unknown }).samples;
+	if (samples !== undefined && !isPositiveInteger(samples)) return { manifest: null, disabled: [], error: `manifest samples must be a positive integer, got ${JSON.stringify(samples)}` };
 	const disabled: { id: string; reason: string }[] = [];
 	const enabled: Record<string, unknown>[] = [];
+	const ids = new Set<string>();
 	for (const raw of probes) {
 		const probe = (raw ?? {}) as Record<string, unknown>;
 		if (probe.disabled === true) {
@@ -154,11 +167,25 @@ export function prepareUserManifest(text: string | null): PreparedUserManifest {
 			continue;
 		}
 		const { disabled: _d, disabledReason: _r, intentId: _i, ...rest } = probe;
+		const where = `probe ${String(probe.id ?? "(no id)").slice(0, 80)}`;
+		const problem = validateProbe(rest as unknown as Probe);
+		if (problem) return { manifest: null, disabled, error: `${where}: ${problem}` };
+		if (ids.has(rest.id as string)) return { manifest: null, disabled, error: `${where}: duplicate probe id` };
+		ids.add(rest.id as string);
+		if (rest.samples !== undefined) {
+			if (!isPositiveInteger(rest.samples)) return { manifest: null, disabled, error: `${where}: samples must be a positive integer, got ${JSON.stringify(rest.samples)}` };
+			rest.samples = Math.min(rest.samples, USER_LIMITS.maxSamples);
+		}
 		enabled.push(rest);
 	}
-	const samples = (parsed as { samples?: unknown }).samples;
 	if (enabled.length === 0) return { manifest: null, disabled };
-	return { manifest: { tier: "user", ...(typeof samples === "number" ? { samples } : {}), probes: enabled }, disabled };
+	const kept = enabled.slice(0, USER_LIMITS.maxProbes);
+	const manifest = { tier: "user" as const, ...(typeof samples === "number" ? { samples: Math.min(samples, USER_LIMITS.maxSamples) } : {}), probes: kept };
+	return { manifest, disabled, ...(enabled.length > kept.length ? { dropped: enabled.length - kept.length } : {}) };
+}
+
+function isPositiveInteger(value: unknown): value is number {
+	return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
 
 /** Summary for a user tier with nothing to run. */

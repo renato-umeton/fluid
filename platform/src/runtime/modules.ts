@@ -31,12 +31,20 @@ export function isRuntimePath(path: string): boolean {
 	return /\.(ts|js|mjs|json)$/.test(path);
 }
 
+/** The fork's code cannot be built into a runtime (transform error, bad JSON, no app/index.ts): the fork's fault, not the platform's. */
+export class ForkCodeError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "ForkCodeError";
+	}
+}
+
 /** Strips TypeScript syntax and leaves ES module syntax as written. */
 export function transformTs(source: string, path: string): string {
 	try {
 		return transform(source, { transforms: ["typescript"], disableESTransforms: true, filePath: path }).code;
 	} catch (error) {
-		throw new Error(`TypeScript transform failed for ${path}: ${error instanceof Error ? error.message : String(error)}`);
+		throw new ForkCodeError(`TypeScript transform failed for ${path}: ${error instanceof Error ? error.message : String(error)}`);
 	}
 }
 
@@ -51,11 +59,11 @@ export function buildModuleMap(files: Record<string, string>): ModuleMap {
 	for (const [path, text] of Object.entries(files)) {
 		if (!isRuntimePath(path)) continue;
 		const name = moduleName(path);
-		if (origin[name]) throw new Error(`module ${name} is defined by both ${origin[name]} and ${path}`);
+		if (origin[name]) throw new ForkCodeError(`module ${name} is defined by both ${origin[name]} and ${path}`);
 		origin[name] = path;
 		modules[name] = path.endsWith(".json") ? { json: parseJson(text, path) } : { js: path.endsWith(".ts") ? transformTs(text, path) : text };
 	}
-	if (!modules[APP_MODULE]) throw new Error(`fork has no app/index.ts (or app/index.js); cannot build a runtime`);
+	if (!modules[APP_MODULE]) throw new ForkCodeError(`fork has no app/index.ts (or app/index.js); cannot build a runtime`);
 	modules[ENTRY_MODULE] = { js: entrySource() };
 	return { mainModule: ENTRY_MODULE, modules };
 }
@@ -71,7 +79,12 @@ export function buildRunnerModuleMap(stockFiles: Record<string, string>): Module
 	for (const path of [RUNNER_PATH, ...RUNNER_STOCK_DEPS]) {
 		const text = stockFiles[path];
 		if (text === undefined) throw new Error(`stock is missing ${path}; cannot build the gate runner`);
-		modules[moduleName(path)] = { js: transformTs(text, path) };
+		try {
+			modules[moduleName(path)] = { js: transformTs(text, path) };
+		} catch (error) {
+			// Stock's own runner failing to build is a platform problem, never the fork's.
+			throw new Error(`stock ${path} does not build: ${error instanceof Error ? error.message : String(error)}`);
+		}
 	}
 	modules[RUNNER_ENTRY_MODULE] = { js: runnerEntrySource() };
 	return { mainModule: RUNNER_ENTRY_MODULE, modules };
@@ -101,7 +114,7 @@ function parseJson(text: string, path: string): unknown {
 	try {
 		return JSON.parse(text);
 	} catch (error) {
-		throw new Error(`invalid JSON in ${path}: ${error instanceof Error ? error.message : String(error)}`);
+		throw new ForkCodeError(`invalid JSON in ${path}: ${error instanceof Error ? error.message : String(error)}`);
 	}
 }
 
@@ -109,7 +122,8 @@ function parseJson(text: string, path: string): unknown {
  * Entry module run inside the fork isolate. env carries fluidToml, forkCommit,
  * data (synthetic), and, only in the model variant of the isolate, LLM (an
  * RPC capability back to the platform). The fork sees env.llm as the plain
- * function hook its contract expects.
+ * function hook its contract expects. The card is returned as a JSON string,
+ * so the platform receives plain data.
  */
 export function entrySource(): string {
 	return `import { WorkerEntrypoint } from "cloudflare:workers";
@@ -123,7 +137,8 @@ function forkEnv(env, options) {
 
 export class Fork extends WorkerEntrypoint {
   async ask(request, options) {
-    return app.ask(request, forkEnv(this.env, options));
+    const card = await app.ask(request, forkEnv(this.env, options));
+    return JSON.stringify(card);
   }
 }
 
