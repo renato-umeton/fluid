@@ -2,11 +2,12 @@
 // commit the onboarding change on main: fluid.toml keeps the stock values and
 // gains the user's preferences, and a build-time intent record explains why.
 import synthetic from "../generated/synthetic.json";
-import { cloneRepo, commitChanges, deleteRemoteBranch, listRemoteRefs, pushBranch, readWorkspaceFile, writeFiles, type Remote } from "../git/ops.ts";
+import { cloneRepo, commitChanges, deleteRemoteBranch, listRemoteRefs, pushBranch, readWorkspaceFile, resetBranch, writeFiles, type Remote } from "../git/ops.ts";
 import { forkRepoName, newIntentId, STOCK_REPO } from "../lib/names.ts";
 import { parseToml, setTomlValue } from "../lib/toml.ts";
 import { headOf, isNotFound, openRepo, readCommitFiles, readTextFile } from "../runtime/repo-files.ts";
 import { listStockTags } from "../stock/publish.ts";
+import { resolveStockTag } from "../stock/suite.ts";
 import { fleetStub } from "../stubs.ts";
 export { fleetStub };
 
@@ -61,16 +62,18 @@ export function findPersona(id: string): Persona | null {
 	return personas().find((p) => p.id === id) ?? null;
 }
 
-/** fluid.toml for a new fork: stock values, the pinned tag, and the user's preferences. */
+/**
+ * fluid.toml for a new fork: stock values, the pinned tag, and the user's
+ * preferences. Both preferences are written explicitly and default to false:
+ * harvesting reads a fork's intent records only after the user opts in.
+ */
 export function onboardingToml(stockToml: string, input: { stockTag: string; persona: string; preferences?: Preferences }): string {
 	let toml = setTomlValue(stockToml, null, "stock_tag", input.stockTag);
 	toml = setTomlValue(toml, "preferences", "persona", input.persona);
 	for (const key of ["auto_upgrade", "harvest_opt_in"] as const) {
-		const value = input.preferences?.[key];
-		if (value !== undefined) {
-			if (typeof value !== "boolean") throw new Error(`preferences.${key} must be a boolean`);
-			toml = setTomlValue(toml, "preferences", key, value);
-		}
+		const value = input.preferences?.[key] ?? false;
+		if (typeof value !== "boolean") throw new Error(`preferences.${key} must be a boolean`);
+		toml = setTomlValue(toml, "preferences", key, value);
 	}
 	return toml;
 }
@@ -105,6 +108,8 @@ export interface ProvisionInput {
 	maxTotal?: number;
 	/** A workflow retry continuing its own earlier attempt. */
 	resume?: boolean;
+	/** Pin an older published release instead of the latest (seeded demo forks). */
+	stockTag?: string;
 }
 
 export class ProvisioningBusyError extends Error {
@@ -125,7 +130,7 @@ export class FleetFullError extends Error {
 export async function provisionFork(env: Env, input: ProvisionInput): Promise<ForkInfo> {
 	const repoName = forkRepoName(input.userId);
 	const fleet = fleetStub(env);
-	const stockTag = await currentStockTag(env);
+	const stockTag = input.stockTag ?? (await currentStockTag(env));
 	const claim = await fleet.claimProvisioning({ repo: repoName, userId: input.userId, persona: input.persona.id, pinnedTag: stockTag, seeded: input.seeded, maxTotal: input.maxTotal, resume: input.resume });
 	if (claim.outcome === "exists") return getForkInfo(env, repoName);
 	if (claim.outcome === "busy") throw new ProvisioningBusyError(repoName);
@@ -142,10 +147,16 @@ export async function provisionFork(env: Env, input: ProvisionInput): Promise<Fo
 		// A retry after a partial failure may find the onboarding commit already pushed.
 		const alreadyOnboarded = (parseToml(stockToml).preferences as Record<string, unknown> | undefined)?.persona !== undefined;
 		if (!alreadyOnboarded) {
+			// A fork of stock starts at stock's main (the latest release). Pinning an older release
+			// moves the fork's main back to that tag's commit, which stock's history contains.
+			const latest = await currentStockTag(env);
+			const rewound = stockTag !== latest;
+			if (rewound) await resetBranch(ws, "main", await resolveStockTag(env, stockTag));
+			const tomlAtTag = rewound ? ((await readWorkspaceFile(ws, "fluid.toml")) ?? stockToml) : stockToml;
 			const intentId = newIntentId();
 			const intent = onboardingIntent({ id: intentId, userId: input.userId, persona: input.persona, stockTag });
 			await writeFiles(ws, {
-				"fluid.toml": onboardingToml(stockToml, { stockTag, persona: input.persona.id, preferences: input.preferences }),
+				"fluid.toml": onboardingToml(tomlAtTag, { stockTag, persona: input.persona.id, preferences: input.preferences }),
 				[`.intent/${intentId}.json`]: `${JSON.stringify(intent, null, 2)}\n`,
 			});
 			await commitChanges(ws, {
@@ -153,7 +164,7 @@ export async function provisionFork(env: Env, input: ProvisionInput): Promise<Fo
 				intentId,
 				author: { name: `user:${input.userId}`, email: `${input.userId}@users.fluid.invalid` },
 			});
-			await pushBranch(ws, remote, "main");
+			await pushBranch(ws, remote, "main", { force: rewound });
 		}
 		await fleet.update(repoName, { status: "pinned" });
 		return getForkInfo(env, repoName);
@@ -215,7 +226,7 @@ export async function getForkInfo(env: Env, repoName: string): Promise<ForkInfo>
 
 export function preferencesOf(parsed: Record<string, unknown>): { auto_upgrade: boolean; harvest_opt_in: boolean } {
 	const prefs = (parsed.preferences ?? {}) as Record<string, unknown>;
-	return { auto_upgrade: prefs.auto_upgrade === true, harvest_opt_in: prefs.harvest_opt_in !== false };
+	return { auto_upgrade: prefs.auto_upgrade === true, harvest_opt_in: prefs.harvest_opt_in === true };
 }
 
 export class ForkNotFoundError extends Error {

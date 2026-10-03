@@ -84,6 +84,8 @@ export interface SeedForkParams {
 	batch: string;
 	index: number;
 	count: number;
+	/** Release the seeded fork pins (defaults to the latest). */
+	stockTag?: string;
 }
 
 export interface HarvestParams {

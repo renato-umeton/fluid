@@ -357,6 +357,13 @@ export async function fastForward(ws: Workspace, branch: string, commit: string)
 	return { outcome: "fast-forward", oid: target };
 }
 
+/** Points local branch `branch` at `commit` (any commit in the working copy) and checks it out. Pushing the result needs force. */
+export async function resetBranch(ws: Workspace, branch: string, commit: string): Promise<void> {
+	const target = await peelToCommit(ws, await resolveAnyRef(ws, commit));
+	await git.writeRef({ fs: ws.fs, dir: ws.dir, ref: `refs/heads/${branch}`, value: target, force: true });
+	await git.checkout({ fs: ws.fs, dir: ws.dir, ref: branch, force: true });
+}
+
 /** First parent of a commit (the branch a merge was made on), or null for a root commit. */
 export async function firstParent(ws: Workspace, oid: string): Promise<string | null> {
 	const { commit } = await git.readCommit({ fs: ws.fs, dir: ws.dir, oid });

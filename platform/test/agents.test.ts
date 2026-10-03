@@ -10,7 +10,8 @@ import { diffEntries, lineStats } from "../src/agents/diff.ts";
 import { matchRecipe, protocolsFor, redcapChange, replanOnMovedMain, tauChange, tauTarget } from "../src/agents/recipes.ts";
 import { planRepair } from "../src/agents/repair-plan.ts";
 import { fallbackSuggestion, mergeUserManifest, suggestionsFromModel, suggestTests, touchedAreas, validateProbe } from "../src/agents/suggester.ts";
-import { requestFor, seedChange, seedPlan, type SeedKind } from "../src/fleet/seed-catalog.ts";
+import { requestFor, seedChange, seedPlan, seedTarget, type SeedKind } from "../src/fleet/seed-catalog.ts";
+import { demoReleaseFiles } from "../src/stock/releases.ts";
 import type { BuildTimeIntent } from "../src/forks/provision.ts";
 import { summarizeTier, type RunnerManifestResult } from "../src/gate/tiers.ts";
 import { APP_MODULE, ENTRY_MODULE, RUNNER_ENTRY_MODULE, buildModuleMap, buildRunnerModuleMap } from "../src/runtime/modules.ts";
@@ -105,24 +106,53 @@ describe("seeded customizations", () => {
 		["plain-wording", true],
 		["raise-tau", true],
 		["lower-tau", false],
-		["clinical-dose", false],
+		["compact-research", true],
 	];
-	it.each(cases)("%s passes the floor: %s", async (kind, passes) => {
+	it.each(cases)("%s passes the floor at its pinned tag: %s", async (kind, passes) => {
 		const change = seedChange(kind as Exclude<SeedKind, "none">, files, { personas: synthetic.personas, persona: "department-administrator" });
 		const { inv, fn } = await gateTiers({ ...files, ...change.files });
 		expect(inv.summary.passed && fn.summary.passed).toBe(passes);
 	});
 
-	it("plans a mix with a few failing forks", () => {
+	it("compact-research fails only the floor a demo release tightens", async () => {
+		const tightened = JSON.parse(demoReleaseFiles(files).files["tests/invariants/manifest.json"]!);
+		const run = async (kind: Exclude<SeedKind, "none">) => {
+			const change = seedChange(kind, files, { personas: synthetic.personas, persona: "hospitalist-researcher" });
+			const forkFiles = { ...files, ...change.files };
+			const app = await forkApp(forkFiles);
+			return summarizeTier("invariant", await runner.runManifest({ app, manifest: tightened, forkFiles: { "fluid.toml": forkFiles["fluid.toml"] }, env: {}, samples: 1 }));
+		};
+		const compact = await run("compact-research");
+		expect(compact.summary.passed).toBe(false);
+		expect(compact.failures.every((f) => f.probe.startsWith("inv-research-cross-check-visible"))).toBe(true);
+		for (const kind of ["redcap", "budget-summary", "plain-wording", "raise-tau"] as const) expect((await run(kind)).summary.passed).toBe(true);
+	});
+
+	it("no seeded customization ever computes a clinical dose", async () => {
+		for (const kind of ["redcap", "budget-summary", "plain-wording", "raise-tau", "lower-tau", "compact-research"] as const) {
+			const change = seedChange(kind, files, { personas: synthetic.personas, persona: "hospitalist-researcher" });
+			const app = await forkApp({ ...files, ...change.files });
+			const card = await app.ask({ question: "What is the right dose of Morphinex for a patient of 70 kg and 45 years?", context: { chartOpen: { patientId: "synthetic_patient_117", identified: true } } });
+			expect([kind, card.mode, card.computed_dose]).toEqual([kind, "clinical", null]);
+		}
+	});
+
+	it("plans a mix with a few forks that will fail the next release", () => {
 		const plan = seedPlan("t1", 200);
 		const count = (k: SeedKind) => plan.filter((s) => s.kinds.includes(k)).length;
 		expect(plan).toHaveLength(200);
-		expect(count("lower-tau") + count("clinical-dose")).toBeLessThanOrEqual(12);
+		expect(count("lower-tau") + count("compact-research")).toBeLessThanOrEqual(12);
 		expect(count("lower-tau")).toBeGreaterThan(0);
+		expect(count("compact-research")).toBeGreaterThan(0);
 		expect(count("plain-wording")).toBeGreaterThan(10);
 		expect(count("redcap")).toBeGreaterThan(20);
 		expect(new Set(plan.map((s) => s.userId)).size).toBe(200);
-		expect(seedPlan("t1", 30).filter((s) => s.kinds.includes("lower-tau") || s.kinds.includes("clinical-dose"))).toHaveLength(2);
+		expect(seedPlan("t1", 30).filter((s) => s.kinds.includes("lower-tau") || s.kinds.includes("compact-research"))).toHaveLength(2);
+	});
+
+	it("keeps the lowered-tau change off main: it goes to a work branch for the gate", () => {
+		expect(seedTarget("lower-tau")).toBe("work-branch");
+		for (const kind of ["redcap", "budget-summary", "plain-wording", "raise-tau", "compact-research"] as const) expect(seedTarget(kind)).toBe("main");
 	});
 });
 
@@ -239,6 +269,24 @@ describe("repair planning", () => {
 		expect(plan.rule).toBe("revert-customization");
 		expect(plan.files).toEqual({ "policies/quick-dose.ts": null, "app/index.ts": "stock index" });
 		expect(plan.intentRefs).toContain("int_dose");
+	});
+
+	it("reverts only the research customization when a release tightens the research floor", () => {
+		const research: BuildTimeIntent[] = [
+			{ id: "int_compact", author: "user:x", agent: "seed-customization", request: "Keep research dose answers short", purpose: "drop cross-check lines", modes_affected: ["research"], files: ["policies/research-compact.ts", "app/index.ts"], tests_added: [], stock_tag: "v1.5.0" },
+			{ id: "int_budget", author: "user:x", agent: "seed-customization", request: "Budget variance", purpose: "admin", modes_affected: ["administrative"], files: ["connectors/budget-summary.ts"], tests_added: [], stock_tag: "v1.5.0" },
+		];
+		const plan = planRepair({
+			gate: gate([{ tier: "invariant", probe: "inv-research-cross-check-visible", sample: 1, samples: 5, path: "body", op: "contains", expected: "Cross-check:", actual: "..." }]),
+			intents: research,
+			fluidToml: "",
+			stockMinTau: 0.85,
+			stockVersions: { "policies/research-compact.ts": null, "app/index.ts": "stock index", "connectors/budget-summary.ts": null },
+		});
+		expect(plan.rule).toBe("revert-customization");
+		expect(plan.files).toEqual({ "policies/research-compact.ts": null, "app/index.ts": "stock index" });
+		expect(plan.intentRefs).toEqual(["int_compact"]);
+		expect(plan.explanation).toContain("research");
 	});
 
 	it("explains without a fix when no rule applies", () => {

@@ -1,10 +1,13 @@
 // Synthetic fleet for the release-day demo: forks across the three personas
 // with a realistic mix of customizations. Most are harmless and pass an
 // upgrade; some reword the multi-intent framing that demo releases also
-// change (textual conflict, resolved by the merge agent); a few predate the
-// current floor (tau lowered, a custom clinical dose path) and must stay
-// pinned with a repair branch. Seeded customizations are committed straight
-// to main as history, marked with agent "seed-customization".
+// change (textual conflict, resolved by the merge agent). A few compact
+// their research answers: that passes the floor at their pinned tag and
+// fails the invariant a demo release adds, so they stay pinned with a
+// repair branch. A few try to lower tau: that change never reaches main; it
+// is pushed to a work branch, fails the gate, and opens a repair. Seeded
+// customizations on main are marked with agent "seed-customization". No
+// seeded customization computes a clinical dose.
 import { setTomlValue } from "../lib/toml.ts";
 import { protocolsFor, redcapChange, type PlannedChange } from "../agents/recipes.ts";
 
@@ -13,7 +16,12 @@ export const SEED_MAX = 500;
 export const SEED_DEFAULT = 200;
 export const PERSONA_IDS = ["hospitalist-researcher", "research-coordinator", "department-administrator"] as const;
 
-export type SeedKind = "none" | "redcap" | "budget-summary" | "plain-wording" | "raise-tau" | "lower-tau" | "clinical-dose";
+export type SeedKind = "none" | "redcap" | "budget-summary" | "plain-wording" | "raise-tau" | "lower-tau" | "compact-research";
+
+/** Where a seeded customization goes: main (it passes the floor at the fork's pin) or a work branch the gate checks. */
+export function seedTarget(kind: Exclude<SeedKind, "none">): "main" | "work-branch" {
+	return kind === "lower-tau" ? "work-branch" : "main";
+}
 
 export interface SeedSpec {
 	index: number;
@@ -44,7 +52,7 @@ export function seedPlan(batch: string, count: number): SeedSpec[] {
 		const persona = PERSONA_IDS[i % 3]!;
 		const kinds: SeedKind[] = [];
 		if (i % 40 === 7) kinds.push("lower-tau");
-		else if (i % 50 === 11) kinds.push("clinical-dose");
+		else if (i % 50 === 11) kinds.push("compact-research");
 		else {
 			const r = rand();
 			if (persona === "research-coordinator") {
@@ -102,7 +110,7 @@ const REQUESTS: Record<Exclude<SeedKind, "none">, string[]> = {
 	],
 	"raise-tau": ["Raise my confidence threshold to 0.9", "Only answer in one mode when you are at least 0.9 confident"],
 	"lower-tau": ["Lower my threshold to 0.8 so I see fewer multi-intent answers"],
-	"clinical-dose": ["Show a quick weight-based dose on clinical cards so I do not have to switch modes"],
+	"compact-research": ["Keep research dose answers short: drop the per-source cross-check lines from the answer text"],
 };
 
 export function requestFor(kind: Exclude<SeedKind, "none">, index: number): string {
@@ -131,8 +139,8 @@ export function seedChange(kind: Exclude<SeedKind, "none">, files: Record<string
 			return plainWording(files);
 		case "budget-summary":
 			return budgetSummary(files);
-		case "clinical-dose":
-			return clinicalDose(files);
+		case "compact-research":
+			return compactResearch(files);
 	}
 }
 
@@ -205,25 +213,32 @@ export function withBudgetSummary(card: AnswerCard, request: AskRequest, data: S
 	};
 }
 
-function clinicalDose(files: Record<string, string>): PlannedChange {
-	const source = `// Quick clinical dose (fork customization). Adds a weight-based number to
-// clinical dosing cards. This violates the stock floor: clinical mode must
-// never compute a patient-specific dose.
+function compactResearch(files: Record<string, string>): PlannedChange {
+	const source = `// Compact research answers (fork customization). Research dose answers drop
+// the per-source cross-check lines ("Cross-check:" and one line per registry
+// source) from the body; the framing still says the value was cross-checked.
+// Clinical cards are untouched. A later stock release requires those lines
+// in the body, so this customization needs rework before that upgrade.
 import type { AnswerCard, AskRequest } from "../app/types.js";
 
-export function withQuickDose(card: AnswerCard, request: AskRequest): AnswerCard {
-  if (card.mode !== "clinical" || !/\\bdose|how much\\b/i.test(request.question)) return card;
-  const kg = Number(/(\\d+(?:\\.\\d+)?)\\s*kg/i.exec(request.question)?.[1] ?? 70);
-  const value = Math.round(kg * 0.1 * 10) / 10;
-  return { ...card, computed_dose: { value, unit: "mg", basis: "custom 0.1 mg/kg shortcut" }, body: \`\${card.body}\\nQuick dose: \${value} mg.\` };
+const CROSS_CHECK_LINE = /^(Cross-check:|- [a-z]+:[A-Za-z0-9._-]+: )/;
+
+function compact(card: AnswerCard): AnswerCard {
+  if (card.mode !== "research") return card;
+  return { ...card, body: card.body.split("\\n").filter((line) => !CROSS_CHECK_LINE.test(line)).join("\\n") };
+}
+
+export function withCompactResearch(card: AnswerCard, _request: AskRequest, _data: unknown): AnswerCard {
+  const out = compact(card);
+  return out.alternatives ? { ...out, alternatives: out.alternatives.map(compact) } : out;
 }
 `;
 	return {
-		summary: "Quick weight-based dose on clinical cards",
-		purpose: "Clinical dosing cards show a quick weight-based number",
-		modes_affected: ["clinical"],
-		files: { "policies/quick-dose.ts": source, "app/index.ts": wrapAsk(files["app/index.ts"]!, 'import { withQuickDose } from "../policies/quick-dose.js";', "withQuickDose") },
-		notes: { "policies/quick-dose.ts": "Weight-based clinical dose shortcut", "app/index.ts": "Clinical cards carry the quick dose" },
+		summary: "Shorter research dose answers without the per-source cross-check lines",
+		purpose: "Research dose answers stay short: the body drops the per-source cross-check lines",
+		modes_affected: ["research"],
+		files: { "policies/research-compact.ts": source, "app/index.ts": wrapAsk(files["app/index.ts"]!, 'import { withCompactResearch } from "../policies/research-compact.js";', "withCompactResearch") },
+		notes: { "policies/research-compact.ts": "Drops cross-check lines from research bodies", "app/index.ts": "Research cards pass through the compact filter" },
 		recipe: "model",
 	};
 }

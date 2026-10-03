@@ -16,6 +16,7 @@ import {
 	readCommitMessage,
 	readWorkspaceFile,
 	removeFiles,
+	resetBranch,
 	replaceTree,
 	withIntentTrailer,
 	writeFiles,
@@ -228,5 +229,16 @@ describe("fastForward", () => {
 		await writeFiles(ws, { "app/a.ts": "export const a = 1;\n" });
 		await commitChanges(ws, { message: "a" });
 		expect(await firstParent(ws, await headCommit(ws, "work/a"))).toBe(base);
+	});
+});
+
+describe("resetBranch", () => {
+	it("points a branch at an older commit and checks it out", async () => {
+		const { ws, base } = await seeded();
+		await writeFiles(ws, { "app/index.ts": "export const v = 2;\n" });
+		await commitChanges(ws, { message: "stock v1.1.0" });
+		await resetBranch(ws, "main", base);
+		expect(await headCommit(ws, "main")).toBe(base);
+		expect(await readWorkspaceFile(ws, "app/index.ts")).toBe("export const v = 1;\n");
 	});
 });

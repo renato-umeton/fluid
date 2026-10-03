@@ -40,6 +40,11 @@ export function isClinicalFailure(f: GateFailure): boolean {
 	return f.tier !== "user" && (f.path === "computed_dose" || /clinical|never-doses|no-dose|chart-open|order-entry/.test(f.probe));
 }
 
+/** A failure of the research numeric floor (two registry sources, visible cross-check). */
+export function isResearchFailure(f: GateFailure): boolean {
+	return f.tier === "invariant" && /^inv-research-/.test(f.probe);
+}
+
 /** Runtime files the fork's customizations changed (candidates to revert to stock). */
 export function customizedRuntimeFiles(intents: BuildTimeIntent[]): string[] {
 	const files = customizationIntents(intents).flatMap((i) => i.files);
@@ -51,6 +56,7 @@ export function planRepair(input: RepairInput): RepairPlan {
 	const custom = customizationIntents(input.intents);
 	const tauFailures = failures.filter(isTauFailure);
 	const clinicalFailures = failures.filter((f) => !isTauFailure(f) && isClinicalFailure(f));
+	const researchFailures = failures.filter((f) => !isTauFailure(f) && !isClinicalFailure(f) && isResearchFailure(f));
 	const files: Record<string, string | null> = {};
 	const refs = new Set<string>();
 	const fixes: string[] = [];
@@ -87,7 +93,23 @@ export function planRepair(input: RepairInput): RepairPlan {
 		);
 	}
 
-	const explained = new Set([...tauFailures, ...clinicalFailures]);
+	if (researchFailures.length > 0) {
+		// Only customizations that change research answers are candidates; others stay as they are.
+		const owners = custom.filter((i) => i.modes_affected.includes("research") && i.files.some((f) => /^(app|policies|connectors)\//.test(f)));
+		const revert = [...new Set(owners.flatMap((i) => i.files).filter((f) => /^(app|intent|policies|connectors)\//.test(f)))].filter((path) => path in input.stockVersions);
+		for (const path of revert) files[path] = input.stockVersions[path] ?? null;
+		owners.forEach((i) => refs.add(i.id));
+		const first = researchFailures[0]!;
+		if (revert.length > 0) {
+			fixes.push(`revert ${revert.join(", ")} to stock ${input.gate.stockTag ?? ""}`);
+			if (rule === "none") rule = "revert-customization";
+		}
+		reasons.push(
+			`The gate failed the research floor at ${first.probe} (${first.path || "card"} ${first.op} ${JSON.stringify(first.expected)}). ${owners.length ? `Intent ${owners.map((i) => `${i.id} ("${i.purpose || i.request}")`).join(", ")} changed how research answers read` : "A customization changed research answers"}; stock ${input.gate.stockTag ?? ""} requires research numeric answers to show their per-source cross-check. The repair puts stock's research answer back and keeps the customization on its own branch for rework.`,
+		);
+	}
+
+	const explained = new Set([...tauFailures, ...clinicalFailures, ...researchFailures]);
 	const unexplained = failures.filter((f) => !explained.has(f));
 	if (unexplained.length > 0 && reasons.length === 0) {
 		const touched = custom.filter((i) => i.files.length > 0);

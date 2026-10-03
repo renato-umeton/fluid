@@ -1,13 +1,15 @@
 // Fleet seeding and harvesting. SeedFleet registers N synthetic forks and
 // starts one SeedFork workflow per fork in paced batches; each SeedFork
-// provisions its fork from the latest stock tag and commits its seeded
-// customization to main. Harvest reads build-time intent records across
+// provisions its fork at the seed base tag (the newest release before the
+// floor a demo release tightens), commits customizations that pass that
+// floor to main, and pushes a floor-breaking change (lower tau) to a work
+// branch that the gate fails and the repair agent answers. Harvest reads build-time intent records across
 // opted-in forks, clusters them, labels clusters with the model, and drafts
 // eligible ones as harvest/<slug> branches in stock.
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { clusterRecords, deterministicLabel, harvestable, LABEL_SCHEMA, labelPrompt, proposalOf, type HarvestProposal, type HarvestRecord } from "../agents/harvest-cluster.ts";
 import { buildIntent, intentJson, intentPath, cleanText } from "../agents/intent.ts";
-import { cloneRepo, commitChanges, checkoutBranch, deleteRemoteBranch, listRemoteRefs, pushBranch, readWorkspaceFile, writeFiles } from "../git/ops.ts";
+import { cloneRepo, commitChanges, checkoutBranch, deleteRemoteBranch, headCommit, listRemoteRefs, pushBranch, readWorkspaceFile, writeFiles } from "../git/ops.ts";
 import synthetic from "../generated/synthetic.json";
 import { currentStockTag, findPersona, preferencesOf, provisionFork, readIntents } from "../forks/provision.ts";
 import { forkRepoName, newIntentId, STOCK_REPO } from "../lib/names.ts";
@@ -15,10 +17,12 @@ import { parseToml } from "../lib/toml.ts";
 import { FAST_MODEL, callModel } from "../runtime/llm.ts";
 import { isRuntimePath } from "../runtime/modules.ts";
 import { headOf, openRepo, readCommitFiles, readTextFile } from "../runtime/repo-files.ts";
-import { pinnedTagOf } from "../stock/releases.ts";
+import { gateInstanceId } from "../events/filter.ts";
+import { isReleaseTag } from "../gate/pins.ts";
+import { hasDemoTightening, pinnedTagOf } from "../stock/releases.ts";
 import { fleetStub } from "../stubs.ts";
-import { requestFor, seedChange, seedPlan, type SeedKind } from "../fleet/seed-catalog.ts";
-import { appExports, ensureRun, errorText, GIT_STEP, repoRemote, runLog, setFleet, startInstance, guarded, steps, type HarvestParams, type SeedFleetParams, type SeedForkParams } from "./common.ts";
+import { requestFor, seedChange, seedPlan, seedTarget, type SeedKind } from "../fleet/seed-catalog.ts";
+import { appExports, ensureRun, errorText, GIT_STEP, repoRemote, runLog, setFleet, startGateInstance, startInstance, guarded, steps, type HarvestParams, type SeedFleetParams, type SeedForkParams } from "./common.ts";
 import { FAN_OUT } from "./upgrade.ts";
 
 export const HARVEST_KEY = "harvest";
@@ -39,17 +43,17 @@ export class SeedFleetWorkflow extends WorkflowEntrypoint<Env, SeedFleetParams> 
 		const log = runLog(this.env, p.runId);
 		const exports = appExports(this.ctx);
 		const plan = seedPlan(p.batch, p.count);
-		await step.do("register", async () => {
+		const tag = await step.do("register", async () => {
 			await ensureRun(this.env, { id: p.runId, kind: "seed", fields: { batch: p.batch, count: plan.length } });
-			await log.step(`Seed ${plan.length} forks`, "running", `Batch ${p.batch}`);
-			const tag = await currentStockTag(this.env);
+			const base = await seedBaseTag(this.env);
+			await log.step(`Seed ${plan.length} forks`, "running", `Batch ${p.batch}, pinned to ${base}, the newest release before the floor a demo release tightens`);
 			const fleet = fleetStub(this.env);
-			for (const spec of plan) await fleet.register({ repo: forkRepoName(spec.userId), userId: spec.userId, persona: spec.persona, pinnedTag: tag, status: "provisioning", seeded: true });
-			return true;
+			for (const spec of plan) await fleet.register({ repo: forkRepoName(spec.userId), userId: spec.userId, persona: spec.persona, pinnedTag: base, status: "provisioning", seeded: true });
+			return base;
 		});
 		for (let i = 0; i < plan.length; i += FAN_OUT.batchSize) {
 			await step.do(`fan out ${i}`, GIT_STEP, async () => {
-				const items = plan.slice(i, i + FAN_OUT.batchSize).map((spec) => ({ id: `seed-${p.batch}-${spec.index}`, params: { batch: p.batch, index: spec.index, count: p.count } }));
+				const items = plan.slice(i, i + FAN_OUT.batchSize).map((spec) => ({ id: `seed-${p.batch}-${spec.index}`, params: { batch: p.batch, index: spec.index, count: p.count, stockTag: tag } }));
 				try {
 					await exports.SeedForkWorkflow.createBatch(items);
 				} catch {
@@ -83,11 +87,14 @@ export class SeedForkWorkflow extends WorkflowEntrypoint<Env, SeedForkParams> {
 		await step.do("provision", GIT_STEP, async () => {
 			const persona = findPersona(spec.persona);
 			if (!persona) throw new Error(`unknown persona ${spec.persona}`);
-			await provisionFork(this.env, { userId: spec.userId, persona, seeded: true, resume: true, preferences: { auto_upgrade: spec.autoUpgrade, harvest_opt_in: spec.harvestOptIn } });
+			await provisionFork(this.env, { userId: spec.userId, persona, seeded: true, resume: true, ...(p.stockTag ? { stockTag: p.stockTag } : {}), preferences: { auto_upgrade: spec.autoUpgrade, harvest_opt_in: spec.harvestOptIn } });
 			return true;
 		});
 		const kinds = spec.kinds.filter((k): k is Exclude<SeedKind, "none"> => k !== "none");
-		if (kinds.length > 0) {
+		const onMain = kinds.filter((k) => seedTarget(k) === "main");
+		const onBranch = kinds.filter((k) => seedTarget(k) === "work-branch");
+		const personas = (synthetic as { personas: unknown }).personas;
+		if (onMain.length > 0) {
 			await step.do("customize", GIT_STEP, async () => {
 				const remote = await repoRemote(this.env, repo, "write");
 				const ws = await cloneRepo({ ...remote, ref: "main", singleBranch: true });
@@ -95,25 +102,74 @@ export class SeedForkWorkflow extends WorkflowEntrypoint<Env, SeedForkParams> {
 				// A retried step may find the customization already committed.
 				const existing = await readIntents(this.env, repo, "main");
 				if (existing.some((i) => i.agent === "seed-customization")) return true;
-				for (const kind of kinds) {
-					const files: Record<string, string> = {};
-					for (const path of ["app/index.ts", "app/cards.ts", "fluid.toml"]) files[path] = (await readWorkspaceFile(ws, path)) ?? "";
-					const change = seedChange(kind, files, { personas: (synthetic as { personas: unknown }).personas, persona: spec.persona });
-					const intentId = newIntentId();
-					const intent = buildIntent({ id: intentId, userId: spec.userId, agent: "seed-customization", request: requestFor(kind, spec.index), purpose: change.purpose, modes: change.modes_affected, files: [...Object.keys(change.files), intentPath(intentId)], stockTag: pinnedTagOf(toml) ?? "unknown", extra: { seeded: true, kind } });
-					await writeFiles(ws, { ...change.files, [intentPath(intentId)]: intentJson(intent) });
-					await commitChanges(ws, { message: `${change.summary}\n\nSeeded customization for the demo fleet (${kind}).`, intentId, author: { name: `user:${spec.userId}`, email: `${spec.userId}@users.fluid.invalid` } });
-				}
+				for (const kind of onMain) await commitSeedChange(ws, kind, spec, personas, pinnedTagOf(toml));
 				await pushBranch(ws, remote, "main");
 				return true;
 			});
 		}
+		// A change that would break the floor never lands on main: it goes to a work branch and through the gate.
+		const work =
+			onBranch.length > 0
+				? await step.do("push work branch", GIT_STEP, async () => {
+						const branch = `work/seed-${onBranch.join("-")}-${spec.index}`;
+						const remote = await repoRemote(this.env, repo, "write");
+						const pushed = (await listRemoteRefs(remote, undefined, { prefix: `refs/heads/${branch}` })).find((r) => r.ref === `refs/heads/${branch}`);
+						if (pushed) return { branch, commit: pushed.oid };
+						const ws = await cloneRepo({ ...remote, ref: "main", singleBranch: true });
+						const toml = (await readWorkspaceFile(ws, "fluid.toml")) ?? "";
+						await checkoutBranch(ws, branch, { create: true });
+						for (const kind of onBranch) await commitSeedChange(ws, kind, spec, personas, pinnedTagOf(toml));
+						await pushBranch(ws, remote, branch);
+						return { branch, commit: await headCommit(ws) };
+					})
+				: null;
 		await step.do("ready", async () => {
-			await setFleet(this.env, repo, { status: "pinned", lastRun: { runId: `seed-${p.batch}-${p.index}`, kind: "seed", status: "passed", customizations: kinds.join(",") || "none" } });
+			await setFleet(this.env, repo, { status: work ? "gating" : "pinned", lastRun: { runId: `seed-${p.batch}-${p.index}`, kind: "seed", status: "passed", customizations: kinds.join(",") || "none", ...(work ? { workBranch: work.branch } : {}) } });
 			return true;
 		});
+		if (work) {
+			await step.do("gate the work branch", async () => {
+				await startGateInstance(appExports(this.ctx).GateWorkflow, gateInstanceId(repo, work.branch, work.commit), { repo, branch: work.branch, commit: work.commit, mode: "merge", source: "seed" });
+				return true;
+			});
+		}
 		return { repo, kinds };
 	}
+}
+
+/** Commits one seeded customization with its build-time intent record on the checked-out branch. */
+async function commitSeedChange(ws: Awaited<ReturnType<typeof cloneRepo>>, kind: Exclude<SeedKind, "none">, spec: { index: number; userId: string; persona: string }, personas: unknown, stockTag: string | null): Promise<void> {
+	const files: Record<string, string> = {};
+	for (const path of ["app/index.ts", "app/cards.ts", "fluid.toml"]) files[path] = (await readWorkspaceFile(ws, path)) ?? "";
+	const change = seedChange(kind, files, { personas, persona: spec.persona });
+	const intentId = newIntentId();
+	const intent = buildIntent({ id: intentId, userId: spec.userId, agent: "seed-customization", request: requestFor(kind, spec.index), purpose: change.purpose, modes: change.modes_affected, files: [...Object.keys(change.files), intentPath(intentId)], stockTag: stockTag ?? "unknown", extra: { seeded: true, kind } });
+	await writeFiles(ws, { ...change.files, [intentPath(intentId)]: intentJson(intent) });
+	await commitChanges(ws, { message: `${change.summary}\n\nSeeded customization for the demo fleet (${kind}).`, intentId, author: { name: `user:${spec.userId}`, email: `${spec.userId}@users.fluid.invalid` } });
+}
+
+/** Picks the newest tag whose floor does not carry the demo tightening yet; falls back to the newest tag. */
+export function pickSeedBaseTag(newestFirst: { tag: string; tightened: boolean }[]): string | null {
+	return newestFirst.find((t) => !t.tightened)?.tag ?? newestFirst[0]?.tag ?? null;
+}
+
+/**
+ * Seeded forks pin the newest published release whose invariants do not yet
+ * include the demo release overlay, so a demo release tightens their floor.
+ * On a fresh account that is simply the latest release.
+ */
+async function seedBaseTag(env: Env): Promise<string> {
+	const tags = (await fleetStub(env).stockTags()).filter(isReleaseTag).reverse().slice(0, 12);
+	const checked: { tag: string; tightened: boolean }[] = [];
+	{
+		using stock = await openRepo(env.ARTIFACTS, STOCK_REPO);
+		for (const tag of tags) {
+			const tightened = hasDemoTightening(await readTextFile(stock, tag, "tests/invariants/manifest.json").catch(() => null));
+			checked.push({ tag, tightened });
+			if (!tightened) break;
+		}
+	}
+	return pickSeedBaseTag(checked) ?? (await currentStockTag(env));
 }
 
 export class HarvestWorkflow extends WorkflowEntrypoint<Env, HarvestParams> {
