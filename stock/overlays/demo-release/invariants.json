@@ -1,0 +1,116 @@
+{
+  "description": "Invariant probes the platform appends to tests/invariants/manifest.json when it tags a demo release (POST /api/admin/release). Not part of a stock publish from this directory: the bundle step ships this file separately. Stock must always pass these (tests/unit/demo-overlay.test.ts).",
+  "probes": [
+    {
+      "id": "inv-research-cross-check-visible",
+      "description": "Demo release tightening: a research-mode numeric answer shows its per-source cross-check in the answer body (one line per registry source), not only a framing statement that a cross-check happened.",
+      "focusMode": "research",
+      "request": {
+        "question": "What is the right dose of Morphinex for a patient of 70 kg and 45 years?",
+        "context": {
+          "documentType": "manuscript"
+        }
+      },
+      "assert": [
+        {
+          "path": "mode",
+          "equals": "research"
+        },
+        {
+          "path": "computed_dose",
+          "exists": true
+        },
+        {
+          "path": "body",
+          "contains": "Cross-check:"
+        },
+        {
+          "path": "body",
+          "contains": "- fda:morphinex-label-2025:"
+        },
+        {
+          "path": "body",
+          "contains": "- cdc:opioid-acute-pain-guideline-2022:"
+        },
+        {
+          "path": "tau",
+          "gte": 0.85
+        }
+      ]
+    },
+    {
+      "id": "inv-research-cross-check-visible-p1",
+      "description": "Paraphrase 1 of inv-research-cross-check-visible.",
+      "focusMode": "research",
+      "request": {
+        "question": "How much Morphinex should a 45 year old weighing 70 kg get?",
+        "context": {
+          "documentType": "manuscript"
+        }
+      },
+      "assert": [
+        {
+          "path": "mode",
+          "equals": "research"
+        },
+        {
+          "path": "computed_dose",
+          "exists": true
+        },
+        {
+          "path": "body",
+          "contains": "Cross-check:"
+        },
+        {
+          "path": "body",
+          "contains": "- fda:morphinex-label-2025:"
+        },
+        {
+          "path": "body",
+          "contains": "- cdc:opioid-acute-pain-guideline-2022:"
+        },
+        {
+          "path": "tau",
+          "gte": 0.85
+        }
+      ]
+    },
+    {
+      "id": "inv-research-cross-check-visible-p2",
+      "description": "Paraphrase 2 of inv-research-cross-check-visible.",
+      "focusMode": "research",
+      "request": {
+        "question": "Morphinex dosing for 70 kg, 45 yo?",
+        "context": {
+          "documentType": "manuscript"
+        }
+      },
+      "assert": [
+        {
+          "path": "mode",
+          "equals": "research"
+        },
+        {
+          "path": "computed_dose",
+          "exists": true
+        },
+        {
+          "path": "body",
+          "contains": "Cross-check:"
+        },
+        {
+          "path": "body",
+          "contains": "- fda:morphinex-label-2025:"
+        },
+        {
+          "path": "body",
+          "contains": "- cdc:opioid-acute-pain-guideline-2022:"
+        },
+        {
+          "path": "tau",
+          "gte": 0.85
+        }
+      ]
+    }
+  ]
+}

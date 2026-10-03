@@ -17,9 +17,15 @@ tests/user/          empty in stock; tier 3 lives in forks
 tests/runner.ts      pure probe runner, reused by the platform gate
 tests/unit/          Vitest unit tests (development only)
 .intent/             build-time intent records
-fluid.toml           pinned stock tag, tau, preferences
+fluid.toml           pinned stock tag, tau, preferences (harvest_opt_in defaults to false)
+overlays/demo-release/  extra invariant probes added only when the platform tags a demo release
 scripts/build.mjs    bundles app/index.ts to dist/app.js
 ```
+
+`overlays/` is never published as stock content. The platform appends
+`overlays/demo-release/invariants.json` to `tests/invariants/manifest.json`
+only when it tags a demo release, so that release tightens the floor; stock
+passes those probes too (`tests/unit/demo-overlay.test.ts`).
 
 ## Runtime contract
 

@@ -6,4 +6,4 @@ tau = 0.85            # user may raise, never below the stock minimum
 
 [preferences]
 auto_upgrade = false
-harvest_opt_in = true
+harvest_opt_in = false   # the harvester reads a fork only after the user opts in
