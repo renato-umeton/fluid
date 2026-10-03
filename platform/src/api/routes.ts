@@ -1,6 +1,7 @@
 // Platform HTTP API (docs/IMPLEMENTATION_PLAN.md, "Platform HTTP API").
 // Write routes need the demo session cookie; admin routes need x-fluid-admin.
-import { getForkInfo, findPersona, fleetStub, ForkNotFoundError, personas, provisionFork, readIntents, type ForkInfo } from "../forks/provision.ts";
+import { currentStockTag, getForkInfo, findPersona, fleetStub, ForkNotFoundError, personas, provisionFork, readIntents, type ForkInfo } from "../forks/provision.ts";
+import { hasClinicalDose, markSafety, SAFETY_SIGNALS } from "./safety.ts";
 import { clientKey } from "../lib/client.ts";
 import { scrubText } from "../git/tokens.ts";
 import { forkRepoName, isValidRepoName, newIntentId, newSandboxUserId, STOCK_REPO, userIdFromForkRepo } from "../lib/names.ts";
@@ -243,9 +244,28 @@ route("POST", "/api/ask", async (rc) => {
 	if (body.explicitMode) request.explicitMode = body.explicitMode;
 	if (body.attestation !== undefined) request.attestation = body.attestation;
 	if (Array.isArray(body.history)) request.history = (body.history as unknown[]).slice(-10);
-	const result = await askFork({ env: rc.env, exports: exportsOf(rc.ctx) }, { repo, ref, request, useModel: body.useModel === true });
-	await ledgerStub(rc.env, session.userId).append(session.userId, repo, result.card.ledger as unknown as RunTimeRecord);
-	return json({ ...result.card, fork: { repo, ref: result.ref, commit: result.sha } });
+	const deps = { env: rc.env, exports: exportsOf(rc.ctx) };
+	const useModel = body.useModel === true;
+	const fleet = fleetStub(rc.env);
+	// Safety fallback (spec 7): after a safety release's grace period, a fork still pinned below it is
+	// answered by stock at that release (production only: main). The card carries a visible signal.
+	const fallback = repo !== STOCK_REPO && ref === "main" ? await fleet.safetyFallback(repo) : null;
+	let result = await askFork(deps, fallback ? { repo: STOCK_REPO, ref: fallback.tag, request, useModel } : { repo, ref, request, useModel });
+	let card = fallback
+		? markSafety(result.card, SAFETY_SIGNALS.stockFallback, `Safety fallback: the grace period of stock ${fallback.tag} ended ${fallback.graceUntil.slice(0, 10)} and this fork is still pinned to ${fallback.from}, so stock ${fallback.tag} answered. Apply the open repair or upgrade to use your customizations again.`)
+		: result.card;
+	let served = fallback ? { repo: STOCK_REPO, ref: fallback.tag, fallback } : { repo, ref, fallback: null };
+	// Backstop: no answer with a computed clinical dose is ever served, whatever the fork's code does.
+	if (hasClinicalDose(card)) {
+		if (served.repo === STOCK_REPO) throw new Error("stock answered a clinical card with a computed dose");
+		const pinned = (await fleet.get(repo))?.pinnedTag ?? (await currentStockTag(rc.env));
+		console.error(`safety guard: ${repo}@${result.sha.slice(0, 7)} answered a clinical card with a computed dose; serving stock ${pinned}`);
+		result = await askFork(deps, { repo: STOCK_REPO, ref: pinned, request, useModel });
+		card = markSafety(result.card, SAFETY_SIGNALS.clinicalDose, `Safety guard: this fork's answer computed a clinical dose, which the floor forbids, so stock ${pinned} answered instead.`);
+		served = { repo: STOCK_REPO, ref: pinned, fallback: null };
+	}
+	await ledgerStub(rc.env, session.userId).append(session.userId, repo, card.ledger as unknown as RunTimeRecord);
+	return json({ ...card, fork: { repo, ref: result.ref, commit: result.sha, ...(served.repo !== repo ? { servedBy: { repo: served.repo, ref: served.ref } } : {}), ...(served.fallback ? { safetyFallback: served.fallback } : {}) } });
 });
 
 route("POST", "/api/override", async (rc) => {

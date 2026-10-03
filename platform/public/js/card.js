@@ -22,6 +22,7 @@ export function renderCard(card, opts) {
   return h("article", { class: `card${opts.nested ? " nested" : ""}`, dataset: { mode: card.mode }, "aria-label": `${MODE_LABEL[card.mode]} answer` },
     header(card, opts),
     h("div", { class: "card-strip" }, intentStrip(card.distribution, typeof card.tau === "number" ? card.tau : opts.tau)),
+    safetyNote(card),
     h("div", { class: "card-body" }, card.body),
     card.computed_dose ? dose(card.computed_dose) : null,
     card.requires_attestation ? held(card, opts) : null,
@@ -29,6 +30,17 @@ export function renderCard(card, opts) {
     card.mode === "multi" && card.alternatives?.length ? alternatives(card, opts) : null,
     footer(card, opts),
   );
+}
+
+/** Shown when the platform answered with stock instead of the fork's code (safety fallback or clinical dose guard). */
+function safetyNote(card) {
+  const signal = (card.signals || []).find((s) => s.startsWith("safety_fallback:") || s.startsWith("safety_guard:"));
+  if (!signal) return null;
+  const served = card.fork?.servedBy;
+  const text = signal.startsWith("safety_fallback:")
+    ? `Stock mode: answered by stock ${served?.ref || ""} because a safety release's grace period ended while this fork still fails it.`
+    : `Safety guard: this fork's answer computed a clinical dose, so stock ${served?.ref || ""} answered instead.`;
+  return h("div", { class: "safety-note", role: "status" }, h("strong", {}, signal), " ", text);
 }
 
 function header(card, opts) {

@@ -558,3 +558,9 @@ dialog::backdrop { background: rgba(15, 25, 30, 0.45); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* Platform answered with stock instead of the fork's code (safety fallback or clinical dose guard). */
+.safety-note {
+  margin: 8px 0; padding: 8px 12px; border-left: 3px solid var(--warn);
+  background: var(--warn-bg); color: var(--ink); font-size: var(--fs-sm);
+}

@@ -23,7 +23,7 @@ const EXPLAIN_SCHEMA = { type: "object", properties: { explanation: { type: "str
 export function safetyText(tag: string | undefined, graceUntil: string | null | undefined, intentRefs: string[]): string | null {
 	if (!graceUntil) return null;
 	const what = intentRefs.length ? `the capability from ${intentRefs.join(", ")}` : "the failing capability";
-	return `Safety release ${tag ?? ""}: the grace period ends ${graceUntil.slice(0, 10)}. After that, ${what} runs in stock mode until this repair is merged. Your customization stays on its branch.`;
+	return `Safety release ${tag ?? ""}: the grace period ends ${graceUntil.slice(0, 10)}. After that, while this fork is still pinned below ${tag ?? "the release"}, its answers come from stock ${tag ?? ""} (cards are marked safety_fallback:stock) instead of ${what}, until you apply this repair or the upgrade passes. Your customization stays on its branch.`;
 }
 
 export class RepairWorkflow extends WorkflowEntrypoint<Env, RepairParams> {
