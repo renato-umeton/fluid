@@ -1,0 +1,11 @@
+{
+  "id": "int_2026_10_03_0001",
+  "author": "mothership:clinical-informatics",
+  "agent": null,
+  "request": "Publish the first stock release of Fluid",
+  "purpose": "Every fork starts from an intent engine with hard-context floors, a stock minimum tau, option B with attestation, per-mode answer policies, a US source registry, and the invariant and functional suites that define the floor.",
+  "modes_affected": ["clinical", "research", "administrative"],
+  "files": ["app/", "intent/", "policies/", "connectors/", "tests/invariants/manifest.json", "tests/functional/manifest.json", "fluid.toml"],
+  "tests_added": ["tests/invariants/manifest.json", "tests/functional/manifest.json"],
+  "stock_tag": "v1.0.0"
+}

@@ -126,7 +126,7 @@ As in spec section 8, stored at `.intent/<id>.json`, commit trailer `Intent-Id: 
 **Goal**: The stock repo source: intent engine, mode contracts, policies, US source registry, connectors over synthetic data, invariant and functional suites, and a local probe runner.
 **Success Criteria**: Vitest unit tests pass; the local probe runner passes all invariant and functional probes against stock; the three dosing scenarios from spec section 2 behave as specified.
 **Tests**: Classifier floors, τ handling, multi-intent view, attestation path, clinical never returns a dose, research cites two registry sources, admin cites policy version and owner.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Platform core
 **Goal**: Control plane Worker: git ops library, stock publishing and tagging, fork provisioning, fork runtime via Worker Loader, ask API, UserLedger DO, Fleet DO.

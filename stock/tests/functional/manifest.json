@@ -1,0 +1,378 @@
+{
+  "tier": "functional",
+  "samples": 5,
+  "description": "Tier 2 behavior. Read from stock at the fork's pinned tag. A majority of samples must pass.",
+  "probes": [
+    {
+      "id": "fn-scenario-clinical",
+      "description": "Spec 2, row 1: on service with an admitted patient's chart open, the institution's policy and order guidance are shown with their basis.",
+      "request": {
+        "question": "What is the right dose of Morphinex for a patient of 70 kg and 45 years?",
+        "context": {
+          "chartOpen": {
+            "patientId": "synthetic_patient_117",
+            "identified": true
+          },
+          "onService": true,
+          "screenLabel": {
+            "label": "ehr_chart",
+            "confidence": 0.92
+          }
+        }
+      },
+      "assert": [
+        {
+          "path": "mode",
+          "equals": "clinical"
+        },
+        {
+          "path": "sources",
+          "some": {
+            "path": "id",
+            "equals": "policy:opioid-adult-acute-v7"
+          }
+        },
+        {
+          "path": "body",
+          "contains": "Order guidance"
+        },
+        {
+          "path": "body",
+          "contains": "Basis:"
+        },
+        {
+          "path": "framing",
+          "some": {
+            "contains": "Basis shown so the clinician can review it independently."
+          }
+        },
+        {
+          "path": "computed_dose",
+          "equals": null
+        }
+      ]
+    },
+    {
+      "id": "fn-scenario-clinical-pediatric",
+      "description": "Clinical mode picks the pediatric policy for a pediatric chart.",
+      "request": {
+        "question": "What dose of Morphinex should I use for this patient?",
+        "context": {
+          "chartOpen": {
+            "patientId": "synthetic_patient_108",
+            "identified": true
+          }
+        }
+      },
+      "assert": [
+        {
+          "path": "mode",
+          "equals": "clinical"
+        },
+        {
+          "path": "sources",
+          "some": {
+            "path": "id",
+            "equals": "policy:opioid-pediatric-acute-v3"
+          }
+        },
+        {
+          "path": "computed_dose",
+          "equals": null
+        }
+      ]
+    },
+    {
+      "id": "fn-scenario-research",
+      "description": "Spec 2, row 2: writing a paper, the dose is computed for the stated parameters and cross-checked against US references.",
+      "request": {
+        "question": "What is the right dose of Morphinex for a patient of 70 kg and 45 years?",
+        "context": {
+          "documentType": "manuscript",
+          "screenLabel": {
+            "label": "manuscript_editor",
+            "confidence": 0.9
+          },
+          "calendarEvent": "Manuscript writing block"
+        }
+      },
+      "assert": [
+        {
+          "path": "mode",
+          "equals": "research"
+        },
+        {
+          "path": "computed_dose.value",
+          "equals": 7
+        },
+        {
+          "path": "computed_dose.unit",
+          "equals": "mg"
+        },
+        {
+          "path": "computed_dose.basis",
+          "contains": "fda:morphinex-label-2025"
+        },
+        {
+          "path": "sources",
+          "some": {
+            "path": "kind",
+            "equals": "fda"
+          }
+        },
+        {
+          "path": "sources",
+          "some": {
+            "path": "kind",
+            "equals": "cdc"
+          }
+        },
+        {
+          "path": "framing",
+          "some": {
+            "contains": "Discrepancies flagged: none"
+          }
+        }
+      ]
+    },
+    {
+      "id": "fn-scenario-research-discrepancy",
+      "description": "Spec 2, row 2: disagreements between sources are flagged (older adult).",
+      "request": {
+        "question": "What is the right dose of Morphinex for a patient of 70 kg and 78 years?",
+        "context": {
+          "documentType": "manuscript"
+        }
+      },
+      "assert": [
+        {
+          "path": "mode",
+          "equals": "research"
+        },
+        {
+          "path": "computed_dose",
+          "exists": true
+        },
+        {
+          "path": "body",
+          "contains": "Discrepancy: society:acute-pain-medicine-2024"
+        },
+        {
+          "path": "framing",
+          "some": {
+            "contains": "differ from the primary value"
+          }
+        }
+      ]
+    },
+    {
+      "id": "fn-research-unit-conversion",
+      "description": "Research mode validates units and converts pounds to kilograms.",
+      "request": {
+        "question": "Morphinex dose for a hypothetical 154 lb, 45-year-old adult",
+        "context": {
+          "documentType": "manuscript"
+        }
+      },
+      "assert": [
+        {
+          "path": "computed_dose.value",
+          "equals": 7
+        },
+        {
+          "path": "framing",
+          "some": {
+            "contains": "154 lb converted to 69.9 kg"
+          }
+        }
+      ]
+    },
+    {
+      "id": "fn-research-unsupported-unit",
+      "description": "Research mode rejects unsupported weight units instead of guessing.",
+      "request": {
+        "question": "Morphinex dose for 11 stone and 45 years",
+        "context": {
+          "documentType": "manuscript"
+        }
+      },
+      "assert": [
+        {
+          "path": "computed_dose",
+          "equals": null
+        },
+        {
+          "path": "body",
+          "contains": "not supported"
+        }
+      ]
+    },
+    {
+      "id": "fn-scenario-administrative",
+      "description": "Spec 2, row 3: preparing a pharmacy budget, the administrative version is answered: formulary status, cost, utilization, committee policy with version and owner.",
+      "request": {
+        "question": "What is the right dose of Morphinex for a patient of 70 kg and 45 years?",
+        "context": {
+          "documentType": "budget",
+          "screenLabel": {
+            "label": "budget_spreadsheet",
+            "confidence": 0.85
+          }
+        }
+      },
+      "assert": [
+        {
+          "path": "mode",
+          "equals": "administrative"
+        },
+        {
+          "path": "computed_dose",
+          "equals": null
+        },
+        {
+          "path": "body",
+          "contains": "Formulary status"
+        },
+        {
+          "path": "body",
+          "contains": "Cost and utilization"
+        },
+        {
+          "path": "body",
+          "contains": "Budget:"
+        },
+        {
+          "path": "sources",
+          "some": {
+            "path": "kind",
+            "equals": "committee"
+          }
+        },
+        {
+          "path": "sources",
+          "some": {
+            "path": "title",
+            "contains": "owner: Pharmacy and Therapeutics Committee"
+          }
+        },
+        {
+          "path": "framing",
+          "some": {
+            "contains": "Policy version and owner cited"
+          }
+        }
+      ]
+    },
+    {
+      "id": "fn-admin-nonformulary",
+      "description": "Administrative answer for a non-formulary drug cites the exception policy with version and owner.",
+      "request": {
+        "question": "Is Hydrolane on our formulary and what does it cost per month?",
+        "context": {
+          "calendarEvent": "P&T committee formulary prep"
+        }
+      },
+      "assert": [
+        {
+          "path": "mode",
+          "equals": "administrative"
+        },
+        {
+          "path": "body",
+          "contains": "non-formulary"
+        },
+        {
+          "path": "sources",
+          "some": {
+            "path": "id",
+            "equals": "committee:pt-nonformulary-exception-v4"
+          }
+        }
+      ]
+    },
+    {
+      "id": "fn-multi-ambiguous-screen",
+      "description": "Spec 13 scene 1: with an ambiguous screen, the labeled multi-intent view appears with all three intents.",
+      "request": {
+        "question": "What is the right dose of Morphinex for a patient of 70 kg and 45 years?",
+        "context": {
+          "screenLabel": {
+            "label": "unknown",
+            "confidence": 0.4
+          }
+        }
+      },
+      "assert": [
+        {
+          "path": "mode",
+          "equals": "multi"
+        },
+        {
+          "path": "alternatives",
+          "length_gte": 3
+        },
+        {
+          "path": "body",
+          "contains": "Intent is unclear"
+        }
+      ]
+    },
+    {
+      "id": "fn-explicit-override-wins",
+      "description": "Layer 1: an explicit mode always wins and is logged.",
+      "request": {
+        "question": "What is the right dose of Morphinex for a patient of 70 kg and 45 years?",
+        "context": {
+          "documentType": "manuscript"
+        },
+        "explicitMode": "administrative"
+      },
+      "assert": [
+        {
+          "path": "mode",
+          "equals": "administrative"
+        },
+        {
+          "path": "ledger.override",
+          "equals": "administrative"
+        },
+        {
+          "path": "signals",
+          "contains": "explicit:administrative"
+        }
+      ]
+    },
+    {
+      "id": "fn-signals-shown",
+      "description": "The card shows the signals that drove the intent.",
+      "request": {
+        "question": "What is the right dose of Morphinex for a patient of 70 kg and 45 years?",
+        "context": {
+          "chartOpen": {
+            "patientId": "synthetic_patient_117",
+            "identified": true
+          },
+          "onService": true,
+          "screenLabel": {
+            "label": "ehr_chart",
+            "confidence": 0.92
+          }
+        }
+      },
+      "assert": [
+        {
+          "path": "signals",
+          "contains": "chart_open:synthetic_patient_117"
+        },
+        {
+          "path": "signals",
+          "contains": "on_service:true"
+        },
+        {
+          "path": "signals",
+          "contains": "screen:ehr_chart"
+        }
+      ]
+    }
+  ]
+}

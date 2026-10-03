@@ -1,0 +1,78 @@
+{
+  "synthetic": true,
+  "notice": "Synthetic institutional policies written for the Fluid demo. Not real guidance.",
+  "policies": [
+    {
+      "id": "policy:opioid-adult-acute-v7",
+      "title": "Acute pain management with opioids, adults",
+      "version": "7",
+      "owner": "Pain Stewardship Committee",
+      "effective": "2026-03-01",
+      "synthetic": true,
+      "appliesTo": { "drugClass": "opioid", "population": "adult" },
+      "orderGuidance": "Order through the 'Acute pain, opioid-naive adult' order set (OS-114, synthetic), which presents the institution's starting options for the clinician to select.",
+      "basis": [
+        "Use the lowest effective starting option in the order set and reassess pain and sedation scores before any repeat dose.",
+        "Pharmacy verifies the first dose against renal function, hepatic function, and interacting sedatives.",
+        "Co-prescribe naloxone with any scheduled or as-needed opioid."
+      ]
+    },
+    {
+      "id": "policy:opioid-pediatric-acute-v3",
+      "title": "Acute pain management with opioids, pediatrics",
+      "version": "3",
+      "owner": "Pediatric Pain Service",
+      "effective": "2025-11-15",
+      "synthetic": true,
+      "appliesTo": { "drugClass": "opioid", "population": "pediatric" },
+      "orderGuidance": "Order through the 'Pediatric acute pain' order set (OS-207, synthetic); a pediatric pharmacist verifies every opioid order.",
+      "basis": [
+        "Pediatric opioid orders require a current weight documented in the chart within the encounter.",
+        "Continuous pulse oximetry is required for the first opioid dose and after any escalation.",
+        "Children under one year are managed only with the Pediatric Pain Service consult."
+      ]
+    },
+    {
+      "id": "policy:opioid-older-adult-v2",
+      "title": "Opioid use in adults 65 and older",
+      "version": "2",
+      "owner": "Geriatrics and Pain Stewardship Committees",
+      "effective": "2026-01-10",
+      "synthetic": true,
+      "appliesTo": { "drugClass": "opioid", "population": "older adult" },
+      "orderGuidance": "Use the older-adult modifier in OS-114 (synthetic), which preselects the reduced starting options.",
+      "basis": [
+        "Older adults start at the reduced options in the order set because of higher sedation and fall risk.",
+        "Screen for delirium and constipation daily while an opioid is active."
+      ]
+    },
+    {
+      "id": "policy:opioid-renal-impairment-v4",
+      "title": "Opioids in renal impairment",
+      "version": "4",
+      "owner": "Nephrology and Pharmacy",
+      "effective": "2025-08-01",
+      "synthetic": true,
+      "appliesTo": { "drugClass": "opioid", "condition": "ckd-stage-4" },
+      "orderGuidance": "Pharmacy consult is required before the first opioid dose when eGFR is in the stage 4 range (synthetic rule).",
+      "basis": [
+        "Active metabolites accumulate in advanced kidney disease; the pharmacy consult selects the agent and interval.",
+        "Avoid scheduled dosing until the pharmacy consult is complete."
+      ]
+    },
+    {
+      "id": "policy:clinical-decision-support-v2",
+      "title": "Use of decision support in clinical care",
+      "version": "2",
+      "owner": "Clinical Informatics Committee",
+      "effective": "2026-05-01",
+      "synthetic": true,
+      "appliesTo": { "drugClass": "any", "population": "any" },
+      "orderGuidance": "Decision support shows institutional policy and its basis; ordering decisions remain with the treating clinician.",
+      "basis": [
+        "Clinical mode cites institutional policy so the clinician can review the basis independently.",
+        "Clinical mode never computes a patient-specific dose."
+      ]
+    }
+  ]
+}

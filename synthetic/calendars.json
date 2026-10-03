@@ -1,0 +1,14 @@
+{
+  "synthetic": true,
+  "notice": "Synthetic calendars. Times are America/New_York.",
+  "events": [
+    { "personaId": "hospitalist-researcher", "title": "7W morning rounds", "start": "2026-10-03T07:30:00-04:00", "end": "2026-10-03T10:30:00-04:00" },
+    { "personaId": "hospitalist-researcher", "title": "Sign-out to afternoon team", "start": "2026-10-03T12:30:00-04:00", "end": "2026-10-03T13:00:00-04:00" },
+    { "personaId": "hospitalist-researcher", "title": "Manuscript writing block", "start": "2026-10-03T14:00:00-04:00", "end": "2026-10-03T17:00:00-04:00" },
+    { "personaId": "research-coordinator", "title": "IRB-2026-0142 enrollment huddle", "start": "2026-10-03T09:00:00-04:00", "end": "2026-10-03T09:30:00-04:00" },
+    { "personaId": "research-coordinator", "title": "Study visit scheduling", "start": "2026-10-03T10:00:00-04:00", "end": "2026-10-03T12:00:00-04:00" },
+    { "personaId": "research-coordinator", "title": "IRB-2026-0219 continuing review prep", "start": "2026-10-03T13:00:00-04:00", "end": "2026-10-03T15:00:00-04:00" },
+    { "personaId": "department-administrator", "title": "FY27 pharmacy budget review", "start": "2026-10-03T09:00:00-04:00", "end": "2026-10-03T11:00:00-04:00" },
+    { "personaId": "department-administrator", "title": "P&T committee formulary prep", "start": "2026-10-03T13:00:00-04:00", "end": "2026-10-03T14:30:00-04:00" }
+  ]
+}

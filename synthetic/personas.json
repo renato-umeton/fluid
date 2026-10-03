@@ -1,0 +1,34 @@
+{
+  "synthetic": true,
+  "notice": "Fictional personas for the Fluid demo.",
+  "personas": [
+    {
+      "id": "hospitalist-researcher",
+      "displayName": "Dr. Rowan Ellery (fictional)",
+      "role": "Hospitalist and clinical researcher",
+      "department": "Hospital Medicine",
+      "forkRepo": "user-hospitalist-researcher",
+      "story": "Rounds on the 7W service in the morning, writes a manuscript on Morphinex dosing in older adults in the afternoon.",
+      "documents": ["doc-manuscript-morphinex-older-adults", "doc-grant-r01-acute-pain"]
+    },
+    {
+      "id": "research-coordinator",
+      "displayName": "Sam Okonkwo-Reyes (fictional)",
+      "role": "Clinical research coordinator",
+      "department": "Clinical Research Office",
+      "forkRepo": "user-research-coordinator",
+      "story": "Coordinates two IRB protocols and wants enrollment numbers from REDCap inside research mode.",
+      "documents": ["doc-irb-2026-0142", "doc-irb-2026-0219"],
+      "protocols": ["IRB-2026-0142", "IRB-2026-0219"]
+    },
+    {
+      "id": "department-administrator",
+      "displayName": "Dana Whitfield (fictional)",
+      "role": "Department administrator",
+      "department": "Pharmacy and Therapeutics Operations",
+      "forkRepo": "user-department-administrator",
+      "story": "Prepares the FY27 pharmacy budget and the quarterly formulary review.",
+      "documents": ["doc-budget-fy27-pharmacy"]
+    }
+  ]
+}

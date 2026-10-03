@@ -1,0 +1,9 @@
+# Fluid fork configuration. The gate reads stock tests at stock_tag.
+stock_tag = "v1.0.0"
+
+[thresholds]
+tau = 0.85            # user may raise, never below the stock minimum
+
+[preferences]
+auto_upgrade = false
+harvest_opt_in = true

@@ -1,0 +1,66 @@
+{
+  "synthetic": true,
+  "notice": "Synthetic documents for the Fluid demo. All content is invented.",
+  "documents": [
+    {
+      "id": "doc-manuscript-morphinex-older-adults",
+      "type": "manuscript",
+      "ownerId": "hospitalist-researcher",
+      "title": "Weight-based Morphinex dosing in older inpatients: a retrospective synthetic cohort",
+      "status": "draft v3",
+      "sections": [
+        { "heading": "Background", "text": "Weight-based dosing references for the fictional opioid Morphinex differ for adults aged 65 and older." },
+        { "heading": "Methods", "text": "Retrospective review of 1,204 synthetic admissions. Doses compared against FDA labeling, CDC guidance, and a specialty society statement." },
+        { "heading": "Open question", "text": "What does each reference recommend for a 70 kg, 45-year-old adult compared with a 70 kg, 78-year-old adult?" }
+      ]
+    },
+    {
+      "id": "doc-grant-r01-acute-pain",
+      "type": "grant",
+      "ownerId": "hospitalist-researcher",
+      "title": "R01 draft: Intent-aware decision support for acute pain in hospital medicine",
+      "status": "specific aims draft",
+      "sections": [
+        { "heading": "Specific Aim 1", "text": "Characterize variation in Morphinex dosing references across US sources." },
+        { "heading": "Budget justification", "text": "Year 1 personnel 0.25 FTE coordinator; pharmacy data extraction fee." }
+      ]
+    },
+    {
+      "id": "doc-budget-fy27-pharmacy",
+      "type": "budget",
+      "ownerId": "department-administrator",
+      "title": "FY27 Inpatient Pharmacy Budget (synthetic)",
+      "status": "working draft",
+      "lines": [
+        { "category": "Opioid analgesics", "drug": "morphinex", "item": "Morphinex injection", "fy26ActualUsd": 418200, "fy27ProjectedUsd": 420400 },
+        { "category": "Opioid analgesics", "drug": "morphinex", "item": "Morphinex IR tablet", "fy26ActualUsd": 98700, "fy27ProjectedUsd": 92700 },
+        { "category": "Opioid analgesics", "drug": "hydrolane", "item": "Hydrolane ER tablet", "fy26ActualUsd": 20300, "fy27ProjectedUsd": 22700 },
+        { "category": "Anticoagulants", "drug": "clotavex", "item": "Clotavex injection", "fy26ActualUsd": 655000, "fy27ProjectedUsd": 671000 }
+      ]
+    },
+    {
+      "id": "doc-irb-2026-0142",
+      "type": "irb",
+      "ownerId": "research-coordinator",
+      "title": "IRB-2026-0142: Opioid-sparing pathway after hip fracture surgery (synthetic)",
+      "status": "approved, enrolling",
+      "protocolId": "IRB-2026-0142",
+      "sections": [
+        { "heading": "Design", "text": "Two-arm pragmatic randomized study. Target enrollment 120." },
+        { "heading": "Data capture", "text": "REDCap project 4471 (synthetic)." }
+      ]
+    },
+    {
+      "id": "doc-irb-2026-0219",
+      "type": "irb",
+      "ownerId": "research-coordinator",
+      "title": "IRB-2026-0219: Patient-reported pain trajectories on the medicine wards (synthetic)",
+      "status": "approved, continuing review due 2026-11-15",
+      "protocolId": "IRB-2026-0219",
+      "sections": [
+        { "heading": "Design", "text": "Prospective observational cohort. Target enrollment 200." },
+        { "heading": "Data capture", "text": "REDCap project 4519 (synthetic)." }
+      ]
+    }
+  ]
+}

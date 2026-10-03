@@ -1,0 +1,46 @@
+{
+  "synthetic": true,
+  "notice": "Synthetic formulary. Fictional drugs, invented prices and utilization.",
+  "asOf": "2026-09-30",
+  "items": [
+    {
+      "id": "frm-morphinex-ir-tab",
+      "drug": "morphinex",
+      "product": "Morphinex immediate-release tablet (fictional)",
+      "status": "formulary",
+      "tier": 1,
+      "restrictions": "Ordered through the opioid stewardship order set",
+      "unitCostUsd": 0.42,
+      "unitsPerMonth": 18400,
+      "monthlySpendUsd": 7728,
+      "trend": "down 6% over the last two quarters",
+      "policyId": "committee:pt-formulary-policy-v12"
+    },
+    {
+      "id": "frm-morphinex-inj",
+      "drug": "morphinex",
+      "product": "Morphinex injection (fictional)",
+      "status": "formulary-restricted",
+      "tier": 2,
+      "restrictions": "Inpatient and procedural areas only; pharmacy verification required",
+      "unitCostUsd": 3.85,
+      "unitsPerMonth": 9100,
+      "monthlySpendUsd": 35035,
+      "trend": "flat over the last two quarters",
+      "policyId": "committee:pt-formulary-policy-v12"
+    },
+    {
+      "id": "frm-hydrolane-er-tab",
+      "drug": "hydrolane",
+      "product": "Hydrolane extended-release tablet (fictional)",
+      "status": "non-formulary",
+      "tier": null,
+      "restrictions": "Requires a P&T non-formulary exception request",
+      "unitCostUsd": 6.1,
+      "unitsPerMonth": 310,
+      "monthlySpendUsd": 1891,
+      "trend": "up 12% over the last two quarters",
+      "policyId": "committee:pt-nonformulary-exception-v4"
+    }
+  ]
+}

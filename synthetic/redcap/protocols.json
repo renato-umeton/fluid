@@ -1,0 +1,1082 @@
+{
+  "synthetic": true,
+  "notice": "Mock REDCap export. Fictional participants.",
+  "exportedAt": "2026-10-03T06:00:00Z",
+  "projects": [
+    {
+      "protocolId": "IRB-2026-0142",
+      "redcapProjectId": 4471,
+      "title": "Opioid-sparing pathway after hip fracture surgery (synthetic)",
+      "principalInvestigator": "Dr. Rowan Ellery (fictional)",
+      "targetEnrollment": 120,
+      "arms": [
+        "usual_care",
+        "opioid_sparing_pathway"
+      ],
+      "records": [
+        {
+          "record_id": "0142-001",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-04-02",
+          "consent_date": "2026-04-02",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-002",
+          "arm": "usual_care",
+          "screening_date": "2026-04-04",
+          "consent_date": "2026-04-04",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-003",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-04-05",
+          "consent_date": "2026-04-05",
+          "status": "completed"
+        },
+        {
+          "record_id": "0142-004",
+          "arm": "usual_care",
+          "screening_date": "2026-04-07",
+          "consent_date": "2026-04-07",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-005",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-04-09",
+          "consent_date": "2026-04-09",
+          "status": "completed"
+        },
+        {
+          "record_id": "0142-006",
+          "arm": "usual_care",
+          "screening_date": "2026-04-10",
+          "consent_date": "2026-04-10",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-007",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-04-12",
+          "consent_date": "2026-04-12",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-008",
+          "arm": "usual_care",
+          "screening_date": "2026-04-13",
+          "consent_date": "2026-04-13",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-009",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-04-15",
+          "consent_date": "2026-04-15",
+          "status": "completed"
+        },
+        {
+          "record_id": "0142-010",
+          "arm": "usual_care",
+          "screening_date": "2026-04-17",
+          "consent_date": "2026-04-17",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-011",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-04-18",
+          "consent_date": "2026-04-18",
+          "status": "completed"
+        },
+        {
+          "record_id": "0142-012",
+          "arm": "usual_care",
+          "screening_date": "2026-04-20",
+          "consent_date": "2026-04-20",
+          "status": "completed"
+        },
+        {
+          "record_id": "0142-013",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-04-21",
+          "consent_date": "2026-04-21",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-014",
+          "arm": "usual_care",
+          "screening_date": "2026-04-23",
+          "consent_date": "2026-04-23",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-015",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-04-25",
+          "consent_date": null,
+          "status": "screen_failed"
+        },
+        {
+          "record_id": "0142-016",
+          "arm": "usual_care",
+          "screening_date": "2026-04-26",
+          "consent_date": "2026-04-26",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-017",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-04-28",
+          "consent_date": "2026-04-28",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-018",
+          "arm": "usual_care",
+          "screening_date": "2026-04-29",
+          "consent_date": null,
+          "status": "screen_failed"
+        },
+        {
+          "record_id": "0142-019",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-05-01",
+          "consent_date": "2026-05-01",
+          "status": "withdrawn"
+        },
+        {
+          "record_id": "0142-020",
+          "arm": "usual_care",
+          "screening_date": "2026-05-03",
+          "consent_date": "2026-05-03",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-021",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-05-04",
+          "consent_date": "2026-05-04",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-022",
+          "arm": "usual_care",
+          "screening_date": "2026-05-06",
+          "consent_date": "2026-05-06",
+          "status": "withdrawn"
+        },
+        {
+          "record_id": "0142-023",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-05-07",
+          "consent_date": "2026-05-07",
+          "status": "completed"
+        },
+        {
+          "record_id": "0142-024",
+          "arm": "usual_care",
+          "screening_date": "2026-05-09",
+          "consent_date": null,
+          "status": "screen_failed"
+        },
+        {
+          "record_id": "0142-025",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-05-11",
+          "consent_date": "2026-05-11",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-026",
+          "arm": "usual_care",
+          "screening_date": "2026-05-12",
+          "consent_date": "2026-05-12",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-027",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-05-14",
+          "consent_date": "2026-05-14",
+          "status": "completed"
+        },
+        {
+          "record_id": "0142-028",
+          "arm": "usual_care",
+          "screening_date": "2026-05-15",
+          "consent_date": "2026-05-15",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-029",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-05-17",
+          "consent_date": "2026-05-17",
+          "status": "completed"
+        },
+        {
+          "record_id": "0142-030",
+          "arm": "usual_care",
+          "screening_date": "2026-05-19",
+          "consent_date": "2026-05-19",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-031",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-05-20",
+          "consent_date": "2026-05-20",
+          "status": "withdrawn"
+        },
+        {
+          "record_id": "0142-032",
+          "arm": "usual_care",
+          "screening_date": "2026-05-22",
+          "consent_date": "2026-05-22",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-033",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-05-23",
+          "consent_date": null,
+          "status": "screen_failed"
+        },
+        {
+          "record_id": "0142-034",
+          "arm": "usual_care",
+          "screening_date": "2026-05-25",
+          "consent_date": null,
+          "status": "screen_failed"
+        },
+        {
+          "record_id": "0142-035",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-05-27",
+          "consent_date": null,
+          "status": "screen_failed"
+        },
+        {
+          "record_id": "0142-036",
+          "arm": "usual_care",
+          "screening_date": "2026-05-28",
+          "consent_date": "2026-05-28",
+          "status": "completed"
+        },
+        {
+          "record_id": "0142-037",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-05-30",
+          "consent_date": "2026-05-30",
+          "status": "withdrawn"
+        },
+        {
+          "record_id": "0142-038",
+          "arm": "usual_care",
+          "screening_date": "2026-05-31",
+          "consent_date": "2026-05-31",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-039",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-06-02",
+          "consent_date": "2026-06-02",
+          "status": "withdrawn"
+        },
+        {
+          "record_id": "0142-040",
+          "arm": "usual_care",
+          "screening_date": "2026-06-04",
+          "consent_date": "2026-06-04",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-041",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-06-05",
+          "consent_date": "2026-06-05",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-042",
+          "arm": "usual_care",
+          "screening_date": "2026-06-07",
+          "consent_date": "2026-06-07",
+          "status": "completed"
+        },
+        {
+          "record_id": "0142-043",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-06-08",
+          "consent_date": "2026-06-08",
+          "status": "completed"
+        },
+        {
+          "record_id": "0142-044",
+          "arm": "usual_care",
+          "screening_date": "2026-06-10",
+          "consent_date": "2026-06-10",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-045",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-06-12",
+          "consent_date": null,
+          "status": "screen_failed"
+        },
+        {
+          "record_id": "0142-046",
+          "arm": "usual_care",
+          "screening_date": "2026-06-13",
+          "consent_date": null,
+          "status": "screen_failed"
+        },
+        {
+          "record_id": "0142-047",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-06-15",
+          "consent_date": "2026-06-15",
+          "status": "completed"
+        },
+        {
+          "record_id": "0142-048",
+          "arm": "usual_care",
+          "screening_date": "2026-06-16",
+          "consent_date": null,
+          "status": "screen_failed"
+        },
+        {
+          "record_id": "0142-049",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-06-18",
+          "consent_date": null,
+          "status": "screen_failed"
+        },
+        {
+          "record_id": "0142-050",
+          "arm": "usual_care",
+          "screening_date": "2026-06-20",
+          "consent_date": "2026-06-20",
+          "status": "completed"
+        },
+        {
+          "record_id": "0142-051",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-06-21",
+          "consent_date": "2026-06-21",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-052",
+          "arm": "usual_care",
+          "screening_date": "2026-06-23",
+          "consent_date": "2026-06-23",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-053",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-06-24",
+          "consent_date": "2026-06-24",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-054",
+          "arm": "usual_care",
+          "screening_date": "2026-06-26",
+          "consent_date": "2026-06-26",
+          "status": "completed"
+        },
+        {
+          "record_id": "0142-055",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-06-28",
+          "consent_date": "2026-06-28",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-056",
+          "arm": "usual_care",
+          "screening_date": "2026-06-29",
+          "consent_date": null,
+          "status": "screen_failed"
+        },
+        {
+          "record_id": "0142-057",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-07-01",
+          "consent_date": "2026-07-01",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-058",
+          "arm": "usual_care",
+          "screening_date": "2026-07-02",
+          "consent_date": "2026-07-02",
+          "status": "completed"
+        },
+        {
+          "record_id": "0142-059",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-07-04",
+          "consent_date": "2026-07-04",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-060",
+          "arm": "usual_care",
+          "screening_date": "2026-07-06",
+          "consent_date": "2026-07-06",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-061",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-07-07",
+          "consent_date": "2026-07-07",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-062",
+          "arm": "usual_care",
+          "screening_date": "2026-07-09",
+          "consent_date": "2026-07-09",
+          "status": "completed"
+        },
+        {
+          "record_id": "0142-063",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-07-10",
+          "consent_date": "2026-07-10",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-064",
+          "arm": "usual_care",
+          "screening_date": "2026-07-12",
+          "consent_date": "2026-07-12",
+          "status": "withdrawn"
+        },
+        {
+          "record_id": "0142-065",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-07-14",
+          "consent_date": "2026-07-14",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-066",
+          "arm": "usual_care",
+          "screening_date": "2026-07-15",
+          "consent_date": "2026-07-15",
+          "status": "completed"
+        },
+        {
+          "record_id": "0142-067",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-07-17",
+          "consent_date": "2026-07-17",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-068",
+          "arm": "usual_care",
+          "screening_date": "2026-07-18",
+          "consent_date": "2026-07-18",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-069",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-07-20",
+          "consent_date": "2026-07-20",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-070",
+          "arm": "usual_care",
+          "screening_date": "2026-07-22",
+          "consent_date": "2026-07-22",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-071",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-07-23",
+          "consent_date": "2026-07-23",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-072",
+          "arm": "usual_care",
+          "screening_date": "2026-07-25",
+          "consent_date": "2026-07-25",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-073",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-07-26",
+          "consent_date": "2026-07-26",
+          "status": "completed"
+        },
+        {
+          "record_id": "0142-074",
+          "arm": "usual_care",
+          "screening_date": "2026-07-28",
+          "consent_date": "2026-07-28",
+          "status": "completed"
+        },
+        {
+          "record_id": "0142-075",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-07-30",
+          "consent_date": "2026-07-30",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-076",
+          "arm": "usual_care",
+          "screening_date": "2026-07-31",
+          "consent_date": "2026-07-31",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-077",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-08-02",
+          "consent_date": "2026-08-02",
+          "status": "completed"
+        },
+        {
+          "record_id": "0142-078",
+          "arm": "usual_care",
+          "screening_date": "2026-08-03",
+          "consent_date": "2026-08-03",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-079",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-08-05",
+          "consent_date": null,
+          "status": "screen_failed"
+        },
+        {
+          "record_id": "0142-080",
+          "arm": "usual_care",
+          "screening_date": "2026-08-07",
+          "consent_date": "2026-08-07",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-081",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-08-08",
+          "consent_date": "2026-08-08",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-082",
+          "arm": "usual_care",
+          "screening_date": "2026-08-10",
+          "consent_date": "2026-08-10",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-083",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-08-11",
+          "consent_date": "2026-08-11",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0142-084",
+          "arm": "usual_care",
+          "screening_date": "2026-08-13",
+          "consent_date": null,
+          "status": "screen_failed"
+        },
+        {
+          "record_id": "0142-085",
+          "arm": "opioid_sparing_pathway",
+          "screening_date": "2026-08-15",
+          "consent_date": "2026-08-15",
+          "status": "completed"
+        },
+        {
+          "record_id": "0142-086",
+          "arm": "usual_care",
+          "screening_date": "2026-08-16",
+          "consent_date": "2026-08-16",
+          "status": "enrolled"
+        }
+      ]
+    },
+    {
+      "protocolId": "IRB-2026-0219",
+      "redcapProjectId": 4519,
+      "title": "Patient-reported pain trajectories on the medicine wards (synthetic)",
+      "principalInvestigator": "Dr. Ilse Varga (fictional)",
+      "targetEnrollment": 200,
+      "arms": [
+        "observational"
+      ],
+      "records": [
+        {
+          "record_id": "0219-001",
+          "arm": "observational",
+          "screening_date": "2026-05-02",
+          "consent_date": "2026-05-02",
+          "status": "completed"
+        },
+        {
+          "record_id": "0219-002",
+          "arm": "observational",
+          "screening_date": "2026-05-04",
+          "consent_date": "2026-05-04",
+          "status": "completed"
+        },
+        {
+          "record_id": "0219-003",
+          "arm": "observational",
+          "screening_date": "2026-05-05",
+          "consent_date": "2026-05-05",
+          "status": "completed"
+        },
+        {
+          "record_id": "0219-004",
+          "arm": "observational",
+          "screening_date": "2026-05-07",
+          "consent_date": "2026-05-07",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-005",
+          "arm": "observational",
+          "screening_date": "2026-05-09",
+          "consent_date": "2026-05-09",
+          "status": "withdrawn"
+        },
+        {
+          "record_id": "0219-006",
+          "arm": "observational",
+          "screening_date": "2026-05-10",
+          "consent_date": "2026-05-10",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-007",
+          "arm": "observational",
+          "screening_date": "2026-05-12",
+          "consent_date": "2026-05-12",
+          "status": "completed"
+        },
+        {
+          "record_id": "0219-008",
+          "arm": "observational",
+          "screening_date": "2026-05-13",
+          "consent_date": "2026-05-13",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-009",
+          "arm": "observational",
+          "screening_date": "2026-05-15",
+          "consent_date": "2026-05-15",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-010",
+          "arm": "observational",
+          "screening_date": "2026-05-17",
+          "consent_date": "2026-05-17",
+          "status": "completed"
+        },
+        {
+          "record_id": "0219-011",
+          "arm": "observational",
+          "screening_date": "2026-05-18",
+          "consent_date": "2026-05-18",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-012",
+          "arm": "observational",
+          "screening_date": "2026-05-20",
+          "consent_date": "2026-05-20",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-013",
+          "arm": "observational",
+          "screening_date": "2026-05-21",
+          "consent_date": "2026-05-21",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-014",
+          "arm": "observational",
+          "screening_date": "2026-05-23",
+          "consent_date": "2026-05-23",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-015",
+          "arm": "observational",
+          "screening_date": "2026-05-25",
+          "consent_date": "2026-05-25",
+          "status": "completed"
+        },
+        {
+          "record_id": "0219-016",
+          "arm": "observational",
+          "screening_date": "2026-05-26",
+          "consent_date": "2026-05-26",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-017",
+          "arm": "observational",
+          "screening_date": "2026-05-28",
+          "consent_date": "2026-05-28",
+          "status": "completed"
+        },
+        {
+          "record_id": "0219-018",
+          "arm": "observational",
+          "screening_date": "2026-05-29",
+          "consent_date": "2026-05-29",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-019",
+          "arm": "observational",
+          "screening_date": "2026-05-31",
+          "consent_date": "2026-05-31",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-020",
+          "arm": "observational",
+          "screening_date": "2026-06-02",
+          "consent_date": "2026-06-02",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-021",
+          "arm": "observational",
+          "screening_date": "2026-06-03",
+          "consent_date": "2026-06-03",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-022",
+          "arm": "observational",
+          "screening_date": "2026-06-05",
+          "consent_date": "2026-06-05",
+          "status": "withdrawn"
+        },
+        {
+          "record_id": "0219-023",
+          "arm": "observational",
+          "screening_date": "2026-06-06",
+          "consent_date": "2026-06-06",
+          "status": "withdrawn"
+        },
+        {
+          "record_id": "0219-024",
+          "arm": "observational",
+          "screening_date": "2026-06-08",
+          "consent_date": "2026-06-08",
+          "status": "withdrawn"
+        },
+        {
+          "record_id": "0219-025",
+          "arm": "observational",
+          "screening_date": "2026-06-10",
+          "consent_date": "2026-06-10",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-026",
+          "arm": "observational",
+          "screening_date": "2026-06-11",
+          "consent_date": null,
+          "status": "screen_failed"
+        },
+        {
+          "record_id": "0219-027",
+          "arm": "observational",
+          "screening_date": "2026-06-13",
+          "consent_date": "2026-06-13",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-028",
+          "arm": "observational",
+          "screening_date": "2026-06-14",
+          "consent_date": "2026-06-14",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-029",
+          "arm": "observational",
+          "screening_date": "2026-06-16",
+          "consent_date": "2026-06-16",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-030",
+          "arm": "observational",
+          "screening_date": "2026-06-18",
+          "consent_date": "2026-06-18",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-031",
+          "arm": "observational",
+          "screening_date": "2026-06-19",
+          "consent_date": "2026-06-19",
+          "status": "withdrawn"
+        },
+        {
+          "record_id": "0219-032",
+          "arm": "observational",
+          "screening_date": "2026-06-21",
+          "consent_date": "2026-06-21",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-033",
+          "arm": "observational",
+          "screening_date": "2026-06-22",
+          "consent_date": "2026-06-22",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-034",
+          "arm": "observational",
+          "screening_date": "2026-06-24",
+          "consent_date": "2026-06-24",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-035",
+          "arm": "observational",
+          "screening_date": "2026-06-26",
+          "consent_date": null,
+          "status": "screen_failed"
+        },
+        {
+          "record_id": "0219-036",
+          "arm": "observational",
+          "screening_date": "2026-06-27",
+          "consent_date": "2026-06-27",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-037",
+          "arm": "observational",
+          "screening_date": "2026-06-29",
+          "consent_date": "2026-06-29",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-038",
+          "arm": "observational",
+          "screening_date": "2026-06-30",
+          "consent_date": "2026-06-30",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-039",
+          "arm": "observational",
+          "screening_date": "2026-07-02",
+          "consent_date": "2026-07-02",
+          "status": "withdrawn"
+        },
+        {
+          "record_id": "0219-040",
+          "arm": "observational",
+          "screening_date": "2026-07-04",
+          "consent_date": "2026-07-04",
+          "status": "completed"
+        },
+        {
+          "record_id": "0219-041",
+          "arm": "observational",
+          "screening_date": "2026-07-05",
+          "consent_date": "2026-07-05",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-042",
+          "arm": "observational",
+          "screening_date": "2026-07-07",
+          "consent_date": null,
+          "status": "screen_failed"
+        },
+        {
+          "record_id": "0219-043",
+          "arm": "observational",
+          "screening_date": "2026-07-08",
+          "consent_date": "2026-07-08",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-044",
+          "arm": "observational",
+          "screening_date": "2026-07-10",
+          "consent_date": null,
+          "status": "screen_failed"
+        },
+        {
+          "record_id": "0219-045",
+          "arm": "observational",
+          "screening_date": "2026-07-12",
+          "consent_date": "2026-07-12",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-046",
+          "arm": "observational",
+          "screening_date": "2026-07-13",
+          "consent_date": "2026-07-13",
+          "status": "completed"
+        },
+        {
+          "record_id": "0219-047",
+          "arm": "observational",
+          "screening_date": "2026-07-15",
+          "consent_date": null,
+          "status": "screen_failed"
+        },
+        {
+          "record_id": "0219-048",
+          "arm": "observational",
+          "screening_date": "2026-07-16",
+          "consent_date": "2026-07-16",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-049",
+          "arm": "observational",
+          "screening_date": "2026-07-18",
+          "consent_date": "2026-07-18",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-050",
+          "arm": "observational",
+          "screening_date": "2026-07-20",
+          "consent_date": "2026-07-20",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-051",
+          "arm": "observational",
+          "screening_date": "2026-07-21",
+          "consent_date": "2026-07-21",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-052",
+          "arm": "observational",
+          "screening_date": "2026-07-23",
+          "consent_date": "2026-07-23",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-053",
+          "arm": "observational",
+          "screening_date": "2026-07-24",
+          "consent_date": "2026-07-24",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-054",
+          "arm": "observational",
+          "screening_date": "2026-07-26",
+          "consent_date": "2026-07-26",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-055",
+          "arm": "observational",
+          "screening_date": "2026-07-28",
+          "consent_date": "2026-07-28",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-056",
+          "arm": "observational",
+          "screening_date": "2026-07-29",
+          "consent_date": "2026-07-29",
+          "status": "completed"
+        },
+        {
+          "record_id": "0219-057",
+          "arm": "observational",
+          "screening_date": "2026-07-31",
+          "consent_date": "2026-07-31",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-058",
+          "arm": "observational",
+          "screening_date": "2026-08-01",
+          "consent_date": "2026-08-01",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-059",
+          "arm": "observational",
+          "screening_date": "2026-08-03",
+          "consent_date": "2026-08-03",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-060",
+          "arm": "observational",
+          "screening_date": "2026-08-05",
+          "consent_date": null,
+          "status": "screen_failed"
+        },
+        {
+          "record_id": "0219-061",
+          "arm": "observational",
+          "screening_date": "2026-08-06",
+          "consent_date": "2026-08-06",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-062",
+          "arm": "observational",
+          "screening_date": "2026-08-08",
+          "consent_date": null,
+          "status": "screen_failed"
+        },
+        {
+          "record_id": "0219-063",
+          "arm": "observational",
+          "screening_date": "2026-08-09",
+          "consent_date": "2026-08-09",
+          "status": "enrolled"
+        },
+        {
+          "record_id": "0219-064",
+          "arm": "observational",
+          "screening_date": "2026-08-11",
+          "consent_date": "2026-08-11",
+          "status": "enrolled"
+        }
+      ]
+    }
+  ]
+}

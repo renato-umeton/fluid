@@ -1,0 +1,2247 @@
+{
+  "synthetic": true,
+  "notice": "Fictional Synthea-style records. Not real people. Not for clinical use.",
+  "referenceDate": "2026-10-03",
+  "bundles": [
+    {
+      "resourceType": "Bundle",
+      "id": "bundle_101",
+      "type": "collection",
+      "entry": [
+        {
+          "resource": {
+            "resourceType": "Patient",
+            "id": "synthetic_patient_101",
+            "meta": {
+              "tag": [
+                {
+                  "system": "urn:fluid:synthetic",
+                  "code": "synthetic"
+                }
+              ]
+            },
+            "identifier": [
+              {
+                "system": "urn:fluid:mrn",
+                "value": "SYN-101"
+              }
+            ],
+            "name": [
+              {
+                "given": [
+                  "Avery847"
+                ],
+                "family": "Lindgren112"
+              }
+            ],
+            "gender": "male",
+            "birthDate": "1981-04-12"
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Encounter",
+            "id": "enc_101",
+            "status": "in-progress",
+            "class": {
+              "code": "IMP",
+              "display": "inpatient encounter"
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_101"
+            },
+            "location": [
+              {
+                "location": {
+                  "display": "Unit 7W (synthetic)"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Observation",
+            "id": "obs_weight_101",
+            "status": "final",
+            "code": {
+              "coding": [
+                {
+                  "system": "http://loinc.org",
+                  "code": "29463-7",
+                  "display": "Body weight"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_101"
+            },
+            "effectiveDateTime": "2026-10-03T06:00:00Z",
+            "valueQuantity": {
+              "value": 70,
+              "unit": "kg"
+            }
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Condition",
+            "id": "cond_101_acute-postop-pain",
+            "clinicalStatus": {
+              "coding": [
+                {
+                  "code": "active"
+                }
+              ]
+            },
+            "code": {
+              "coding": [
+                {
+                  "system": "urn:fluid:synthetic-condition",
+                  "code": "acute-postop-pain",
+                  "display": "Acute postoperative pain (synthetic)"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_101"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "resourceType": "Bundle",
+      "id": "bundle_102",
+      "type": "collection",
+      "entry": [
+        {
+          "resource": {
+            "resourceType": "Patient",
+            "id": "synthetic_patient_102",
+            "meta": {
+              "tag": [
+                {
+                  "system": "urn:fluid:synthetic",
+                  "code": "synthetic"
+                }
+              ]
+            },
+            "identifier": [
+              {
+                "system": "urn:fluid:mrn",
+                "value": "SYN-102"
+              }
+            ],
+            "name": [
+              {
+                "given": [
+                  "Brielle203"
+                ],
+                "family": "Okafor455"
+              }
+            ],
+            "gender": "female",
+            "birthDate": "1990-09-30"
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Encounter",
+            "id": "enc_102",
+            "status": "in-progress",
+            "class": {
+              "code": "IMP",
+              "display": "inpatient encounter"
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_102"
+            },
+            "location": [
+              {
+                "location": {
+                  "display": "Unit 7W (synthetic)"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Observation",
+            "id": "obs_weight_102",
+            "status": "final",
+            "code": {
+              "coding": [
+                {
+                  "system": "http://loinc.org",
+                  "code": "29463-7",
+                  "display": "Body weight"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_102"
+            },
+            "effectiveDateTime": "2026-10-03T06:00:00Z",
+            "valueQuantity": {
+              "value": 64,
+              "unit": "kg"
+            }
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Condition",
+            "id": "cond_102_pneumonia",
+            "clinicalStatus": {
+              "coding": [
+                {
+                  "code": "active"
+                }
+              ]
+            },
+            "code": {
+              "coding": [
+                {
+                  "system": "urn:fluid:synthetic-condition",
+                  "code": "pneumonia",
+                  "display": "Community-acquired pneumonia (synthetic)"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_102"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "resourceType": "Bundle",
+      "id": "bundle_103",
+      "type": "collection",
+      "entry": [
+        {
+          "resource": {
+            "resourceType": "Patient",
+            "id": "synthetic_patient_103",
+            "meta": {
+              "tag": [
+                {
+                  "system": "urn:fluid:synthetic",
+                  "code": "synthetic"
+                }
+              ]
+            },
+            "identifier": [
+              {
+                "system": "urn:fluid:mrn",
+                "value": "SYN-103"
+              }
+            ],
+            "name": [
+              {
+                "given": [
+                  "Cosmo118"
+                ],
+                "family": "Varga761"
+              }
+            ],
+            "gender": "male",
+            "birthDate": "1972-01-05"
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Encounter",
+            "id": "enc_103",
+            "status": "in-progress",
+            "class": {
+              "code": "IMP",
+              "display": "inpatient encounter"
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_103"
+            },
+            "location": [
+              {
+                "location": {
+                  "display": "Unit 5E (synthetic)"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Observation",
+            "id": "obs_weight_103",
+            "status": "final",
+            "code": {
+              "coding": [
+                {
+                  "system": "http://loinc.org",
+                  "code": "29463-7",
+                  "display": "Body weight"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_103"
+            },
+            "effectiveDateTime": "2026-10-03T06:00:00Z",
+            "valueQuantity": {
+              "value": 92,
+              "unit": "kg"
+            }
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Condition",
+            "id": "cond_103_cellulitis",
+            "clinicalStatus": {
+              "coding": [
+                {
+                  "code": "active"
+                }
+              ]
+            },
+            "code": {
+              "coding": [
+                {
+                  "system": "urn:fluid:synthetic-condition",
+                  "code": "cellulitis",
+                  "display": "Cellulitis of lower limb (synthetic)"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_103"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "resourceType": "Bundle",
+      "id": "bundle_104",
+      "type": "collection",
+      "entry": [
+        {
+          "resource": {
+            "resourceType": "Patient",
+            "id": "synthetic_patient_104",
+            "meta": {
+              "tag": [
+                {
+                  "system": "urn:fluid:synthetic",
+                  "code": "synthetic"
+                }
+              ]
+            },
+            "identifier": [
+              {
+                "system": "urn:fluid:mrn",
+                "value": "SYN-104"
+              }
+            ],
+            "name": [
+              {
+                "given": [
+                  "Delphine44"
+                ],
+                "family": "Marchetti90"
+              }
+            ],
+            "gender": "female",
+            "birthDate": "1948-06-21"
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Encounter",
+            "id": "enc_104",
+            "status": "in-progress",
+            "class": {
+              "code": "IMP",
+              "display": "inpatient encounter"
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_104"
+            },
+            "location": [
+              {
+                "location": {
+                  "display": "Unit 7W (synthetic)"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Observation",
+            "id": "obs_weight_104",
+            "status": "final",
+            "code": {
+              "coding": [
+                {
+                  "system": "http://loinc.org",
+                  "code": "29463-7",
+                  "display": "Body weight"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_104"
+            },
+            "effectiveDateTime": "2026-10-03T06:00:00Z",
+            "valueQuantity": {
+              "value": 61,
+              "unit": "kg"
+            }
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Condition",
+            "id": "cond_104_hip-fracture",
+            "clinicalStatus": {
+              "coding": [
+                {
+                  "code": "active"
+                }
+              ]
+            },
+            "code": {
+              "coding": [
+                {
+                  "system": "urn:fluid:synthetic-condition",
+                  "code": "hip-fracture",
+                  "display": "Fracture of neck of femur (synthetic)"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_104"
+            }
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Condition",
+            "id": "cond_104_acute-postop-pain",
+            "clinicalStatus": {
+              "coding": [
+                {
+                  "code": "active"
+                }
+              ]
+            },
+            "code": {
+              "coding": [
+                {
+                  "system": "urn:fluid:synthetic-condition",
+                  "code": "acute-postop-pain",
+                  "display": "Acute postoperative pain (synthetic)"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_104"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "resourceType": "Bundle",
+      "id": "bundle_105",
+      "type": "collection",
+      "entry": [
+        {
+          "resource": {
+            "resourceType": "Patient",
+            "id": "synthetic_patient_105",
+            "meta": {
+              "tag": [
+                {
+                  "system": "urn:fluid:synthetic",
+                  "code": "synthetic"
+                }
+              ]
+            },
+            "identifier": [
+              {
+                "system": "urn:fluid:mrn",
+                "value": "SYN-105"
+              }
+            ],
+            "name": [
+              {
+                "given": [
+                  "Ezra377"
+                ],
+                "family": "Haddad228"
+              }
+            ],
+            "gender": "male",
+            "birthDate": "1999-11-14"
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Encounter",
+            "id": "enc_105",
+            "status": "in-progress",
+            "class": {
+              "code": "IMP",
+              "display": "inpatient encounter"
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_105"
+            },
+            "location": [
+              {
+                "location": {
+                  "display": "Unit 5E (synthetic)"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Observation",
+            "id": "obs_weight_105",
+            "status": "final",
+            "code": {
+              "coding": [
+                {
+                  "system": "http://loinc.org",
+                  "code": "29463-7",
+                  "display": "Body weight"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_105"
+            },
+            "effectiveDateTime": "2026-10-03T06:00:00Z",
+            "valueQuantity": {
+              "value": 81,
+              "unit": "kg"
+            }
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Condition",
+            "id": "cond_105_kidney-stone",
+            "clinicalStatus": {
+              "coding": [
+                {
+                  "code": "active"
+                }
+              ]
+            },
+            "code": {
+              "coding": [
+                {
+                  "system": "urn:fluid:synthetic-condition",
+                  "code": "kidney-stone",
+                  "display": "Ureteric calculus (synthetic)"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_105"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "resourceType": "Bundle",
+      "id": "bundle_106",
+      "type": "collection",
+      "entry": [
+        {
+          "resource": {
+            "resourceType": "Patient",
+            "id": "synthetic_patient_106",
+            "meta": {
+              "tag": [
+                {
+                  "system": "urn:fluid:synthetic",
+                  "code": "synthetic"
+                }
+              ]
+            },
+            "identifier": [
+              {
+                "system": "urn:fluid:mrn",
+                "value": "SYN-106"
+              }
+            ],
+            "name": [
+              {
+                "given": [
+                  "Farrah612"
+                ],
+                "family": "Nakamura33"
+              }
+            ],
+            "gender": "female",
+            "birthDate": "1965-03-08"
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Encounter",
+            "id": "enc_106",
+            "status": "in-progress",
+            "class": {
+              "code": "IMP",
+              "display": "inpatient encounter"
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_106"
+            },
+            "location": [
+              {
+                "location": {
+                  "display": "Unit 6N (synthetic)"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Observation",
+            "id": "obs_weight_106",
+            "status": "final",
+            "code": {
+              "coding": [
+                {
+                  "system": "http://loinc.org",
+                  "code": "29463-7",
+                  "display": "Body weight"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_106"
+            },
+            "effectiveDateTime": "2026-10-03T06:00:00Z",
+            "valueQuantity": {
+              "value": 77,
+              "unit": "kg"
+            }
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Condition",
+            "id": "cond_106_copd-exacerbation",
+            "clinicalStatus": {
+              "coding": [
+                {
+                  "code": "active"
+                }
+              ]
+            },
+            "code": {
+              "coding": [
+                {
+                  "system": "urn:fluid:synthetic-condition",
+                  "code": "copd-exacerbation",
+                  "display": "COPD exacerbation (synthetic)"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_106"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "resourceType": "Bundle",
+      "id": "bundle_107",
+      "type": "collection",
+      "entry": [
+        {
+          "resource": {
+            "resourceType": "Patient",
+            "id": "synthetic_patient_107",
+            "meta": {
+              "tag": [
+                {
+                  "system": "urn:fluid:synthetic",
+                  "code": "synthetic"
+                }
+              ]
+            },
+            "identifier": [
+              {
+                "system": "urn:fluid:mrn",
+                "value": "SYN-107"
+              }
+            ],
+            "name": [
+              {
+                "given": [
+                  "Gideon91"
+                ],
+                "family": "Achterberg5"
+              }
+            ],
+            "gender": "male",
+            "birthDate": "1958-12-19"
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Encounter",
+            "id": "enc_107",
+            "status": "in-progress",
+            "class": {
+              "code": "IMP",
+              "display": "inpatient encounter"
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_107"
+            },
+            "location": [
+              {
+                "location": {
+                  "display": "Unit 6N (synthetic)"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Observation",
+            "id": "obs_weight_107",
+            "status": "final",
+            "code": {
+              "coding": [
+                {
+                  "system": "http://loinc.org",
+                  "code": "29463-7",
+                  "display": "Body weight"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_107"
+            },
+            "effectiveDateTime": "2026-10-03T06:00:00Z",
+            "valueQuantity": {
+              "value": 103,
+              "unit": "kg"
+            }
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Condition",
+            "id": "cond_107_heart-failure",
+            "clinicalStatus": {
+              "coding": [
+                {
+                  "code": "active"
+                }
+              ]
+            },
+            "code": {
+              "coding": [
+                {
+                  "system": "urn:fluid:synthetic-condition",
+                  "code": "heart-failure",
+                  "display": "Acute on chronic heart failure (synthetic)"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_107"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "resourceType": "Bundle",
+      "id": "bundle_108",
+      "type": "collection",
+      "entry": [
+        {
+          "resource": {
+            "resourceType": "Patient",
+            "id": "synthetic_patient_108",
+            "meta": {
+              "tag": [
+                {
+                  "system": "urn:fluid:synthetic",
+                  "code": "synthetic"
+                }
+              ]
+            },
+            "identifier": [
+              {
+                "system": "urn:fluid:mrn",
+                "value": "SYN-108"
+              }
+            ],
+            "name": [
+              {
+                "given": [
+                  "Hollis26"
+                ],
+                "family": "Quintero870"
+              }
+            ],
+            "gender": "male",
+            "birthDate": "2017-05-02"
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Encounter",
+            "id": "enc_108",
+            "status": "in-progress",
+            "class": {
+              "code": "IMP",
+              "display": "inpatient encounter"
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_108"
+            },
+            "location": [
+              {
+                "location": {
+                  "display": "Unit PEDS (synthetic)"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Observation",
+            "id": "obs_weight_108",
+            "status": "final",
+            "code": {
+              "coding": [
+                {
+                  "system": "http://loinc.org",
+                  "code": "29463-7",
+                  "display": "Body weight"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_108"
+            },
+            "effectiveDateTime": "2026-10-03T06:00:00Z",
+            "valueQuantity": {
+              "value": 22,
+              "unit": "kg"
+            }
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Condition",
+            "id": "cond_108_appendectomy",
+            "clinicalStatus": {
+              "coding": [
+                {
+                  "code": "active"
+                }
+              ]
+            },
+            "code": {
+              "coding": [
+                {
+                  "system": "urn:fluid:synthetic-condition",
+                  "code": "appendectomy",
+                  "display": "Status post appendectomy (synthetic)"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_108"
+            }
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Condition",
+            "id": "cond_108_acute-postop-pain",
+            "clinicalStatus": {
+              "coding": [
+                {
+                  "code": "active"
+                }
+              ]
+            },
+            "code": {
+              "coding": [
+                {
+                  "system": "urn:fluid:synthetic-condition",
+                  "code": "acute-postop-pain",
+                  "display": "Acute postoperative pain (synthetic)"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_108"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "resourceType": "Bundle",
+      "id": "bundle_109",
+      "type": "collection",
+      "entry": [
+        {
+          "resource": {
+            "resourceType": "Patient",
+            "id": "synthetic_patient_109",
+            "meta": {
+              "tag": [
+                {
+                  "system": "urn:fluid:synthetic",
+                  "code": "synthetic"
+                }
+              ]
+            },
+            "identifier": [
+              {
+                "system": "urn:fluid:mrn",
+                "value": "SYN-109"
+              }
+            ],
+            "name": [
+              {
+                "given": [
+                  "Imani530"
+                ],
+                "family": "Sorensen64"
+              }
+            ],
+            "gender": "female",
+            "birthDate": "1984-07-27"
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Encounter",
+            "id": "enc_109",
+            "status": "in-progress",
+            "class": {
+              "code": "IMP",
+              "display": "inpatient encounter"
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_109"
+            },
+            "location": [
+              {
+                "location": {
+                  "display": "Unit 5E (synthetic)"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Observation",
+            "id": "obs_weight_109",
+            "status": "final",
+            "code": {
+              "coding": [
+                {
+                  "system": "http://loinc.org",
+                  "code": "29463-7",
+                  "display": "Body weight"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_109"
+            },
+            "effectiveDateTime": "2026-10-03T06:00:00Z",
+            "valueQuantity": {
+              "value": 58,
+              "unit": "kg"
+            }
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Condition",
+            "id": "cond_109_sickle-cell-crisis",
+            "clinicalStatus": {
+              "coding": [
+                {
+                  "code": "active"
+                }
+              ]
+            },
+            "code": {
+              "coding": [
+                {
+                  "system": "urn:fluid:synthetic-condition",
+                  "code": "sickle-cell-crisis",
+                  "display": "Sickle cell pain crisis (synthetic)"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_109"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "resourceType": "Bundle",
+      "id": "bundle_110",
+      "type": "collection",
+      "entry": [
+        {
+          "resource": {
+            "resourceType": "Patient",
+            "id": "synthetic_patient_110",
+            "meta": {
+              "tag": [
+                {
+                  "system": "urn:fluid:synthetic",
+                  "code": "synthetic"
+                }
+              ]
+            },
+            "identifier": [
+              {
+                "system": "urn:fluid:mrn",
+                "value": "SYN-110"
+              }
+            ],
+            "name": [
+              {
+                "given": [
+                  "Jasper707"
+                ],
+                "family": "Whitlock19"
+              }
+            ],
+            "gender": "male",
+            "birthDate": "1960-02-11"
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Encounter",
+            "id": "enc_110",
+            "status": "in-progress",
+            "class": {
+              "code": "IMP",
+              "display": "inpatient encounter"
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_110"
+            },
+            "location": [
+              {
+                "location": {
+                  "display": "Unit 6N (synthetic)"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Observation",
+            "id": "obs_weight_110",
+            "status": "final",
+            "code": {
+              "coding": [
+                {
+                  "system": "http://loinc.org",
+                  "code": "29463-7",
+                  "display": "Body weight"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_110"
+            },
+            "effectiveDateTime": "2026-10-03T06:00:00Z",
+            "valueQuantity": {
+              "value": 74,
+              "unit": "kg"
+            }
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Condition",
+            "id": "cond_110_ckd-stage-4",
+            "clinicalStatus": {
+              "coding": [
+                {
+                  "code": "active"
+                }
+              ]
+            },
+            "code": {
+              "coding": [
+                {
+                  "system": "urn:fluid:synthetic-condition",
+                  "code": "ckd-stage-4",
+                  "display": "Chronic kidney disease stage 4 (synthetic)"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_110"
+            }
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Condition",
+            "id": "cond_110_acute-postop-pain",
+            "clinicalStatus": {
+              "coding": [
+                {
+                  "code": "active"
+                }
+              ]
+            },
+            "code": {
+              "coding": [
+                {
+                  "system": "urn:fluid:synthetic-condition",
+                  "code": "acute-postop-pain",
+                  "display": "Acute postoperative pain (synthetic)"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_110"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "resourceType": "Bundle",
+      "id": "bundle_111",
+      "type": "collection",
+      "entry": [
+        {
+          "resource": {
+            "resourceType": "Patient",
+            "id": "synthetic_patient_111",
+            "meta": {
+              "tag": [
+                {
+                  "system": "urn:fluid:synthetic",
+                  "code": "synthetic"
+                }
+              ]
+            },
+            "identifier": [
+              {
+                "system": "urn:fluid:mrn",
+                "value": "SYN-111"
+              }
+            ],
+            "name": [
+              {
+                "given": [
+                  "Kalani88"
+                ],
+                "family": "Brennan302"
+              }
+            ],
+            "gender": "female",
+            "birthDate": "1993-10-03"
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Encounter",
+            "id": "enc_111",
+            "status": "in-progress",
+            "class": {
+              "code": "IMP",
+              "display": "inpatient encounter"
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_111"
+            },
+            "location": [
+              {
+                "location": {
+                  "display": "Unit 7W (synthetic)"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Observation",
+            "id": "obs_weight_111",
+            "status": "final",
+            "code": {
+              "coding": [
+                {
+                  "system": "http://loinc.org",
+                  "code": "29463-7",
+                  "display": "Body weight"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_111"
+            },
+            "effectiveDateTime": "2026-10-03T06:00:00Z",
+            "valueQuantity": {
+              "value": 69,
+              "unit": "kg"
+            }
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Condition",
+            "id": "cond_111_migraine",
+            "clinicalStatus": {
+              "coding": [
+                {
+                  "code": "active"
+                }
+              ]
+            },
+            "code": {
+              "coding": [
+                {
+                  "system": "urn:fluid:synthetic-condition",
+                  "code": "migraine",
+                  "display": "Migraine without aura (synthetic)"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_111"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "resourceType": "Bundle",
+      "id": "bundle_112",
+      "type": "collection",
+      "entry": [
+        {
+          "resource": {
+            "resourceType": "Patient",
+            "id": "synthetic_patient_112",
+            "meta": {
+              "tag": [
+                {
+                  "system": "urn:fluid:synthetic",
+                  "code": "synthetic"
+                }
+              ]
+            },
+            "identifier": [
+              {
+                "system": "urn:fluid:mrn",
+                "value": "SYN-112"
+              }
+            ],
+            "name": [
+              {
+                "given": [
+                  "Lucan45"
+                ],
+                "family": "Petrovic77"
+              }
+            ],
+            "gender": "male",
+            "birthDate": "1976-08-16"
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Encounter",
+            "id": "enc_112",
+            "status": "in-progress",
+            "class": {
+              "code": "IMP",
+              "display": "inpatient encounter"
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_112"
+            },
+            "location": [
+              {
+                "location": {
+                  "display": "Unit 5E (synthetic)"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Observation",
+            "id": "obs_weight_112",
+            "status": "final",
+            "code": {
+              "coding": [
+                {
+                  "system": "http://loinc.org",
+                  "code": "29463-7",
+                  "display": "Body weight"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_112"
+            },
+            "effectiveDateTime": "2026-10-03T06:00:00Z",
+            "valueQuantity": {
+              "value": 88,
+              "unit": "kg"
+            }
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Condition",
+            "id": "cond_112_pancreatitis",
+            "clinicalStatus": {
+              "coding": [
+                {
+                  "code": "active"
+                }
+              ]
+            },
+            "code": {
+              "coding": [
+                {
+                  "system": "urn:fluid:synthetic-condition",
+                  "code": "pancreatitis",
+                  "display": "Acute pancreatitis (synthetic)"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_112"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "resourceType": "Bundle",
+      "id": "bundle_113",
+      "type": "collection",
+      "entry": [
+        {
+          "resource": {
+            "resourceType": "Patient",
+            "id": "synthetic_patient_113",
+            "meta": {
+              "tag": [
+                {
+                  "system": "urn:fluid:synthetic",
+                  "code": "synthetic"
+                }
+              ]
+            },
+            "identifier": [
+              {
+                "system": "urn:fluid:mrn",
+                "value": "SYN-113"
+              }
+            ],
+            "name": [
+              {
+                "given": [
+                  "Marisol12"
+                ],
+                "family": "Fairweather6"
+              }
+            ],
+            "gender": "female",
+            "birthDate": "2011-01-23"
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Encounter",
+            "id": "enc_113",
+            "status": "in-progress",
+            "class": {
+              "code": "IMP",
+              "display": "inpatient encounter"
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_113"
+            },
+            "location": [
+              {
+                "location": {
+                  "display": "Unit PEDS (synthetic)"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Observation",
+            "id": "obs_weight_113",
+            "status": "final",
+            "code": {
+              "coding": [
+                {
+                  "system": "http://loinc.org",
+                  "code": "29463-7",
+                  "display": "Body weight"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_113"
+            },
+            "effectiveDateTime": "2026-10-03T06:00:00Z",
+            "valueQuantity": {
+              "value": 52,
+              "unit": "kg"
+            }
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Condition",
+            "id": "cond_113_fracture-forearm",
+            "clinicalStatus": {
+              "coding": [
+                {
+                  "code": "active"
+                }
+              ]
+            },
+            "code": {
+              "coding": [
+                {
+                  "system": "urn:fluid:synthetic-condition",
+                  "code": "fracture-forearm",
+                  "display": "Closed fracture of forearm (synthetic)"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_113"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "resourceType": "Bundle",
+      "id": "bundle_114",
+      "type": "collection",
+      "entry": [
+        {
+          "resource": {
+            "resourceType": "Patient",
+            "id": "synthetic_patient_114",
+            "meta": {
+              "tag": [
+                {
+                  "system": "urn:fluid:synthetic",
+                  "code": "synthetic"
+                }
+              ]
+            },
+            "identifier": [
+              {
+                "system": "urn:fluid:mrn",
+                "value": "SYN-114"
+              }
+            ],
+            "name": [
+              {
+                "given": [
+                  "Nils963"
+                ],
+                "family": "Abernathy41"
+              }
+            ],
+            "gender": "male",
+            "birthDate": "1952-04-30"
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Encounter",
+            "id": "enc_114",
+            "status": "in-progress",
+            "class": {
+              "code": "IMP",
+              "display": "inpatient encounter"
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_114"
+            },
+            "location": [
+              {
+                "location": {
+                  "display": "Unit 6N (synthetic)"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Observation",
+            "id": "obs_weight_114",
+            "status": "final",
+            "code": {
+              "coding": [
+                {
+                  "system": "http://loinc.org",
+                  "code": "29463-7",
+                  "display": "Body weight"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_114"
+            },
+            "effectiveDateTime": "2026-10-03T06:00:00Z",
+            "valueQuantity": {
+              "value": 66,
+              "unit": "kg"
+            }
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Condition",
+            "id": "cond_114_pneumonia",
+            "clinicalStatus": {
+              "coding": [
+                {
+                  "code": "active"
+                }
+              ]
+            },
+            "code": {
+              "coding": [
+                {
+                  "system": "urn:fluid:synthetic-condition",
+                  "code": "pneumonia",
+                  "display": "Community-acquired pneumonia (synthetic)"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_114"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "resourceType": "Bundle",
+      "id": "bundle_115",
+      "type": "collection",
+      "entry": [
+        {
+          "resource": {
+            "resourceType": "Patient",
+            "id": "synthetic_patient_115",
+            "meta": {
+              "tag": [
+                {
+                  "system": "urn:fluid:synthetic",
+                  "code": "synthetic"
+                }
+              ]
+            },
+            "identifier": [
+              {
+                "system": "urn:fluid:mrn",
+                "value": "SYN-115"
+              }
+            ],
+            "name": [
+              {
+                "given": [
+                  "Odalys150"
+                ],
+                "family": "Kowalczyk8"
+              }
+            ],
+            "gender": "female",
+            "birthDate": "1987-06-09"
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Encounter",
+            "id": "enc_115",
+            "status": "in-progress",
+            "class": {
+              "code": "IMP",
+              "display": "inpatient encounter"
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_115"
+            },
+            "location": [
+              {
+                "location": {
+                  "display": "Unit 7W (synthetic)"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Observation",
+            "id": "obs_weight_115",
+            "status": "final",
+            "code": {
+              "coding": [
+                {
+                  "system": "http://loinc.org",
+                  "code": "29463-7",
+                  "display": "Body weight"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_115"
+            },
+            "effectiveDateTime": "2026-10-03T06:00:00Z",
+            "valueQuantity": {
+              "value": 72,
+              "unit": "kg"
+            }
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Condition",
+            "id": "cond_115_acute-postop-pain",
+            "clinicalStatus": {
+              "coding": [
+                {
+                  "code": "active"
+                }
+              ]
+            },
+            "code": {
+              "coding": [
+                {
+                  "system": "urn:fluid:synthetic-condition",
+                  "code": "acute-postop-pain",
+                  "display": "Acute postoperative pain (synthetic)"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_115"
+            }
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "AllergyIntolerance",
+            "id": "allergy_115_morphinex",
+            "clinicalStatus": {
+              "coding": [
+                {
+                  "code": "active"
+                }
+              ]
+            },
+            "code": {
+              "coding": [
+                {
+                  "system": "urn:fluid:synthetic-drug",
+                  "code": "morphinex",
+                  "display": "Morphinex (fictional)"
+                }
+              ]
+            },
+            "patient": {
+              "reference": "Patient/synthetic_patient_115"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "resourceType": "Bundle",
+      "id": "bundle_116",
+      "type": "collection",
+      "entry": [
+        {
+          "resource": {
+            "resourceType": "Patient",
+            "id": "synthetic_patient_116",
+            "meta": {
+              "tag": [
+                {
+                  "system": "urn:fluid:synthetic",
+                  "code": "synthetic"
+                }
+              ]
+            },
+            "identifier": [
+              {
+                "system": "urn:fluid:mrn",
+                "value": "SYN-116"
+              }
+            ],
+            "name": [
+              {
+                "given": [
+                  "Pax274"
+                ],
+                "family": "Delacroix59"
+              }
+            ],
+            "gender": "male",
+            "birthDate": "2003-09-17"
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Encounter",
+            "id": "enc_116",
+            "status": "in-progress",
+            "class": {
+              "code": "IMP",
+              "display": "inpatient encounter"
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_116"
+            },
+            "location": [
+              {
+                "location": {
+                  "display": "Unit 5E (synthetic)"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Observation",
+            "id": "obs_weight_116",
+            "status": "final",
+            "code": {
+              "coding": [
+                {
+                  "system": "http://loinc.org",
+                  "code": "29463-7",
+                  "display": "Body weight"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_116"
+            },
+            "effectiveDateTime": "2026-10-03T06:00:00Z",
+            "valueQuantity": {
+              "value": 79,
+              "unit": "kg"
+            }
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Condition",
+            "id": "cond_116_trauma-rib-fractures",
+            "clinicalStatus": {
+              "coding": [
+                {
+                  "code": "active"
+                }
+              ]
+            },
+            "code": {
+              "coding": [
+                {
+                  "system": "urn:fluid:synthetic-condition",
+                  "code": "trauma-rib-fractures",
+                  "display": "Multiple rib fractures (synthetic)"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_116"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "resourceType": "Bundle",
+      "id": "bundle_117",
+      "type": "collection",
+      "entry": [
+        {
+          "resource": {
+            "resourceType": "Patient",
+            "id": "synthetic_patient_117",
+            "meta": {
+              "tag": [
+                {
+                  "system": "urn:fluid:synthetic",
+                  "code": "synthetic"
+                }
+              ]
+            },
+            "identifier": [
+              {
+                "system": "urn:fluid:mrn",
+                "value": "SYN-117"
+              }
+            ],
+            "name": [
+              {
+                "given": [
+                  "Quinn318"
+                ],
+                "family": "Halvorsen22"
+              }
+            ],
+            "gender": "female",
+            "birthDate": "1968-03-14"
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Encounter",
+            "id": "enc_117",
+            "status": "in-progress",
+            "class": {
+              "code": "IMP",
+              "display": "inpatient encounter"
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_117"
+            },
+            "location": [
+              {
+                "location": {
+                  "display": "Unit 7W (synthetic)"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Observation",
+            "id": "obs_weight_117",
+            "status": "final",
+            "code": {
+              "coding": [
+                {
+                  "system": "http://loinc.org",
+                  "code": "29463-7",
+                  "display": "Body weight"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_117"
+            },
+            "effectiveDateTime": "2026-10-03T06:00:00Z",
+            "valueQuantity": {
+              "value": 68,
+              "unit": "kg"
+            }
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Condition",
+            "id": "cond_117_acute-postop-pain",
+            "clinicalStatus": {
+              "coding": [
+                {
+                  "code": "active"
+                }
+              ]
+            },
+            "code": {
+              "coding": [
+                {
+                  "system": "urn:fluid:synthetic-condition",
+                  "code": "acute-postop-pain",
+                  "display": "Acute postoperative pain (synthetic)"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_117"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "resourceType": "Bundle",
+      "id": "bundle_118",
+      "type": "collection",
+      "entry": [
+        {
+          "resource": {
+            "resourceType": "Patient",
+            "id": "synthetic_patient_118",
+            "meta": {
+              "tag": [
+                {
+                  "system": "urn:fluid:synthetic",
+                  "code": "synthetic"
+                }
+              ]
+            },
+            "identifier": [
+              {
+                "system": "urn:fluid:mrn",
+                "value": "SYN-118"
+              }
+            ],
+            "name": [
+              {
+                "given": [
+                  "Rosalind7"
+                ],
+                "family": "Ogunleye480"
+              }
+            ],
+            "gender": "female",
+            "birthDate": "1979-12-01"
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Encounter",
+            "id": "enc_118",
+            "status": "in-progress",
+            "class": {
+              "code": "IMP",
+              "display": "inpatient encounter"
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_118"
+            },
+            "location": [
+              {
+                "location": {
+                  "display": "Unit 6N (synthetic)"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Observation",
+            "id": "obs_weight_118",
+            "status": "final",
+            "code": {
+              "coding": [
+                {
+                  "system": "http://loinc.org",
+                  "code": "29463-7",
+                  "display": "Body weight"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_118"
+            },
+            "effectiveDateTime": "2026-10-03T06:00:00Z",
+            "valueQuantity": {
+              "value": 95,
+              "unit": "kg"
+            }
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Condition",
+            "id": "cond_118_cholecystitis",
+            "clinicalStatus": {
+              "coding": [
+                {
+                  "code": "active"
+                }
+              ]
+            },
+            "code": {
+              "coding": [
+                {
+                  "system": "urn:fluid:synthetic-condition",
+                  "code": "cholecystitis",
+                  "display": "Acute cholecystitis (synthetic)"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_118"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "resourceType": "Bundle",
+      "id": "bundle_119",
+      "type": "collection",
+      "entry": [
+        {
+          "resource": {
+            "resourceType": "Patient",
+            "id": "synthetic_patient_119",
+            "meta": {
+              "tag": [
+                {
+                  "system": "urn:fluid:synthetic",
+                  "code": "synthetic"
+                }
+              ]
+            },
+            "identifier": [
+              {
+                "system": "urn:fluid:mrn",
+                "value": "SYN-119"
+              }
+            ],
+            "name": [
+              {
+                "given": [
+                  "Silas66"
+                ],
+                "family": "Thibodeaux14"
+              }
+            ],
+            "gender": "male",
+            "birthDate": "1942-07-07"
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Encounter",
+            "id": "enc_119",
+            "status": "in-progress",
+            "class": {
+              "code": "IMP",
+              "display": "inpatient encounter"
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_119"
+            },
+            "location": [
+              {
+                "location": {
+                  "display": "Unit 6N (synthetic)"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Observation",
+            "id": "obs_weight_119",
+            "status": "final",
+            "code": {
+              "coding": [
+                {
+                  "system": "http://loinc.org",
+                  "code": "29463-7",
+                  "display": "Body weight"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_119"
+            },
+            "effectiveDateTime": "2026-10-03T06:00:00Z",
+            "valueQuantity": {
+              "value": 55,
+              "unit": "kg"
+            }
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Condition",
+            "id": "cond_119_hip-fracture",
+            "clinicalStatus": {
+              "coding": [
+                {
+                  "code": "active"
+                }
+              ]
+            },
+            "code": {
+              "coding": [
+                {
+                  "system": "urn:fluid:synthetic-condition",
+                  "code": "hip-fracture",
+                  "display": "Fracture of neck of femur (synthetic)"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_119"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "resourceType": "Bundle",
+      "id": "bundle_120",
+      "type": "collection",
+      "entry": [
+        {
+          "resource": {
+            "resourceType": "Patient",
+            "id": "synthetic_patient_120",
+            "meta": {
+              "tag": [
+                {
+                  "system": "urn:fluid:synthetic",
+                  "code": "synthetic"
+                }
+              ]
+            },
+            "identifier": [
+              {
+                "system": "urn:fluid:mrn",
+                "value": "SYN-120"
+              }
+            ],
+            "name": [
+              {
+                "given": [
+                  "Tova509"
+                ],
+                "family": "Lindqvist3"
+              }
+            ],
+            "gender": "female",
+            "birthDate": "2026-02-10"
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Encounter",
+            "id": "enc_120",
+            "status": "in-progress",
+            "class": {
+              "code": "IMP",
+              "display": "inpatient encounter"
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_120"
+            },
+            "location": [
+              {
+                "location": {
+                  "display": "Unit PEDS (synthetic)"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Observation",
+            "id": "obs_weight_120",
+            "status": "final",
+            "code": {
+              "coding": [
+                {
+                  "system": "http://loinc.org",
+                  "code": "29463-7",
+                  "display": "Body weight"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_120"
+            },
+            "effectiveDateTime": "2026-10-03T06:00:00Z",
+            "valueQuantity": {
+              "value": 8,
+              "unit": "kg"
+            }
+          }
+        },
+        {
+          "resource": {
+            "resourceType": "Condition",
+            "id": "cond_120_bronchiolitis",
+            "clinicalStatus": {
+              "coding": [
+                {
+                  "code": "active"
+                }
+              ]
+            },
+            "code": {
+              "coding": [
+                {
+                  "system": "urn:fluid:synthetic-condition",
+                  "code": "bronchiolitis",
+                  "display": "Bronchiolitis (synthetic)"
+                }
+              ]
+            },
+            "subject": {
+              "reference": "Patient/synthetic_patient_120"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

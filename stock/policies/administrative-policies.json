@@ -1,0 +1,33 @@
+{
+  "synthetic": true,
+  "notice": "Synthetic committee policies written for the Fluid demo.",
+  "policies": [
+    {
+      "id": "committee:pt-formulary-policy-v12",
+      "title": "Formulary Management Policy",
+      "version": "12",
+      "owner": "Pharmacy and Therapeutics Committee",
+      "effective": "2026-07-01",
+      "synthetic": true,
+      "summary": "Defines formulary tiers, restriction criteria, and the quarterly utilization review."
+    },
+    {
+      "id": "committee:pt-nonformulary-exception-v4",
+      "title": "Non-Formulary Exception Policy",
+      "version": "4",
+      "owner": "Pharmacy and Therapeutics Committee",
+      "effective": "2025-12-01",
+      "synthetic": true,
+      "summary": "Requires a prescriber exception request and pharmacy review for any non-formulary product."
+    },
+    {
+      "id": "committee:pharmacy-budget-policy-v3",
+      "title": "Pharmacy Budget and Variance Policy",
+      "version": "3",
+      "owner": "Department of Pharmacy Finance",
+      "effective": "2026-02-15",
+      "synthetic": true,
+      "summary": "Budget lines over 5 percent projected variance require a written justification to the finance committee."
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "synthetic": true,
+  "notice": "All Fluid demo data is synthetic. No real patients, people, drugs, prices, or guidance.",
+  "envDataKeys": {
+    "patients": "fhir/patients.json",
+    "callSchedule": "call-schedule.json",
+    "calendars": "calendars.json",
+    "documents": "documents.json",
+    "formulary": "formulary.json",
+    "personas": "personas.json",
+    "redcap": "redcap/protocols.json"
+  },
+  "generators": ["scripts/generate-patients.mjs", "scripts/generate-redcap.mjs"]
+}

@@ -1,0 +1,9 @@
+{
+  "synthetic": true,
+  "notice": "Synthetic call schedule. Times are America/New_York.",
+  "shifts": [
+    { "personaId": "hospitalist-researcher", "service": "Hospital Medicine 7W", "role": "attending", "start": "2026-10-03T07:00:00-04:00", "end": "2026-10-03T13:00:00-04:00" },
+    { "personaId": "hospitalist-researcher", "service": "Hospital Medicine 7W", "role": "attending", "start": "2026-10-04T07:00:00-04:00", "end": "2026-10-04T13:00:00-04:00" },
+    { "personaId": "hospitalist-researcher", "service": "Night coverage", "role": "backup", "start": "2026-10-06T19:00:00-04:00", "end": "2026-10-07T07:00:00-04:00" }
+  ]
+}
