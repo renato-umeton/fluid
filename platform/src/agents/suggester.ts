@@ -53,7 +53,7 @@ export function suggestTests(input: SuggestInput): Suggestion[] {
 function redcapSuggestions(input: SuggestInput): Suggestion[] {
 	const protocols = input.protocols?.length ? input.protocols : ["IRB-2026-0142"];
 	const out: Suggestion[] = protocols.slice(0, 2).map((protocol) => ({
-		id: `t-redcap-enrollment-${slug(protocol)}`,
+		id: testId(input.intentId, `redcap-enrollment-${slug(protocol)}`),
 		title: `Research mode reports enrollment for ${protocol}`,
 		file: USER_MANIFEST,
 		rationale: `Checks the purpose of ${input.intentId}: a research-mode question about ${protocol} returns its enrollment count from the REDCap connector.`,
@@ -61,7 +61,7 @@ function redcapSuggestions(input: SuggestInput): Suggestion[] {
 		kind: "behavior",
 		decision: null,
 		probe: {
-			id: `t-redcap-enrollment-${slug(protocol)}`,
+			id: testId(input.intentId, `redcap-enrollment-${slug(protocol)}`),
 			description: `Research mode reports REDCap enrollment for ${protocol} (verifies ${input.intentId}).`,
 			request: { question: `How many participants are enrolled in ${protocol}?`, context: { documentType: "irb" } },
 			focusMode: "research",
@@ -73,7 +73,7 @@ function redcapSuggestions(input: SuggestInput): Suggestion[] {
 		},
 	}));
 	out.push({
-		id: "t-redcap-clinical-untouched",
+		id: testId(input.intentId, "redcap-clinical-untouched"),
 		title: "Enrollment never appears on a clinical card",
 		file: USER_MANIFEST,
 		rationale: `Guards the floor next to ${input.intentId}: with an identified chart open the answer stays clinical and carries no REDCap section.`,
@@ -81,7 +81,7 @@ function redcapSuggestions(input: SuggestInput): Suggestion[] {
 		kind: "behavior",
 		decision: null,
 		probe: {
-			id: "t-redcap-clinical-untouched",
+			id: testId(input.intentId, "redcap-clinical-untouched"),
 			description: `With a chart open, enrollment questions stay clinical without REDCap data (verifies ${input.intentId}).`,
 			request: { question: `How many participants are enrolled in ${protocols[0]}?`, context: { chartOpen: { patientId: "synthetic_patient_117", identified: true } } },
 			assert: [
@@ -129,7 +129,7 @@ function nearInvariantSuggestions(input: SuggestInput): Suggestion[] {
 	if (areas.intent) add((p) => /chart-open|floor/.test(p.id), "the intent engine");
 	if (areas.contracts) add((p) => /never-doses|dosing-clinical/.test(p.id), "a mode contract");
 	return picks.map(({ probe, why }) => {
-		const id = `near-${probe.id}`.slice(0, 80);
+		const id = `near-${input.intentId}-${probe.id}`.slice(0, 80);
 		return {
 			id,
 			title: `Probe next to invariant ${probe.id}`,
@@ -146,6 +146,15 @@ function nearInvariantSuggestions(input: SuggestInput): Suggestion[] {
 function stripProbe(probe: Probe): Probe {
 	const { id, request, focusMode, assert, kind, samples } = probe;
 	return { id, ...(kind ? { kind } : {}), ...(request ? { request } : {}), ...(focusMode ? { focusMode } : {}), ...(samples ? { samples } : {}), assert };
+}
+
+/**
+ * Test ids carry the intent they verify (t-<intentId>-<name>), so tests
+ * from different customizations never share an id and one change can never
+ * silently replace another change's test.
+ */
+export function testId(intentId: string, name: string): string {
+	return `t-${intentId}-${name}`.slice(0, 80);
 }
 
 function dedupe(list: Suggestion[]): Suggestion[] {
@@ -187,7 +196,7 @@ export function suggestionsFromModel(output: Record<string, unknown>, intentId: 
 	for (const [index, item] of raw.entries()) {
 		if (out.length >= limit) break;
 		const s = item as Record<string, unknown>;
-		const id = `t-agent-${index + 1}`;
+		const id = testId(intentId, `agent-${index + 1}`);
 		const probe: Probe = {
 			id,
 			description: `${String(s.title ?? "Agent test").slice(0, 120)} (verifies ${intentId}).`,
@@ -206,7 +215,7 @@ export function fallbackSuggestion(intentId: string, modes: string[]): Suggestio
 	const mode = modes.find((m) => MODES.includes(m)) ?? "administrative";
 	const question = mode === "research" ? "Summarize what the registry says about Morphinex" : mode === "clinical" ? "What does the policy say about Morphinex?" : "What is the formulary status of Morphinex?";
 	const probe: Probe = {
-		id: "t-card-contract",
+		id: testId(intentId, "card-contract"),
 		description: `The fork still answers ${mode} questions with the card contract intact (verifies ${intentId}).`,
 		request: { question, context: {}, explicitMode: mode },
 		assert: [
@@ -253,9 +262,15 @@ function validateAssertion(assertion: unknown): string | null {
 	return null;
 }
 
-/** Adds accepted probes to the fork's tier 3 manifest text (creating it if needed). Same ids are replaced. */
+/**
+ * Adds accepted probes to the fork's tier 3 manifest text (creating it if
+ * needed). A probe with the same id is replaced only when it belongs to the
+ * same intent (a retried commit); a probe owned by another intent, or written
+ * by the user, is never overwritten. Other probes, including disabled ones,
+ * are kept as they are.
+ */
 export function mergeUserManifest(existing: string | null, probes: (Probe & { intentId?: string })[]): string {
-	let manifest: { tier: string; samples?: number; description?: string; probes: Probe[] } = {
+	let manifest: { tier: string; samples?: number; description?: string; probes: (Probe & { intentId?: string })[] } = {
 		tier: "user",
 		samples: 3,
 		description: "Tier 3: this fork's own tests. Owned by the user; a probe with \"disabled\": true is skipped and the gate logs it.",
@@ -267,6 +282,12 @@ export function mergeUserManifest(existing: string | null, probes: (Probe & { in
 			if (parsed && Array.isArray(parsed.probes)) manifest = { ...manifest, ...parsed, tier: "user" };
 		} catch {
 			// An unreadable manifest is replaced; the old text stays in git history.
+		}
+	}
+	for (const probe of probes) {
+		const current = manifest.probes.find((p) => p.id === probe.id);
+		if (current && current.intentId !== probe.intentId) {
+			throw new Error(`tier 3 test ${probe.id} belongs to ${current.intentId ?? "the user"}; refusing to overwrite it`);
 		}
 	}
 	const ids = new Set(probes.map((p) => p.id));

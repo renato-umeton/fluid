@@ -71,7 +71,7 @@ describe("recipes through the stock gate", () => {
 		const change = redcapChange({ indexSource: files["app/index.ts"]!, protocols });
 		const fork = { ...files, ...change.files };
 		const suggestions = suggestTests({ change, intentId: "int_x", invariants, protocols });
-		expect(suggestions.map((s) => s.id)).toEqual(["t-redcap-enrollment-irb-2026-0142", "t-redcap-enrollment-irb-2026-0219", "t-redcap-clinical-untouched"]);
+		expect(suggestions.map((s) => s.id)).toEqual(["t-int_x-redcap-enrollment-irb-2026-0142", "t-int_x-redcap-enrollment-irb-2026-0219", "t-int_x-redcap-clinical-untouched"]);
 		expect(suggestions.every((s) => s.intentId === "int_x" && validateProbe(s.probe) === null)).toBe(true);
 		const { inv, fn, user, app } = await gateTiers(fork, suggestions.map((s) => s.probe));
 		expect(inv.failures).toEqual([]);
@@ -85,7 +85,7 @@ describe("recipes through the stock gate", () => {
 		const change = tauChange(files["fluid.toml"]!, { kind: "tau", value: 0.6, direction: "lower" });
 		const suggestions = suggestTests({ change, intentId: "int_t", invariants, previousToml: files["fluid.toml"] });
 		expect(suggestions.length).toBeGreaterThan(0);
-		expect(suggestions.every((s) => s.kind === "near-invariant" && s.id.startsWith("near-inv-tau"))).toBe(true);
+		expect(suggestions.every((s) => s.kind === "near-invariant" && s.id.startsWith("near-int_t-inv-tau"))).toBe(true);
 		const { inv } = await gateTiers({ ...files, ...change.files });
 		expect(inv.failures).toContainEqual(expect.objectContaining({ probe: "inv-tau-config-floor", actual: 0.6, expected: 0.85 }));
 	});
@@ -139,12 +139,34 @@ describe("suggester details", () => {
 		expect(validateProbe(fallbackSuggestion("int_m", ["research"]).probe)).toBeNull();
 	});
 
-	it("merges accepted probes into the user manifest by id", () => {
-		const first = mergeUserManifest(null, [{ id: "a", request: { question: "q", context: {} }, assert: [{ path: "mode", exists: true }] }]);
-		const second = JSON.parse(mergeUserManifest(first, [{ id: "a", request: { question: "q2", context: {} }, assert: [{ path: "mode", exists: true }] }, { id: "b", request: { question: "q", context: {} }, assert: [{ path: "x", exists: true }] }]));
+	it("namespaces every suggested test id by its intent", () => {
+		const model = suggestionsFromModel({ suggestions: [{ title: "ok", question: "q?", assert: [{ path: "mode", equals: "research" }] }] }, "int_m");
+		expect(model.map((s) => s.id)).toEqual(["t-int_m-agent-1"]);
+		expect(fallbackSuggestion("int_m", ["research"]).id).toBe("t-int_m-card-contract");
+		expect(model[0]!.probe.id).toBe(model[0]!.id);
+	});
+
+	it("merges accepted probes into the user manifest by id, replacing only the same intent's probes", () => {
+		const probe = (id: string, question: string, intentId: string) => ({ id, intentId, request: { question, context: {} }, assert: [{ path: "mode", exists: true }] });
+		const first = mergeUserManifest(null, [probe("a", "q", "int_1")]);
+		const second = JSON.parse(mergeUserManifest(first, [probe("a", "q2", "int_1"), probe("b", "q", "int_1")]));
 		expect(second.tier).toBe("user");
 		expect(second.probes.map((p: { id: string }) => p.id)).toEqual(["a", "b"]);
 		expect(second.probes[0].request.question).toBe("q2");
+	});
+
+	it("refuses to overwrite a probe that belongs to another intent or to the user", () => {
+		const probe = (id: string, intentId?: string) => ({ id, ...(intentId ? { intentId } : {}), request: { question: "q", context: {} }, assert: [{ path: "mode", exists: true }] });
+		const existing = mergeUserManifest(null, [probe("a", "int_1")]);
+		expect(() => mergeUserManifest(existing, [probe("a", "int_2")])).toThrow(/belongs to int_1/);
+		const handWritten = JSON.stringify({ tier: "user", probes: [probe("mine")] });
+		expect(() => mergeUserManifest(handWritten, [probe("mine", "int_2")])).toThrow(/belongs to the user/);
+	});
+
+	it("keeps a disabled probe disabled when other probes are added", () => {
+		const existing = JSON.stringify({ tier: "user", probes: [{ ...{ id: "old", intentId: "int_0", request: { question: "q", context: {} }, assert: [{ path: "mode", exists: true }] }, disabled: true, disabledReason: "flaky" }] });
+		const merged = JSON.parse(mergeUserManifest(existing, [{ id: "new", intentId: "int_1", request: { question: "q", context: {} }, assert: [{ path: "mode", exists: true }] }]));
+		expect(merged.probes[0]).toMatchObject({ id: "old", disabled: true, disabledReason: "flaky" });
 	});
 });
 
