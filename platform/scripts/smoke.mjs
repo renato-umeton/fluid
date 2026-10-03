@@ -80,7 +80,7 @@ const committed = await call("POST", "/api/ledger/commit", {});
 check("ledger committed to ledger repo", committed.data.commit !== null && committed.data.records >= 2, `${committed.data.repo} ${committed.data.commit?.slice(0, 7)}`);
 
 const fleet = await call("GET", "/api/fleet");
-check("fleet lists the fork", fleet.data.forks.some((f) => f.repo === fork.data.repo && f.status === "ready"), `stock tags ${fleet.data.stockTags.join(", ")}`);
+check("fleet lists the fork", fleet.data.forks.some((f) => f.repo === fork.data.repo && f.status === "pinned"), `stock tags ${fleet.data.stockTags.join(", ")}`);
 
 if (!keepFork) {
 	await call("POST", `/api/admin/forks/${fork.data.repo}/delete`, undefined, admin);

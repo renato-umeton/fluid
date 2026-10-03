@@ -7,7 +7,7 @@ import { askFork, type PlatformExports } from "../runtime/loader.ts";
 import { RefNotFoundError } from "../runtime/refs.ts";
 import { RepoNotFoundError } from "../runtime/repo-files.ts";
 import { bundledStockRelease, publishStockRelease } from "../stock/publish.ts";
-import { runStockSuite } from "../stock/suite.ts";
+import { runGate } from "../gate/run.ts";
 import type { RunTimeRecord } from "../durable/user-ledger.ts";
 import { ledgerStub, quotaStub } from "../stubs.ts";
 import { HttpError, json, notImplemented, readJson, requireString } from "./http.ts";
@@ -257,7 +257,7 @@ route("POST", "/api/admin/suite", async (rc) => {
 	const body = await readJson(rc.request);
 	const repo = repoParam(requireString(body, "repo", 100));
 	const samples = typeof body.samples === "number" ? Math.min(Math.max(Math.floor(body.samples), 1), 5) : 1;
-	return json(await runStockSuite({ env: rc.env, exports: exportsOf(rc.ctx) }, repo, typeof body.ref === "string" ? body.ref : "main", { samples }));
+	return json(await runGate({ env: rc.env, exports: exportsOf(rc.ctx) }, { repo, ref: typeof body.ref === "string" ? body.ref : "main", samples }));
 });
 
 // Stage 3 implements these.

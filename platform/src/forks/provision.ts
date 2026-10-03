@@ -42,6 +42,8 @@ export interface ForkInfo {
 	remote: string;
 	stockTag: string;
 	tau: number | null;
+	stockMinTau: number;
+	preferences: { auto_upgrade: boolean; harvest_opt_in: boolean };
 	persona: string | null;
 	status: string | null;
 	branches: string[];
@@ -130,7 +132,7 @@ export async function provisionFork(env: Env, input: ProvisionInput): Promise<Fo
 			});
 			await pushBranch(ws, remote, "main");
 		}
-		await fleet.update(repoName, { status: "ready" });
+		await fleet.update(repoName, { status: "pinned" });
 		return getForkInfo(env, repoName);
 	} catch (error) {
 		await fleet.update(repoName, { status: "failed" });
@@ -178,12 +180,19 @@ export async function getForkInfo(env: Env, repoName: string): Promise<ForkInfo>
 		remote: info.remote,
 		stockTag: typeof parsed.stock_tag === "string" ? parsed.stock_tag : (fleetEntry?.pinnedTag ?? "unknown"),
 		tau: typeof thresholds?.tau === "number" ? thresholds.tau : null,
+		stockMinTau: STOCK_MIN_TAU,
+		preferences: preferencesOf(parsed),
 		persona: fleetEntry?.persona ?? null,
 		status: fleetEntry?.status ?? null,
 		branches: refs.filter((r) => r.ref.startsWith("refs/heads/")).map((r) => r.ref.slice("refs/heads/".length)).sort(),
 		head,
 		lastGate: lastRun && lastRun.kind === "gate" ? lastRun : null,
 	};
+}
+
+export function preferencesOf(parsed: Record<string, unknown>): { auto_upgrade: boolean; harvest_opt_in: boolean } {
+	const prefs = (parsed.preferences ?? {}) as Record<string, unknown>;
+	return { auto_upgrade: prefs.auto_upgrade === true, harvest_opt_in: prefs.harvest_opt_in !== false };
 }
 
 export class ForkNotFoundError extends Error {

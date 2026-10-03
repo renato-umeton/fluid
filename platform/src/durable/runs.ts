@@ -4,14 +4,17 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Json } from "../lib/json.ts";
 
-export type RunKind = "customize" | "gate" | "upgrade" | "repair" | "harvest" | "onboarding";
-export type RunStatus = "queued" | "running" | "waiting" | "passed" | "failed" | "complete" | "error";
+export type RunKind = "customize" | "gate" | "upgrade" | "repair" | "harvest" | "onboarding" | "release" | "seed";
+/** Final statuses are passed and failed (the UI polls until it sees one). */
+export type RunStatus = "queued" | "running" | "waiting" | "passed" | "failed";
+export type StepStatus = "pending" | "running" | "waiting" | "done" | "failed" | "info";
 
 export interface RunStep {
 	at: string;
 	name: string;
-	status: "started" | "ok" | "failed" | "info";
-	detail?: Json;
+	status: StepStatus;
+	detail?: string;
+	finishedAt?: string;
 }
 
 export interface Run {
@@ -57,6 +60,43 @@ export class Runs extends DurableObject<Env> {
 		if (!this.read()) throw new Error("addStep: run does not exist");
 		this.ctx.storage.sql.exec("INSERT INTO steps (step) VALUES (?)", JSON.stringify({ ...step, at: step.at ?? new Date().toISOString() }));
 		return this.touch({});
+	}
+
+	/**
+	 * Records a step by name: updates the latest unfinished step with that name
+	 * (running or waiting), or appends a new one. Finished steps get finishedAt.
+	 */
+	step(name: string, status: StepStatus, detail?: string): Run {
+		if (!this.read()) throw new Error("step: run does not exist");
+		const now = new Date().toISOString();
+		const open = this.ctx.storage.sql
+			.exec("SELECT seq, step FROM steps ORDER BY seq DESC")
+			.toArray()
+			.map((r) => ({ seq: r.seq as number, step: JSON.parse(r.step as string) as RunStep }))
+			.find((r) => r.step.name === name && (r.step.status === "running" || r.step.status === "waiting" || r.step.status === "pending"));
+		const finished = status === "done" || status === "failed" || status === "info";
+		if (open) {
+			const next: RunStep = { ...open.step, status, ...(detail !== undefined ? { detail } : {}), ...(finished ? { finishedAt: now } : {}) };
+			this.ctx.storage.sql.exec("UPDATE steps SET step = ? WHERE seq = ?", JSON.stringify(next), open.seq);
+		} else {
+			const next: RunStep = { at: now, name, status, ...(detail !== undefined ? { detail } : {}), ...(finished ? { finishedAt: now } : {}) };
+			this.ctx.storage.sql.exec("INSERT INTO steps (step) VALUES (?)", JSON.stringify(next));
+		}
+		return this.touch({});
+	}
+
+	/** Sets the decision on one suggestion; returns the run and whether every suggestion is now decided. */
+	decide(testId: string, decision: "accept" | "reject" | "edit", edited?: Json): { run: Run; allDecided: boolean } {
+		const run = this.read();
+		if (!run) throw new Error("decide: run does not exist");
+		const suggestions = (run.suggestions ?? []) as Record<string, Json>[];
+		const target = suggestions.find((s) => s.id === testId);
+		if (!target) throw new Error(`decide: no suggestion ${testId}`);
+		if (target.decision) throw new Error(`decide: suggestion ${testId} was already decided (${target.decision})`);
+		target.decision = decision;
+		if (decision === "edit" && edited !== undefined) target.edited = edited;
+		const updated = this.touch({ suggestions });
+		return { run: updated, allDecided: suggestions.every((s) => Boolean(s.decision)) };
 	}
 
 	/** Merges fields into the run (status, branch, commit, suggestions, gate, ...). */

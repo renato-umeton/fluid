@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import stockSource from "../src/generated/stock-source.json";
 import synthetic from "../src/generated/synthetic.json";
-import { APP_MODULE, ENTRY_MODULE, buildModuleMap, entrySource, isRuntimePath, moduleName, transformTs } from "../src/runtime/modules.ts";
+import { APP_MODULE, ENTRY_MODULE, RUNNER_ENTRY_MODULE, buildModuleMap, buildRunnerModuleMap, entrySource, isRuntimePath, moduleName, transformTs } from "../src/runtime/modules.ts";
 
 const files = stockSource.files as Record<string, string>;
 
@@ -13,7 +13,8 @@ describe("isRuntimePath", () => {
 		["app/index.ts", true],
 		["policies/registry.json", true],
 		["connectors/redcap.js", true],
-		["tests/runner.ts", true],
+		["tests/runner.ts", false],
+		["tests/user/manifest.json", false],
 		["app/types.d.ts", false],
 		["tests/invariants/manifest.json", false],
 		["fluid.toml", false],
@@ -58,10 +59,10 @@ describe("buildModuleMap", () => {
 		expect(Object.keys(map.modules).some((name) => name.startsWith("tests/invariants") || name === "fluid.toml")).toBe(false);
 	});
 
-	it("includes the runner and an entry module that exposes it", () => {
-		expect(map.hasRunner).toBe(true);
+	it("never includes the runner in a fork runtime", () => {
 		expect(map.mainModule).toBe(ENTRY_MODULE);
-		expect((map.modules[ENTRY_MODULE] as { js: string }).js).toContain('import { runManifest } from "./tests/runner.js"');
+		expect(map.modules["tests/runner.js"]).toBeUndefined();
+		expect((map.modules[ENTRY_MODULE] as { js: string }).js).not.toContain("runner");
 	});
 
 	it("rejects a fork with no app entry", () => {
@@ -76,9 +77,28 @@ describe("buildModuleMap", () => {
 		expect(() => buildModuleMap({ "app/index.ts": "export default {}", "policies/x.json": "{" })).toThrow(/policies\/x\.json/);
 	});
 
-	it("generates an entry without the runner when the fork has none", () => {
-		expect(entrySource(false)).not.toContain("tests/runner.js");
+	it("only hands the model hook to the fork when the call asks for it", () => {
+		expect(entrySource()).toContain("options.useModel && env.LLM");
 		expect(moduleName(APP_MODULE)).toBe(APP_MODULE);
+	});
+});
+
+describe("buildRunnerModuleMap", () => {
+	it("builds the runner isolate from stock's runner, toml, and types only", () => {
+		const runner = buildRunnerModuleMap(files);
+		expect(runner.mainModule).toBe(RUNNER_ENTRY_MODULE);
+		expect(Object.keys(runner.modules).sort()).toEqual(["app/toml.js", "app/types.js", RUNNER_ENTRY_MODULE, "tests/runner.js"].sort());
+	});
+
+	it("ignores fork files even when they are passed in", () => {
+		const runner = buildRunnerModuleMap({ ...files, "app/index.ts": "globalThis.JSON = null;", "connectors/evil.ts": "x" });
+		expect(runner.modules["app/index.js"]).toBeUndefined();
+		expect(runner.modules["connectors/evil.js"]).toBeUndefined();
+	});
+
+	it("fails when stock lacks a runner dependency", () => {
+		const { ["app/toml.ts"]: _toml, ...rest } = files;
+		expect(() => buildRunnerModuleMap(rest)).toThrow(/app\/toml\.ts/);
 	});
 });
 

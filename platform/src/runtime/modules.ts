@@ -8,9 +8,12 @@ import { transform } from "sucrase";
 
 /** Directories whose files are runtime code. Everything else in the repo is ignored by the loader. */
 export const RUNTIME_DIRS = ["app/", "intent/", "policies/", "connectors/"] as const;
-/** The stock probe runner. When present it is loaded too, so the gate can run probes inside the isolate. */
+/** The stock probe runner. It runs in its own isolate built only from stock files (see buildRunnerModuleMap). */
 export const RUNNER_PATH = "tests/runner.ts";
+/** Stock modules the runner imports. The gate always takes these from stock, never from the fork. */
+export const RUNNER_STOCK_DEPS = ["app/toml.ts", "app/types.ts"] as const;
 export const ENTRY_MODULE = "fluid-entry.js";
+export const RUNNER_ENTRY_MODULE = "fluid-runner.js";
 export const APP_MODULE = "app/index.js";
 
 export type LoaderModule = { js: string } | { json: unknown };
@@ -18,12 +21,10 @@ export type LoaderModule = { js: string } | { json: unknown };
 export interface ModuleMap {
 	mainModule: string;
 	modules: Record<string, LoaderModule>;
-	hasRunner: boolean;
 }
 
-/** True for files the loader needs: runtime sources and JSON under RUNTIME_DIRS, plus the runner. */
+/** True for files a fork runtime needs: sources and JSON under RUNTIME_DIRS. Tests are never part of a fork runtime. */
 export function isRuntimePath(path: string): boolean {
-	if (path === RUNNER_PATH) return true;
 	if (!RUNTIME_DIRS.some((dir) => path.startsWith(dir))) return false;
 	if (path.endsWith(".d.ts")) return false;
 	if (/\.test\.[cm]?[jt]s$/.test(path)) return false;
@@ -55,9 +56,45 @@ export function buildModuleMap(files: Record<string, string>): ModuleMap {
 		modules[name] = path.endsWith(".json") ? { json: parseJson(text, path) } : { js: path.endsWith(".ts") ? transformTs(text, path) : text };
 	}
 	if (!modules[APP_MODULE]) throw new Error(`fork has no app/index.ts (or app/index.js); cannot build a runtime`);
-	const hasRunner = moduleName(RUNNER_PATH) in modules;
-	modules[ENTRY_MODULE] = { js: entrySource(hasRunner) };
-	return { mainModule: ENTRY_MODULE, modules, hasRunner };
+	modules[ENTRY_MODULE] = { js: entrySource() };
+	return { mainModule: ENTRY_MODULE, modules };
+}
+
+/**
+ * Module map for the gate's runner isolate: stock's tests/runner.ts plus the
+ * stock modules it imports, all read from stock at the pinned tag. No fork
+ * file is ever part of it, so fork code cannot patch the runner's globals or
+ * its config parser. The runner reaches the fork only through an ask callback.
+ */
+export function buildRunnerModuleMap(stockFiles: Record<string, string>): ModuleMap {
+	const modules: Record<string, LoaderModule> = {};
+	for (const path of [RUNNER_PATH, ...RUNNER_STOCK_DEPS]) {
+		const text = stockFiles[path];
+		if (text === undefined) throw new Error(`stock is missing ${path}; cannot build the gate runner`);
+		modules[moduleName(path)] = { js: transformTs(text, path) };
+	}
+	modules[RUNNER_ENTRY_MODULE] = { js: runnerEntrySource() };
+	return { mainModule: RUNNER_ENTRY_MODULE, modules };
+}
+
+export function runnerEntrySource(): string {
+	return `import { WorkerEntrypoint } from "cloudflare:workers";
+import { runManifest } from "./${moduleName(RUNNER_PATH)}";
+
+export class Runner extends WorkerEntrypoint {
+  async run(manifest, options, ask) {
+    const opts = options || {};
+    const app = { ask: (request) => ask(request) };
+    return runManifest({ app, manifest, forkFiles: opts.forkFiles || {}, env: {}, samples: opts.samples, tier: opts.tier, timeoutMs: opts.timeoutMs });
+  }
+}
+
+export default {
+  async fetch() {
+    return new Response("Fluid gate runner. Use the Runner entrypoint.", { status: 404 });
+  },
+};
+`;
 }
 
 function parseJson(text: string, path: string): unknown {
@@ -69,14 +106,15 @@ function parseJson(text: string, path: string): unknown {
 }
 
 /**
- * Entry module run inside the isolate. env carries fluidToml, forkCommit, data
- * (synthetic), and LLM (an RPC capability back to the platform). The fork
- * sees env.llm as the plain function hook its contract expects.
+ * Entry module run inside the fork isolate. env carries fluidToml, forkCommit,
+ * data (synthetic), and, only in the model variant of the isolate, LLM (an
+ * RPC capability back to the platform). The fork sees env.llm as the plain
+ * function hook its contract expects.
  */
-export function entrySource(hasRunner: boolean): string {
+export function entrySource(): string {
 	return `import { WorkerEntrypoint } from "cloudflare:workers";
 import app from "./${APP_MODULE}";
-${hasRunner ? `import { runManifest } from "./${moduleName(RUNNER_PATH)}";\n` : ""}
+
 function forkEnv(env, options) {
   const out = { fluidToml: env.fluidToml, forkCommit: env.forkCommit, data: env.data };
   if (options && options.useModel && env.LLM) out.llm = (prompt, schema) => env.LLM.complete(prompt, schema);
@@ -86,15 +124,6 @@ function forkEnv(env, options) {
 export class Fork extends WorkerEntrypoint {
   async ask(request, options) {
     return app.ask(request, forkEnv(this.env, options));
-  }
-  async runManifest(manifest, options) {
-    ${hasRunner ? "" : 'throw new Error("this fork has no tests/runner.ts");'}
-    const opts = options || {};
-    const forkFiles = { ...(opts.forkFiles || {}) };
-    if (forkFiles["fluid.toml"] === undefined && this.env.fluidToml !== undefined) forkFiles["fluid.toml"] = this.env.fluidToml;
-    const env = forkEnv(this.env, opts);
-    delete env.fluidToml;
-    return ${hasRunner ? "runManifest({ app, manifest, forkFiles, env, samples: opts.samples })" : "null"};
   }
 }
 
