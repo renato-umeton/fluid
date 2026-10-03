@@ -112,6 +112,32 @@ harvest_opt_in = true
 
 Invariants: every sample passes. Functional: majority. User tier: user-defined, disabling is logged.
 
+### Platform HTTP API (served by platform/, consumed by the UI in platform/public/)
+
+All JSON. Write routes require the demo session cookie issued by `POST /api/session` (public demo: per-visitor sandbox user ids; admin-only routes need the `x-fluid-admin` secret).
+
+```
+POST /api/session                     -> { userId, persona }            body { persona }
+GET  /api/personas                    -> Persona[]
+GET  /api/me                          -> { userId, persona, fork: ForkInfo | null }
+POST /api/forks                       -> ForkInfo                        provision fork from current stock tag
+GET  /api/forks/:repo                 -> ForkInfo { repo, remote, stockTag, tau, branches[], lastGate }
+POST /api/ask                         -> AnswerCard                      body { repo, ref?, question, context, explicitMode?, attestation? }
+POST /api/override                    -> RunTimeRecord                   body { answer_id, mode }
+GET  /api/ledger/:userId              -> RunTimeRecord[]
+GET  /api/intents/:repo               -> BuildTimeIntent[]
+POST /api/customize                   -> { runId }                       body { repo, request }  starts Customize workflow
+GET  /api/runs/:runId                 -> Run { id, kind, status, steps[], branch?, commit?, suggestions?, gate? }
+POST /api/suggestions/:runId/decide   -> Run                             body { testId, decision: "accept"|"reject"|"edit", edited? }
+GET  /api/gates/:repo                 -> GateResult[] { commit, ref, tiers: { invariant, functional, user }, passed, failures[] }
+POST /api/admin/release               -> { tag, upgradeRuns }            body { tag, notes, safety?: boolean } (admin)
+POST /api/admin/fleet/seed            -> { created }                     body { count } (admin)
+GET  /api/fleet                       -> Fleet { stockTags[], forks: { repo, persona, pinnedTag, status, lastRun }[] }
+GET  /api/fleet/stream                -> text/event-stream of fleet status changes
+POST /api/admin/harvest               -> { runId } (admin)
+GET  /api/harvest                     -> HarvestProposal[] { cluster, count, forks[], intents[], draftBranch }
+```
+
 ### Build-time intent record
 
 As in spec section 8, stored at `.intent/<id>.json`, commit trailer `Intent-Id: <id>`.
@@ -120,7 +146,7 @@ As in spec section 8, stored at `.intent/<id>.json`, commit trailer `Intent-Id: 
 **Goal**: Prove each Cloudflare primitive works on this account before building on it.
 **Success Criteria**: A findings file `docs/SPIKE_FINDINGS.md` with working code snippets and exact API shapes for: `fluid` namespace with US jurisdiction; binding `fork`, `readFile` at a tag ref, `createToken`; isomorphic-git clone, commit, branch, tag, merge, push from a Worker; Worker Loader running code read from a repo; Workers AI JSON output via AI Gateway; Queue plus Artifacts event subscription delivering a push event; Workflow start from a queue consumer; Durable Object. Spike Worker deleted afterwards.
 **Tests**: Each primitive exercised against the real account, output recorded.
-**Status**: Not Started
+**Status**: Complete. All nine primitives work; see `docs/SPIKE_FINDINGS.md`. Deviations later stages must apply: fork runtime code is plain ESM JavaScript (`stock/app/index.js`, no TypeScript, since Worker Loader has no build step); binding calls take short refs or SHAs (never `refs/...`); one account-level `repo.pushed` subscription instead of per-repo; annotated tags are peeled before `git.merge`; use the patched MemoryFS from the spike.
 
 ## Stage 1: Stock release content
 **Goal**: The stock repo source: intent engine, mode contracts, policies, US source registry, connectors over synthetic data, invariant and functional suites, and a local probe runner.
