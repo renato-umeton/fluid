@@ -1,7 +1,8 @@
 // Fluid control plane Worker. Static assets (platform/public) are served as a
 // single-page app; /api/* runs here first.
-import { errorResponse, json } from "./api/http.ts";
+import { errorResponse, json, newRequestId } from "./api/http.ts";
 import { handleApi } from "./api/routes.ts";
+import { toHttpError } from "./api/validate.ts";
 import { handlePushEvents } from "./events/consumer.ts";
 
 export { UserLedger } from "./durable/user-ledger.ts";
@@ -23,7 +24,7 @@ export default {
 		try {
 			return await handleApi({ request, env, ctx, url });
 		} catch (error) {
-			return errorResponse(error);
+			return errorResponse(toHttpError(error), newRequestId());
 		}
 	},
 

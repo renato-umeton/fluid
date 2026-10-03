@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { RefNotFoundError, isSha, resolveCommit, shortRef } from "../src/runtime/refs.ts";
+import { InvalidRefError, RefNotFoundError, isSha, resolveCommit, shortRef } from "../src/runtime/refs.ts";
 
 const SHA = "51e4fce944f2e5d131e3e6b7b8457ecc3a34e6a2";
 
@@ -36,13 +36,26 @@ describe("shortRef", () => {
 	it("rejects an empty ref", () => {
 		expect(() => shortRef(" ")).toThrow(/non-empty/);
 	});
+
+	it("throws InvalidRefError so callers can answer 400", () => {
+		expect(() => shortRef("main..other")).toThrow(InvalidRefError);
+	});
 });
 
 describe("resolveCommit", () => {
-	it("returns a SHA without calling the binding", async () => {
-		const repo = fakeRepo({});
+	it("returns a SHA after checking the repo has that commit", async () => {
+		const repo = fakeRepo({ [SHA]: SHA });
 		expect(await resolveCommit(repo, SHA)).toBe(SHA);
-		expect(repo.calls).toEqual([]);
+		expect(repo.calls).toEqual([SHA]);
+	});
+
+	it("throws RefNotFoundError for a SHA the repo does not have", async () => {
+		await expect(resolveCommit(fakeRepo({}), SHA)).rejects.toBeInstanceOf(RefNotFoundError);
+	});
+
+	it("throws RefNotFoundError when the binding fails to read the ref", async () => {
+		const repo = { log: async () => Promise.reject(new Error("object not found")) };
+		await expect(resolveCommit(repo, SHA)).rejects.toBeInstanceOf(RefNotFoundError);
 	});
 
 	it("resolves a full tag ref through log with the short name", async () => {
