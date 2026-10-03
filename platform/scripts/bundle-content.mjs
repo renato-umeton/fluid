@@ -1,6 +1,7 @@
 // Bundles the content the platform Worker needs at runtime but cannot read
 // from disk once deployed:
 //   src/generated/stock-source.json  files of the stock release (published to Artifacts)
+//                                    plus the demo release overlay (appended only to demo releases)
 //   src/generated/synthetic.json     synthetic data injected into fork runtimes as env.data
 // and copies the stock browser bundle for the UI when it has been built:
 //   public/vendor/stock-app.js       from stock/dist/app.js
@@ -71,11 +72,17 @@ function included(path) {
 	return STOCK_INCLUDE.some((entry) => (entry.endsWith("/") ? path.startsWith(entry) : path === entry));
 }
 
+// Invariant probes added only to demo releases (never published as stock content).
+const DEMO_OVERLAY_PATH = "overlays/demo-release/invariants.json";
+
 function bundleStock() {
 	const files = {};
-	for (const [path, text] of Object.entries(readTree("stock"))) {
+	const tree = readTree("stock");
+	for (const [path, text] of Object.entries(tree)) {
 		if (included(path)) files[path] = text;
 	}
+	if (tree[DEMO_OVERLAY_PATH] === undefined) throw new Error(`bundle-content: stock is missing ${DEMO_OVERLAY_PATH}`);
+	const demoOverlay = JSON.parse(tree[DEMO_OVERLAY_PATH]);
 	for (const required of ["app/index.ts", "fluid.toml", "tests/invariants/manifest.json", "tests/functional/manifest.json"]) {
 		if (!(required in files)) throw new Error(`bundle-content: stock is missing ${required}`);
 	}
@@ -83,7 +90,7 @@ function bundleStock() {
 	const latestIntent = intents.length ? JSON.parse(files[intents[intents.length - 1]]) : null;
 	const stockTag = /^stock_tag\s*=\s*"([^"]+)"/m.exec(files["fluid.toml"])?.[1];
 	if (!stockTag) throw new Error("bundle-content: stock fluid.toml has no stock_tag");
-	return { stockTag, intentId: latestIntent?.id ?? null, files };
+	return { stockTag, intentId: latestIntent?.id ?? null, files, demoOverlay };
 }
 
 function bundleSynthetic() {

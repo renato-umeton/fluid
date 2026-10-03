@@ -2,7 +2,8 @@
 // gets releases/<tag>.json in stock: notes, the safety flag, the date, and
 // for safety releases the grace period from spec 7 (after it, a pinned
 // fork's failing capability falls back to stock behavior until repaired).
-import { parseToml } from "../lib/toml.ts";
+import stockSource from "../generated/stock-source.json";
+import { parseToml, setTomlValue } from "../lib/toml.ts";
 
 export const RELEASES_DIR = "releases/";
 /** Spec 7 leaves the length open; the demo uses two weeks. */
@@ -52,10 +53,32 @@ const MULTI_FRAMING_ENDINGS = [
 	"each plausible intent gets its own labeled answer.`,",
 ];
 
+export interface OverlayProbe {
+	id: string;
+	[key: string]: unknown;
+}
+
+/** Invariant probes a demo release adds to the floor (stock/overlays/demo-release/invariants.json). */
+export const DEMO_OVERLAY: { description?: string; probes: OverlayProbe[] } = (stockSource as unknown as { demoOverlay: { description?: string; probes: OverlayProbe[] } }).demoOverlay;
+
+const INVARIANTS_PATH = "tests/invariants/manifest.json";
+
+/** True when an invariant manifest already carries every demo release probe. */
+export function hasDemoTightening(invariantsText: string | null | undefined): boolean {
+	if (!invariantsText) return false;
+	const ids = new Set(((JSON.parse(invariantsText) as { probes?: { id?: string }[] }).probes ?? []).map((p) => p.id));
+	return DEMO_OVERLAY.probes.every((p) => ids.has(p.id));
+}
+
 /**
- * The demo release: the current stock files with one benign wording change
- * to the multi-intent framing (a different phrasing each release), so a
- * release always has a real diff and some customized forks conflict.
+ * The demo release: the current stock files with
+ * - one benign wording change to the multi-intent framing (a different
+ *   phrasing each release), so a release always has a real diff and some
+ *   customized forks conflict;
+ * - the overlay invariants appended to tests/invariants/manifest.json when
+ *   missing, so the release tightens the floor and seeded forks that strip
+ *   the research cross-check fail only at the new tag;
+ * - harvest_opt_in = false in stock's fluid.toml (harvesting is opt-in).
  */
 export function demoReleaseFiles(files: Record<string, string>): { files: Record<string, string>; changed: string[] } {
 	const path = "app/cards.ts";
@@ -67,7 +90,25 @@ export function demoReleaseFiles(files: Record<string, string>): { files: Record
 	const current = lines[index]!;
 	const ending = MULTI_FRAMING_ENDINGS.find((e) => !current.endsWith(e)) ?? MULTI_FRAMING_ENDINGS[0]!;
 	lines[index] = `${MULTI_FRAMING_PREFIX}${ending}`;
-	return { files: { ...files, [path]: lines.join("\n") }, changed: [path] };
+	const out: Record<string, string> = { ...files, [path]: lines.join("\n") };
+	const changed = [path];
+
+	const invariantsText = files[INVARIANTS_PATH];
+	if (invariantsText === undefined) throw new Error(`stock has no ${INVARIANTS_PATH}`);
+	const manifest = JSON.parse(invariantsText) as { probes: OverlayProbe[] };
+	const present = new Set(manifest.probes.map((p) => p.id));
+	const added = DEMO_OVERLAY.probes.filter((p) => !present.has(p.id));
+	if (added.length > 0) {
+		out[INVARIANTS_PATH] = `${JSON.stringify({ ...manifest, probes: [...manifest.probes, ...added] }, null, 2)}\n`;
+		changed.push(INVARIANTS_PATH);
+	}
+
+	const toml = files["fluid.toml"];
+	if (toml !== undefined && (parseToml(toml).preferences as Record<string, unknown> | undefined)?.harvest_opt_in !== false) {
+		out["fluid.toml"] = setTomlValue(toml, "preferences", "harvest_opt_in", false);
+		changed.push("fluid.toml");
+	}
+	return { files: out, changed };
 }
 
 /** Tag pinned in a fluid.toml, or null. */

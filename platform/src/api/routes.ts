@@ -20,7 +20,7 @@ import { cloneRepo, fetchBranch, mergeInto, pushBranch } from "../git/ops.ts";
 import type { Json } from "../lib/json.ts";
 import { shortRef } from "../runtime/refs.ts";
 import { headOf, openRepo } from "../runtime/repo-files.ts";
-import { demoReleaseFiles } from "../stock/releases.ts";
+import { DEMO_OVERLAY, demoReleaseFiles } from "../stock/releases.ts";
 import { appExports, repoRemote, startGateInstance } from "../workflows/common.ts";
 import { decodeParam, HttpError, json, readJson, requireJsonPost, requireString } from "./http.ts";
 import { askRef, parsePreferences } from "./validate.ts";
@@ -448,9 +448,10 @@ route("POST", "/api/admin/release", async (rc) => {
 	} else {
 		if (compareSemverDesc(tag, latest) >= 0) throw new HttpError(409, `${tag} must be newer than the latest tag ${latest}`);
 		const current = await readStockFiles(rc.env, latest);
-		const { files } = demoReleaseFiles(current);
+		const { files, changed } = demoReleaseFiles(current);
 		const intentId = newIntentId();
-		const intent = { id: intentId, author: "mothership:clinical-informatics", agent: null, request: `Release ${tag}${safety ? " (safety release)" : ""}`, purpose: cleanText(notes, 400) || `Stock release ${tag}`, modes_affected: ["research", "administrative"], files: ["app/cards.ts"], tests_added: [], stock_tag: tag };
+		const tightened = changed.includes("tests/invariants/manifest.json") ? DEMO_OVERLAY.probes.map((p) => p.id) : [];
+		const intent = { id: intentId, author: "mothership:clinical-informatics", agent: null, request: `Release ${tag}${safety ? " (safety release)" : ""}`, purpose: cleanText(notes, 400) || `Stock release ${tag}`, modes_affected: ["research", "administrative"], files: changed, tests_added: tightened.map((id) => `tests/invariants/manifest.json#${id}`), stock_tag: tag };
 		result = await publishStockRelease(rc.env, { tag, files: { ...files, [`.intent/${intentId}.json`]: `${JSON.stringify(intent, null, 2)}\n` }, intentId, notes, safety });
 	}
 	await recordRelease(rc.env, tag, result.release, result.commit);

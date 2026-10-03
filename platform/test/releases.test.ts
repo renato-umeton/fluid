@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import stockSource from "../src/generated/stock-source.json";
-import { cleanNotes, demoReleaseFiles, pinnedTagOf, releaseMetadata, releaseMetadataPath, SAFETY_GRACE_DAYS } from "../src/stock/releases.ts";
+import { cleanNotes, DEMO_OVERLAY, demoReleaseFiles, hasDemoTightening, pinnedTagOf, releaseMetadata, releaseMetadataPath, SAFETY_GRACE_DAYS } from "../src/stock/releases.ts";
+import { parseToml } from "../src/lib/toml.ts";
 
 const files = stockSource.files as Record<string, string>;
 
@@ -25,9 +26,9 @@ describe("releaseMetadata", () => {
 });
 
 describe("demoReleaseFiles", () => {
-	it("rewords the multi-intent framing line and nothing else", () => {
+	it("rewords the multi-intent framing line and nothing else in app/cards.ts", () => {
 		const { files: next, changed } = demoReleaseFiles(files);
-		expect(changed).toEqual(["app/cards.ts"]);
+		expect(changed).toContain("app/cards.ts");
 		const before = files["app/cards.ts"]!.split("\n");
 		const after = next["app/cards.ts"]!.split("\n");
 		const diff = before.filter((line, i) => line !== after[i]);
@@ -39,6 +40,35 @@ describe("demoReleaseFiles", () => {
 		const once = demoReleaseFiles(files).files;
 		const twice = demoReleaseFiles(once).files;
 		expect(twice["app/cards.ts"]).not.toBe(once["app/cards.ts"]);
+	});
+});
+
+describe("demo release tightening", () => {
+	const ids = (text: string) => (JSON.parse(text) as { probes: { id: string }[] }).probes.map((p) => p.id);
+
+	it("ships an overlay with at least one invariant probe", () => {
+		expect(DEMO_OVERLAY.probes.length).toBeGreaterThan(0);
+		expect(hasDemoTightening(files["tests/invariants/manifest.json"]!)).toBe(false);
+	});
+
+	it("appends the overlay probes to the invariant suite", () => {
+		const { files: next, changed } = demoReleaseFiles(files);
+		expect(changed).toContain("tests/invariants/manifest.json");
+		const after = ids(next["tests/invariants/manifest.json"]!);
+		for (const probe of DEMO_OVERLAY.probes) expect(after).toContain(probe.id);
+		expect(after.slice(0, ids(files["tests/invariants/manifest.json"]!).length)).toEqual(ids(files["tests/invariants/manifest.json"]!));
+		expect(hasDemoTightening(next["tests/invariants/manifest.json"]!)).toBe(true);
+	});
+
+	it("does not add the probes twice on a later release", () => {
+		const twice = demoReleaseFiles(demoReleaseFiles(files).files).files;
+		const list = ids(twice["tests/invariants/manifest.json"]!);
+		expect(new Set(list).size).toBe(list.length);
+	});
+
+	it("publishes stock with harvesting off by default", () => {
+		const prefs = parseToml(demoReleaseFiles(files).files["fluid.toml"]!).preferences as Record<string, unknown>;
+		expect(prefs.harvest_opt_in).toBe(false);
 	});
 });
 
