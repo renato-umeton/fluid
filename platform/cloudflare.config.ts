@@ -1,4 +1,4 @@
-import { bindings, defineConfig, exports } from "cf/config";
+import { bindings, defineConfig, exports, triggers } from "cf/config";
 import * as entrypoint from "./src/index.ts" with { type: "cf-worker" };
 
 export default defineConfig({
@@ -27,6 +27,16 @@ export default defineConfig({
 			Fleet: exports.durableObject({ storage: "sqlite" }),
 			Runs: exports.durableObject({ storage: "sqlite" }),
 			Quota: exports.durableObject({ storage: "sqlite" }),
+			GateWorkflow: exports.workflow({ name: "fluid-gate" }),
+			CustomizeWorkflow: exports.workflow({ name: "fluid-customize" }),
+			RepairWorkflow: exports.workflow({ name: "fluid-repair" }),
+			UpgradeWorkflow: exports.workflow({ name: "fluid-upgrade" }),
+			ReleaseWorkflow: exports.workflow({ name: "fluid-release" }),
+			SeedFleetWorkflow: exports.workflow({ name: "fluid-seed-fleet" }),
+			SeedForkWorkflow: exports.workflow({ name: "fluid-seed-fork" }),
+			HarvestWorkflow: exports.workflow({ name: "fluid-harvest" }),
 		},
+		// Artifacts repo.pushed events (account-level subscription, see scripts/setup-events.mjs).
+		triggers: [triggers.queue({ name: "fluid-events", maxBatchSize: 10, maxBatchTimeout: 1 })],
 	},
 });

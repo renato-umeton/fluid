@@ -1,17 +1,28 @@
 // Platform HTTP API (docs/IMPLEMENTATION_PLAN.md, "Platform HTTP API").
 // Write routes need the demo session cookie; admin routes need x-fluid-admin.
 import { getForkInfo, findPersona, fleetStub, ForkNotFoundError, personas, provisionFork, readIntents, type ForkInfo } from "../forks/provision.ts";
-import { forkRepoName, isValidRepoName, newSandboxUserId, STOCK_REPO } from "../lib/names.ts";
+import { forkRepoName, isValidRepoName, newIntentId, newSandboxUserId, STOCK_REPO, userIdFromForkRepo } from "../lib/names.ts";
 import { readCookie, safeEqual, SESSION_COOKIE, sessionCookieHeader, signSession, verifySession, type Session } from "../lib/session.ts";
 import { askFork, type PlatformExports } from "../runtime/loader.ts";
 import { RefNotFoundError } from "../runtime/refs.ts";
 import { RepoNotFoundError } from "../runtime/repo-files.ts";
-import { bundledStockRelease, publishStockRelease } from "../stock/publish.ts";
+import { bundledStockRelease, compareSemverDesc, listStockTags, publishStockRelease, readReleaseMetadata, readStockFiles } from "../stock/publish.ts";
 import type { ReleaseMetadata } from "../stock/releases.ts";
 import { runGate } from "../gate/run.ts";
 import type { RunTimeRecord } from "../durable/user-ledger.ts";
-import { ledgerStub, quotaStub } from "../stubs.ts";
-import { HttpError, json, notImplemented, readJson, requireString } from "./http.ts";
+import { ledgerStub, quotaStub, runsStub } from "../stubs.ts";
+import { cleanText } from "../agents/intent.ts";
+import { validateProbe, type Suggestion } from "../agents/suggester.ts";
+import { newRunId } from "../durable/runs.ts";
+import { gateInstanceId, gateModeFor } from "../events/filter.ts";
+import { isSeededRepo, SEED_DEFAULT, SEED_MAX } from "../fleet/seed-catalog.ts";
+import { cloneRepo, fetchBranch, mergeInto, pushBranch } from "../git/ops.ts";
+import type { Json } from "../lib/json.ts";
+import { shortRef } from "../runtime/refs.ts";
+import { headOf, openRepo } from "../runtime/repo-files.ts";
+import { demoReleaseFiles } from "../stock/releases.ts";
+import { appExports, repoRemote, startGateInstance } from "../workflows/common.ts";
+import { HttpError, json, readJson, requireString } from "./http.ts";
 
 export const LIMITS = {
 	sessionsPerClientPerHour: 20,
@@ -21,6 +32,7 @@ export const LIMITS = {
 	forksPerSession: 1,
 	forksTotal: 500,
 	ledgerCommitsPerUserPerHour: 6,
+	customizationsPerUserPerHour: 10,
 };
 
 const MODES = ["clinical", "research", "administrative"];
@@ -274,12 +286,195 @@ route("POST", "/api/admin/suite", async (rc) => {
 	return json(await runGate({ env: rc.env, exports: exportsOf(rc.ctx) }, { repo, ref: typeof body.ref === "string" ? body.ref : "main", samples }));
 });
 
-// Stage 3 implements these.
-route("POST", "/api/customize", async () => notImplemented("customize"));
-route("GET", "/api/runs/:runId", async () => notImplemented("runs"));
-route("POST", "/api/suggestions/:runId/decide", async () => notImplemented("suggestions"));
-route("GET", "/api/gates/:repo", async () => notImplemented("gates"));
-route("POST", "/api/admin/release", async () => notImplemented("release"));
-route("POST", "/api/admin/fleet/seed", async () => notImplemented("fleet seed"));
-route("POST", "/api/admin/harvest", async () => notImplemented("harvest"));
-route("GET", "/api/harvest", async () => notImplemented("harvest"));
+// ---------- Stage 3: gate, agents, releases, fleet, harvest ----------
+
+const RUN_ID = /^run_[A-Za-z0-9_-]{1,100}$/;
+const TAG_PATTERN = /^v\d+\.\d+\.\d+$/;
+
+async function requireForkAccess(rc: RouteContext, repo: string): Promise<Session | null> {
+	if (isAdmin(rc)) return sessionOf(rc);
+	const session = await requireSession(rc);
+	if (repo !== forkRepoName(session.userId)) throw new HttpError(403, "you can change only your own fork");
+	return session;
+}
+
+route("POST", "/api/customize", async (rc) => {
+	const body = await readJson(rc.request);
+	const repo = repoParam(requireString(body, "repo", 100));
+	const session = await requireForkAccess(rc, repo);
+	const request = requireString(body, "request", 1000);
+	const entry = await fleetStub(rc.env).get(repo);
+	if (!entry) throw new HttpError(404, `fork ${repo} is not in the fleet`);
+	await takeQuota(rc.env, `user:${session?.userId ?? "admin"}`, "customize", LIMITS.customizationsPerUserPerHour, 3600);
+	const runId = newRunId("customize");
+	await runsStub(rc.env, runId).create({ id: runId, kind: "customize", repo, status: "running", fields: { request: cleanText(request, 1000) } });
+	await appExports(rc.ctx).CustomizeWorkflow.create({ id: runId, params: { runId, repo, request, userId: session?.userId ?? userIdFromForkRepo(repo) ?? "admin", persona: entry.persona } });
+	return json({ runId }, 202);
+});
+
+route("GET", "/api/runs/:runId", async (rc, { runId }) => {
+	if (!RUN_ID.test(runId!)) throw new HttpError(400, "invalid run id");
+	const run = await runsStub(rc.env, runId!).get();
+	if (!run) throw new HttpError(404, `run ${runId} not found`);
+	return json(run);
+});
+
+route("POST", "/api/suggestions/:runId/decide", async (rc, { runId }) => {
+	if (!RUN_ID.test(runId!)) throw new HttpError(400, "invalid run id");
+	const stub = runsStub(rc.env, runId!);
+	const run = await stub.get();
+	if (!run || run.kind !== "customize") throw new HttpError(404, `customization run ${runId} not found`);
+	await requireForkAccess(rc, run.repo ?? "");
+	const body = await readJson(rc.request);
+	const testId = requireString(body, "testId", 100);
+	const decision = requireString(body, "decision", 10);
+	if (!["accept", "reject", "edit"].includes(decision)) throw new HttpError(400, "decision must be accept, reject, or edit");
+	let edited: Json | undefined;
+	if (decision === "edit") {
+		const assert = (body.edited as { assert?: unknown } | undefined)?.assert;
+		const original = ((run.suggestions ?? []) as unknown as Suggestion[]).find((x) => x.id === testId);
+		if (!original) throw new HttpError(404, `no suggestion ${testId}`);
+		if (!Array.isArray(assert) || assert.length > 10) throw new HttpError(400, "edited.assert must be an array of at most 10 assertions");
+		const problem = validateProbe({ ...original.probe, assert: assert as Record<string, unknown>[] });
+		if (problem) throw new HttpError(400, `edited test is invalid: ${problem}`);
+		edited = { assert } as Json;
+	}
+	let result;
+	try {
+		result = await stub.decide(testId, decision as "accept" | "reject" | "edit", edited);
+	} catch (error) {
+		throw new HttpError(409, error instanceof Error ? error.message : String(error));
+	}
+	if (result.allDecided) {
+		const instance = await appExports(rc.ctx).CustomizeWorkflow.get(runId!);
+		await instance.sendEvent({ type: "suggestions-decided", payload: { at: new Date().toISOString() } });
+	}
+	return json(result.run);
+});
+
+route("GET", "/api/gates/:repo", async (rc, { repo }) => json(await fleetStub(rc.env).gates(repoParam(repo!))));
+
+// Direct gate trigger (queues do not deliver to local dev; also used by scripts).
+route("POST", "/api/gates/:repo", async (rc, { repo }) => {
+	const name = repoParam(repo!);
+	await requireForkAccess(rc, name);
+	const body = await readJson(rc.request);
+	const branch = requireString(body, "branch", 200);
+	if (branch === "main" || branch.startsWith("upgrade/")) throw new HttpError(400, "main and upgrade branches are gated by their own workflows");
+	let commit: string | null;
+	{
+		using handle = await openRepo(rc.env.ARTIFACTS, name);
+		commit = typeof body.commit === "string" ? body.commit : await headOf(handle, shortRef(branch));
+	}
+	if (!commit || !/^[0-9a-f]{40}$/.test(commit)) throw new HttpError(404, `branch ${branch} not found in ${name}`);
+	const started = await startGateInstance(appExports(rc.ctx).GateWorkflow, gateInstanceId(name, branch, commit), { repo: name, branch, commit, mode: gateModeFor(branch), source: "direct" });
+	return json({ runId: started.runId, instanceId: started.id, created: started.created, commit }, started.created ? 202 : 200);
+});
+
+// One-tap upgrade: merge a gated upgrade/<tag> branch into main.
+route("POST", "/api/forks/:repo/upgrade", async (rc, { repo }) => {
+	const name = repoParam(repo!);
+	await requireForkAccess(rc, name);
+	const fleet = fleetStub(rc.env);
+	const entry = await fleet.get(name);
+	const last = entry?.lastRun;
+	if (!entry || !last || last.kind !== "upgrade" || last.status !== "passed" || last.applied !== false || typeof last.tag !== "string" || typeof last.commit !== "string") {
+		throw new HttpError(409, "no gated upgrade is waiting for approval on this fork");
+	}
+	const tag = last.tag;
+	const remote = await repoRemote(rc.env, name, "write");
+	const ws = await cloneRepo({ ...remote, ref: "main", singleBranch: true });
+	await fetchBranch(ws, remote, `upgrade/${tag}`);
+	const outcome = await mergeInto(ws, { ours: "main", theirs: last.commit, message: `Upgrade to stock ${tag}\n\nApproved by the user after the gate passed on upgrade/${tag} at ${last.commit.slice(0, 7)}.` });
+	if (!outcome.ok) throw new HttpError(409, `main moved since the upgrade was gated (${outcome.conflicts.filepaths.join(", ")}); a new upgrade run is needed`);
+	if (!outcome.alreadyMerged) await pushBranch(ws, remote, "main");
+	const updated = await fleet.update(name, { status: "passed", pinnedTag: tag, lastRun: { ...last, applied: true, at: new Date().toISOString() } });
+	return json({ repo: name, tag, commit: outcome.oid, fork: updated });
+});
+
+route("POST", "/api/admin/release", async (rc) => {
+	requireAdmin(rc);
+	const body = await readJson(rc.request);
+	const tag = requireString(body, "tag", 40);
+	if (!TAG_PATTERN.test(tag)) throw new HttpError(400, "tag must look like v1.2.0");
+	const notes = typeof body.notes === "string" ? body.notes : "";
+	const safety = body.safety === true;
+	const tags = await listStockTags(rc.env);
+	const latest = tags[0];
+	if (!latest) throw new HttpError(409, "publish stock first");
+	let result;
+	if (tags.includes(tag)) {
+		if (tag !== latest) throw new HttpError(409, `stock ${tag} already exists and is not the latest tag (${latest})`);
+		// Re-running the fan-out for the latest tag (for example after seeding more forks) does not republish it.
+		using stock = await openRepo(rc.env.ARTIFACTS, STOCK_REPO);
+		result = { commit: (await headOf(stock, tag)) ?? "", alreadyPublished: true, release: await readReleaseMetadata(rc.env, tag) };
+	} else {
+		if (compareSemverDesc(tag, latest) >= 0) throw new HttpError(409, `${tag} must be newer than the latest tag ${latest}`);
+		const current = await readStockFiles(rc.env, latest);
+		const { files } = demoReleaseFiles(current);
+		const intentId = newIntentId();
+		const intent = { id: intentId, author: "mothership:clinical-informatics", agent: null, request: `Release ${tag}${safety ? " (safety release)" : ""}`, purpose: cleanText(notes, 400) || `Stock release ${tag}`, modes_affected: ["research", "administrative"], files: ["app/cards.ts"], tests_added: [], stock_tag: tag };
+		result = await publishStockRelease(rc.env, { tag, files: { ...files, [`.intent/${intentId}.json`]: `${JSON.stringify(intent, null, 2)}\n` }, intentId, notes, safety });
+	}
+	await recordRelease(rc.env, tag, result.release, result.commit);
+	const repos = (await fleetStub(rc.env).list()).filter((f) => f.status !== "provisioning").map((f) => f.repo);
+	const runId = newRunId("release");
+	await runsStub(rc.env, runId).create({ id: runId, kind: "release", status: "running", fields: { tag, safety, forks: repos.length } });
+	await appExports(rc.ctx).ReleaseWorkflow.create({ id: runId, params: { runId, tag, safety: result.release?.safety ?? safety, graceUntil: result.release?.graceUntil ?? null, repos } });
+	return json({ tag, upgradeRuns: repos.length, runId, commit: result.commit, alreadyPublished: result.alreadyPublished, release: result.release }, 202);
+});
+
+route("POST", "/api/admin/fleet/seed", async (rc) => {
+	requireAdmin(rc);
+	const body = await readJson(rc.request);
+	const count = Math.max(1, Math.min(SEED_MAX, Math.floor(typeof body.count === "number" ? body.count : SEED_DEFAULT)));
+	const existing = await fleetStub(rc.env).count();
+	if (existing + count > SEED_MAX + 50) throw new HttpError(409, `the fleet has ${existing} forks; seeding ${count} more would pass the ${SEED_MAX + 50} cap. Clean up first.`);
+	const batch = [...crypto.getRandomValues(new Uint8Array(3))].map((b) => b.toString(16).padStart(2, "0")).join("");
+	const runId = newRunId("seed");
+	await runsStub(rc.env, runId).create({ id: runId, kind: "seed", status: "running", fields: { batch, count } });
+	await appExports(rc.ctx).SeedFleetWorkflow.create({ id: runId, params: { runId, batch, count } });
+	return json({ created: count, batch, runId }, 202);
+});
+
+// Deletes forks created by seeding (fleet entries flagged seeded with a user-seed- name). Never touches stock or user forks.
+route("POST", "/api/admin/fleet/cleanup", async (rc) => {
+	requireAdmin(rc);
+	const body = await readJson(rc.request);
+	const batch = typeof body.batch === "string" ? body.batch : null;
+	const fleet = fleetStub(rc.env);
+	const targets = (await fleet.list()).filter((f) => f.seeded && isSeededRepo(f.repo) && (!batch || f.repo.startsWith(`user-seed-${batch}-`))).map((f) => f.repo);
+	const deleted: string[] = [];
+	const failed: { repo: string; error: string }[] = [];
+	let next = 0;
+	const worker = async () => {
+		while (next < targets.length) {
+			const repo = targets[next++]!;
+			if (repo === STOCK_REPO || !isSeededRepo(repo)) continue;
+			try {
+				await rc.env.ARTIFACTS.delete(repo).catch((error: unknown) => {
+					if (!/not found/i.test(String((error as Error)?.message))) throw error;
+				});
+				await fleet.remove(repo);
+				deleted.push(repo);
+			} catch (error) {
+				failed.push({ repo, error: error instanceof Error ? error.message : String(error) });
+			}
+		}
+	};
+	await Promise.all(Array.from({ length: 8 }, worker));
+	return json({ deleted: deleted.length, failed });
+});
+
+route("POST", "/api/admin/harvest", async (rc) => {
+	requireAdmin(rc);
+	const runId = newRunId("harvest");
+	await runsStub(rc.env, runId).create({ id: runId, kind: "harvest", status: "running" });
+	await appExports(rc.ctx).HarvestWorkflow.create({ id: runId, params: { runId } });
+	return json({ runId }, 202);
+});
+
+route("GET", "/api/harvest", async (rc) => {
+	const stored = (await fleetStub(rc.env).getValue("harvest")) as { proposals?: unknown[] } | null;
+	return json(stored?.proposals ?? []);
+});

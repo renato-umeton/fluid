@@ -257,6 +257,11 @@ export async function pushTag(ws: Workspace, remote: Remote, tag: string): Promi
 	return { ok: true, ref };
 }
 
+/** Fetches one remote branch into a working copy (refs/remotes/origin/<branch>) so its commits can be merged. */
+export async function fetchBranch(ws: Workspace, remote: Remote, branch: string): Promise<void> {
+	await git.fetch({ fs: ws.fs, http: ws.http, dir: ws.dir, url: remote.url, ref: branch, remoteRef: branch, singleBranch: true, tags: false, onAuth: onAuthFor(remote.token) });
+}
+
 /** Lists refs on a remote without cloning. */
 export async function listRemoteRefs(remote: Remote, http: GitHttp = webHttp): Promise<{ ref: string; oid: string }[]> {
 	const refs = await git.listServerRefs({ http, url: remote.url, onAuth: onAuthFor(remote.token) });
