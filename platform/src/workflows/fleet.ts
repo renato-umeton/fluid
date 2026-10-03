@@ -7,7 +7,7 @@
 // opted-in forks, clusters them, labels clusters with the model, and drafts
 // eligible ones as harvest/<slug> branches in stock.
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
-import { clusterRecords, deterministicLabel, harvestable, LABEL_SCHEMA, labelPrompt, proposalOf, type HarvestProposal, type HarvestRecord } from "../agents/harvest-cluster.ts";
+import { clusterRecords, deterministicLabel, draftFilesFor, harvestable, LABEL_SCHEMA, labelPrompt, proposalOf, type HarvestProposal, type HarvestRecord } from "../agents/harvest-cluster.ts";
 import { buildIntent, intentJson, intentPath, cleanText } from "../agents/intent.ts";
 import { cloneRepo, commitChanges, checkoutBranch, deleteRemoteBranch, headCommit, listRemoteRefs, pushBranch, readWorkspaceFile, writeFiles } from "../git/ops.ts";
 import synthetic from "../generated/synthetic.json";
@@ -233,7 +233,7 @@ export class HarvestWorkflow extends WorkflowEntrypoint<Env, HarvestParams> {
 			}
 			for (const pr of eligible) {
 				const draftBranch = `harvest/${pr.slug}`;
-				const files = await referenceFiles(this.env, pr.referenceFork!, pr.proposedFiles);
+				const files = await referenceFiles(this.env, pr.referenceFork!, draftFilesFor(pr));
 				await checkoutBranch(ws, "main");
 				await checkoutBranch(ws, draftBranch, { create: true });
 				const intentId = newIntentId();

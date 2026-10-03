@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import stockSource from "../src/generated/stock-source.json";
 import synthetic from "../src/generated/synthetic.json";
-import { clusterRecords, eligibility, forksIn, proposalOf, deterministicLabel, type HarvestRecord } from "../src/agents/harvest-cluster.ts";
+import { clusterRecords, draftFilesFor, eligibility, forksIn, proposalOf, deterministicLabel, type HarvestRecord } from "../src/agents/harvest-cluster.ts";
 import { buildIntent, cleanText, slugify } from "../src/agents/intent.ts";
 import { diffEntries, lineStats } from "../src/agents/diff.ts";
 import { matchRecipe, protocolsFor, redcapChange, replanOnMovedMain, tauChange, tauTarget } from "../src/agents/recipes.ts";
@@ -338,5 +338,15 @@ describe("replanOnMovedMain", () => {
 		const change = { summary: "s", purpose: "p", modes_affected: [], files: { "app/index.ts": "x" }, notes: {}, recipe: "model" as const };
 		const result = replanOnMovedMain({ change, request: "r", before: { "app/index.ts": "a" }, current: { "app/index.ts": "b" }, protocols });
 		expect(result).toEqual({ error: expect.stringContaining("app/index.ts") });
+	});
+});
+
+describe("harvest draft files", () => {
+	it("copies only runtime files the reference fork's matching intent records list", () => {
+		const records = [0, 1, 2].map((i) => rec(`user-d${i}`, `int_d${i}`, requestFor("redcap", i), ["connectors/redcap.ts", "app/index.ts"]));
+		records.push(rec("user-d0", "int_other", "Unrelated change", ["connectors/other.ts"], "customization-agent", ["administrative"]));
+		const cluster = clusterRecords(records).find((c) => c.records.some((r) => r.intent.id === "int_d0"))!;
+		const proposal = proposalOf(cluster, "REDCap", null);
+		expect(draftFilesFor({ ...proposal, proposedFiles: [...proposal.proposedFiles, "connectors/other.ts", "tests/user/manifest.json"] })).toEqual(["app/index.ts", "connectors/redcap.ts"]);
 	});
 });

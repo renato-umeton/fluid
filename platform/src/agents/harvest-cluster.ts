@@ -180,6 +180,17 @@ export function proposalOf(cluster: Cluster, label: string, summary: string | nu
 	};
 }
 
+/**
+ * Files a harvest draft copies from the reference fork: the cluster's shared
+ * files that the reference fork's own matching intent records list, runtime
+ * code only. Anything else in the fork (other customizations, tests) stays out.
+ */
+export function draftFilesFor(proposal: Pick<HarvestProposal, "referenceFork" | "intents" | "proposedFiles">): string[] {
+	if (!proposal.referenceFork) return [];
+	const listed = new Set(proposal.intents.filter((i) => i.repo === proposal.referenceFork).flatMap((i) => i.files));
+	return proposal.proposedFiles.filter((f) => listed.has(f) && /^(app|intent|policies|connectors)\//.test(f)).sort();
+}
+
 export const LABEL_SCHEMA = {
 	type: "object",
 	properties: { label: { type: "string" }, summary: { type: "string" } },
