@@ -158,7 +158,7 @@ As in spec section 8, stored at `.intent/<id>.json`, commit trailer `Intent-Id: 
 **Goal**: Control plane Worker: git ops library, stock publishing and tagging, fork provisioning, fork runtime via Worker Loader, ask API, UserLedger DO, Fleet DO.
 **Success Criteria**: Running locally against real Artifacts: publish stock v1.0.0, provision a fork, ask the dosing question through the fork runtime, see the run-time record in the ledger.
 **Tests**: Unit tests for git ops and toml handling; integration script hitting the local server.
-**Status**: Not Started
+**Status**: Complete. `platform/` runs locally against real Artifacts and `scripts/smoke.mjs` passes (publish, provision, clinical and research asks, override, ledger commit, fleet). Fork code stays TypeScript: the platform strips types with sucrase at load time (cached per repo:sha) and wraps the fork in a generated `Fork` RPC entrypoint, so the Stage 0 "plain JS" deviation no longer applies. Stock is bundled from git HEAD. Open item: `stock` v1.0.0 was published from commit 6693689, before the review fixes in ec3d27f; republishing needs the `stock` repo deleted (left to the user).
 
 ## Stage 3: Gate and agents
 **Goal**: Queue consumer, Gate Workflow (three tiers against the branch runtime, merge on pass), Customization agent, Test suggester, Repair agent, Upgrade Workflow fan-out, Harvester.
