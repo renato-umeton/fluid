@@ -135,7 +135,7 @@ try {
 	check("stock v1.1.0 is published", fleet0.stockTags.includes("v1.1.0"), `tags ${fleet0.stockTags.join(", ")}`);
 
 	await call("POST", "/api/session", { persona: "research-coordinator" });
-	const fork = await timed("provision fork", () => call("POST", "/api/forks", {}));
+	const fork = await timed("provision fork", () => call("POST", "/api/forks", {}, admin));
 	repo = fork.repo;
 	check("fork provisioned on the latest tag", fork.stockTag === fleet0.stockTags[fleet0.stockTags.length - 1], `${repo} on ${fork.stockTag}`);
 

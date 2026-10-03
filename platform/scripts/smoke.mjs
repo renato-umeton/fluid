@@ -46,7 +46,7 @@ check("session issued", typeof session.data.userId === "string" && cookie.starts
 const userId = session.data.userId;
 
 const latestTag = (await call("GET", "/api/fleet")).data.stockTags.at(-1);
-const fork = await call("POST", "/api/forks", {});
+const fork = await call("POST", "/api/forks", {}, admin);
 check("fork provisioned on the latest stock tag", fork.data.repo === `user-${userId}` && fork.data.stockTag === latestTag, `${fork.data.repo} on ${fork.data.stockTag}, tau ${fork.data.tau}, ${fork.ms} ms`);
 
 const intents = await call("GET", `/api/intents/${fork.data.repo}`);

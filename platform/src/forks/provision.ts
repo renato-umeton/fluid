@@ -5,7 +5,7 @@ import synthetic from "../generated/synthetic.json";
 import { cloneRepo, commitChanges, deleteRemoteBranch, listRemoteRefs, pushBranch, readWorkspaceFile, writeFiles, type Remote } from "../git/ops.ts";
 import { forkRepoName, newIntentId, STOCK_REPO } from "../lib/names.ts";
 import { parseToml, setTomlValue } from "../lib/toml.ts";
-import { headOf, isNotFound, readCommitFiles, readTextFile } from "../runtime/repo-files.ts";
+import { headOf, isNotFound, openRepo, readCommitFiles, readTextFile } from "../runtime/repo-files.ts";
 import { listStockTags } from "../stock/publish.ts";
 import { fleetStub } from "../stubs.ts";
 export { fleetStub };
@@ -227,7 +227,7 @@ export class ForkNotFoundError extends Error {
 
 /** Build-time intent records at a ref (files under .intent/). */
 export async function readIntents(env: Env, repoName: string, ref = "main"): Promise<BuildTimeIntent[]> {
-	using repo = await env.ARTIFACTS.get(repoName);
+	using repo = await openRepo(env.ARTIFACTS, repoName);
 	const sha = await headOf(repo, ref);
 	if (!sha) throw new ForkNotFoundError(`${repoName}@${ref}`);
 	const files = await readCommitFiles(repo, sha, { file: (p) => p.startsWith(".intent/") && p.endsWith(".json"), dir: (p) => p === ".intent" });

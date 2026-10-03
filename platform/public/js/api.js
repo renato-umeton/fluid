@@ -35,11 +35,13 @@ export function setAdminKey(value) {
 async function call(method, path, body, { admin = false } = {}) {
   if (mock) return mock.handle(method, path, body);
   const headers = { accept: "application/json" };
-  if (body !== undefined) headers["content-type"] = "application/json";
+  // The platform accepts POST only as JSON (its cross-site request guard), so every write sends a JSON body.
+  const sendsBody = method !== "GET" && method !== "HEAD";
+  if (sendsBody) headers["content-type"] = "application/json";
   if (admin && adminKey()) headers["x-fluid-admin"] = adminKey();
   const res = await fetch(path, {
     method, headers, credentials: "same-origin",
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: sendsBody ? JSON.stringify(body ?? {}) : undefined,
   });
   const text = await res.text();
   let data = null;

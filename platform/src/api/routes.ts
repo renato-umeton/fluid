@@ -1,11 +1,11 @@
 // Platform HTTP API (docs/IMPLEMENTATION_PLAN.md, "Platform HTTP API").
 // Write routes need the demo session cookie; admin routes need x-fluid-admin.
 import { getForkInfo, findPersona, fleetStub, ForkNotFoundError, personas, provisionFork, readIntents, type ForkInfo } from "../forks/provision.ts";
+import { clientKey } from "../lib/client.ts";
+import { scrubText } from "../git/tokens.ts";
 import { forkRepoName, isValidRepoName, newIntentId, newSandboxUserId, STOCK_REPO, userIdFromForkRepo } from "../lib/names.ts";
 import { readCookie, safeEqual, SESSION_COOKIE, sessionCookieHeader, signSession, verifySession, type Session } from "../lib/session.ts";
 import { askFork, type PlatformExports } from "../runtime/loader.ts";
-import { RefNotFoundError } from "../runtime/refs.ts";
-import { RepoNotFoundError } from "../runtime/repo-files.ts";
 import { bundledStockRelease, compareSemverDesc, listStockTags, publishStockRelease, readReleaseMetadata, readStockFiles } from "../stock/publish.ts";
 import type { ReleaseMetadata } from "../stock/releases.ts";
 import { runGate } from "../gate/run.ts";
@@ -22,18 +22,26 @@ import { shortRef } from "../runtime/refs.ts";
 import { headOf, openRepo } from "../runtime/repo-files.ts";
 import { demoReleaseFiles } from "../stock/releases.ts";
 import { appExports, repoRemote, startGateInstance } from "../workflows/common.ts";
-import { HttpError, json, readJson, requireString } from "./http.ts";
+import { decodeParam, HttpError, json, readJson, requireJsonPost, requireString } from "./http.ts";
+import { askRef, parsePreferences } from "./validate.ts";
 
 export const LIMITS = {
 	sessionsPerClientPerHour: 20,
 	asksPerUserPerMinute: 10,
+	asksPerClientPerMinute: 30,
 	asksGlobalPerMinute: 300,
 	overridesPerUserPerMinute: 30,
-	forksPerSession: 1,
+	forksPerClientPerHour: 3,
+	forksGlobalPerHour: 60,
 	forksTotal: 500,
+	readsPerClientPerMinute: 60,
 	ledgerCommitsPerUserPerHour: 6,
 	customizationsPerUserPerHour: 10,
 };
+
+/** Fork info is read from Artifacts; repeated reads within this window share one result. */
+const FORK_INFO_TTL_MS = 5_000;
+const FORK_INFO_CACHE_LIMIT = 500;
 
 const MODES = ["clinical", "research", "administrative"];
 
@@ -62,6 +70,7 @@ function route(method: string, path: string, handler: Handler): void {
 }
 
 export async function handleApi(rc: RouteContext): Promise<Response> {
+	requireJsonPost(rc.request, rc.url);
 	let methodMismatch = false;
 	for (const r of routes) {
 		const match = r.pattern.exec(rc.url.pathname);
@@ -70,7 +79,7 @@ export async function handleApi(rc: RouteContext): Promise<Response> {
 			methodMismatch = true;
 			continue;
 		}
-		const params = Object.fromEntries(r.keys.map((key, i) => [key, decodeURIComponent(match[i + 1]!)]));
+		const params = Object.fromEntries(r.keys.map((key, i) => [key, decodeParam(match[i + 1]!)]));
 		return r.handler(rc, params);
 	}
 	if (methodMismatch) throw new HttpError(405, `method ${rc.request.method} not allowed on ${rc.url.pathname}`);
@@ -107,7 +116,24 @@ async function takeQuota(env: Env, subject: string, bucket: string, limit: numbe
 }
 
 function clientId(rc: RouteContext): string {
-	return rc.request.headers.get("cf-connecting-ip") ?? "local";
+	return clientKey(rc.request.headers.get("cf-connecting-ip"));
+}
+
+/** Per-client quota (IPv4 address or IPv6 /64). The admin is exempt; global quotas still apply. */
+async function takeClientQuota(rc: RouteContext, bucket: string, limit: number, windowSeconds: number): Promise<void> {
+	if (isAdmin(rc)) return;
+	await takeQuota(rc.env, `client:${clientId(rc)}`, bucket, limit, windowSeconds);
+}
+
+/** Quota for reads that go to Artifacts (fork info, intent records). */
+async function takeReadQuota(rc: RouteContext): Promise<void> {
+	await takeClientQuota(rc, "read", LIMITS.readsPerClientPerMinute, 60);
+}
+
+/** Only fleet forks and stock are readable through the API (ledger repos and others stay hidden). */
+async function requirePublicRepo(env: Env, repo: string): Promise<void> {
+	if (repo === STOCK_REPO) return;
+	if (!(await fleetStub(env).get(repo))) throw new HttpError(404, "fork not found");
 }
 
 function exportsOf(ctx: ExecutionContext): PlatformExports {
@@ -119,9 +145,16 @@ function repoParam(value: string): string {
 	return value;
 }
 
+const forkInfoCache = new Map<string, { at: number; info: ForkInfo }>();
+
 async function forkInfoOrNull(env: Env, repo: string): Promise<ForkInfo | null> {
+	const cached = forkInfoCache.get(repo);
+	if (cached && Date.now() - cached.at < FORK_INFO_TTL_MS) return cached.info;
 	try {
-		return await getForkInfo(env, repo);
+		const info = await getForkInfo(env, repo);
+		if (forkInfoCache.size >= FORK_INFO_CACHE_LIMIT) forkInfoCache.delete(forkInfoCache.keys().next().value!);
+		forkInfoCache.set(repo, { at: Date.now(), info });
+		return info;
 	} catch (error) {
 		if (error instanceof ForkNotFoundError) return null;
 		throw error;
@@ -148,7 +181,7 @@ route("POST", "/api/session", async (rc) => {
 	if (!persona) throw new HttpError(400, `unknown persona ${JSON.stringify(personaId)}`);
 	const existing = await sessionOf(rc);
 	if (existing && existing.persona === persona.id) return json({ userId: existing.userId, persona: existing.persona });
-	await takeQuota(rc.env, `client:${clientId(rc)}`, "session", LIMITS.sessionsPerClientPerHour, 3600);
+	await takeClientQuota(rc, "session", LIMITS.sessionsPerClientPerHour, 3600);
 	const session: Session = { userId: newSandboxUserId(), persona: persona.id, issuedAt: Date.now() };
 	const cookie = sessionCookieHeader(await signSession(session, rc.env.SESSION_SECRET), rc.url.protocol === "https:");
 	return json({ userId: session.userId, persona: session.persona }, 200, { "set-cookie": cookie });
@@ -159,6 +192,7 @@ route("GET", "/api/personas", async () => json(personas()));
 route("GET", "/api/me", async (rc) => {
 	const session = await requireSession(rc);
 	const known = await fleetStub(rc.env).forksOfUser(session.userId);
+	if (known.length > 0) await takeReadQuota(rc);
 	const fork = known.length > 0 ? await forkInfoOrNull(rc.env, known[0]!.repo) : null;
 	return json({ userId: session.userId, persona: session.persona, fork });
 });
@@ -166,24 +200,26 @@ route("GET", "/api/me", async (rc) => {
 route("POST", "/api/forks", async (rc) => {
 	const session = await requireSession(rc);
 	const body = await readJson(rc.request);
-	const fleet = fleetStub(rc.env);
-	const own = await fleet.forksOfUser(session.userId);
-	if (own.length === 0 && (await fleet.count()) >= LIMITS.forksTotal) throw new HttpError(429, "the demo fleet is full; try again later");
-	if (own.length >= LIMITS.forksPerSession && own[0]!.repo !== forkRepoName(session.userId)) throw new HttpError(429, "this session already has a fork");
+	const preferences = parsePreferences(body.preferences);
 	const persona = findPersona(session.persona);
 	if (!persona) throw new HttpError(400, `unknown persona ${session.persona}`);
-	const preferences = (body.preferences ?? {}) as Record<string, unknown>;
-	const info = await provisionFork(rc.env, {
-		userId: session.userId,
-		persona,
-		preferences: { auto_upgrade: preferences.auto_upgrade as boolean | undefined, harvest_opt_in: preferences.harvest_opt_in as boolean | undefined },
-	});
+	// A session has one fork (user-<id>); asking again for an existing fork costs no quota.
+	const existing = await fleetStub(rc.env).get(forkRepoName(session.userId));
+	if (!existing || existing.status === "failed") {
+		await takeClientQuota(rc, "fork", LIMITS.forksPerClientPerHour, 3600);
+		await takeQuota(rc.env, "global", "fork", LIMITS.forksGlobalPerHour, 3600);
+	}
+	const info = await provisionFork(rc.env, { userId: session.userId, persona, preferences, maxTotal: LIMITS.forksTotal });
+	forkInfoCache.delete(info.repo);
 	return json(info, 201);
 });
 
 route("GET", "/api/forks/:repo", async (rc, { repo }) => {
-	const info = await forkInfoOrNull(rc.env, repoParam(repo!));
-	if (!info) throw new HttpError(404, `fork ${repo} not found`);
+	const name = repoParam(repo!);
+	await takeReadQuota(rc);
+	await requirePublicRepo(rc.env, name);
+	const info = await forkInfoOrNull(rc.env, name);
+	if (!info) throw new HttpError(404, "fork not found");
 	return json(info);
 });
 
@@ -197,22 +233,15 @@ route("POST", "/api/ask", async (rc) => {
 	if (typeof context !== "object" || context === null || Array.isArray(context)) throw new HttpError(400, "context must be an object");
 	if (body.explicitMode !== undefined && body.explicitMode !== null && !MODES.includes(body.explicitMode as string)) throw new HttpError(400, `explicitMode must be one of ${MODES.join(", ")}`);
 	if (body.attestation !== undefined && typeof body.attestation !== "boolean") throw new HttpError(400, "attestation must be a boolean");
+	const ref = askRef(body.ref, isAdmin(rc));
 	await takeQuota(rc.env, `user:${session.userId}`, "ask", LIMITS.asksPerUserPerMinute, 60);
+	await takeClientQuota(rc, "ask", LIMITS.asksPerClientPerMinute, 60);
 	await takeQuota(rc.env, "global", "ask", LIMITS.asksGlobalPerMinute, 60);
 	const request: Record<string, unknown> = { question, context };
 	if (body.explicitMode) request.explicitMode = body.explicitMode;
 	if (body.attestation !== undefined) request.attestation = body.attestation;
 	if (Array.isArray(body.history)) request.history = (body.history as unknown[]).slice(-10);
-	let result;
-	try {
-		result = await askFork(
-			{ env: rc.env, exports: exportsOf(rc.ctx) },
-			{ repo, ref: typeof body.ref === "string" ? body.ref : "main", request, useModel: body.useModel === true },
-		);
-	} catch (error) {
-		if (error instanceof RefNotFoundError || error instanceof RepoNotFoundError) throw new HttpError(404, error.message);
-		throw error;
-	}
+	const result = await askFork({ env: rc.env, exports: exportsOf(rc.ctx) }, { repo, ref, request, useModel: body.useModel === true });
 	await ledgerStub(rc.env, session.userId).append(session.userId, repo, result.card.ledger as unknown as RunTimeRecord);
 	return json({ ...result.card, fork: { repo, ref: result.ref, commit: result.sha } });
 });
@@ -246,17 +275,22 @@ route("POST", "/api/ledger/commit", async (rc) => {
 
 route("GET", "/api/intents/:repo", async (rc, { repo }) => {
 	const name = repoParam(repo!);
+	const ref = askRef(rc.url.searchParams.get("ref") ?? undefined, isAdmin(rc));
+	await takeReadQuota(rc);
+	await requirePublicRepo(rc.env, name);
 	try {
-		return json(await readIntents(rc.env, name, rc.url.searchParams.get("ref") ?? "main"));
+		return json(await readIntents(rc.env, name, ref));
 	} catch (error) {
-		if (error instanceof ForkNotFoundError) throw new HttpError(404, error.message);
+		if (error instanceof ForkNotFoundError) throw new HttpError(404, "ref not found");
 		throw error;
 	}
 });
 
 route("GET", "/api/fleet", async (rc) => json(await fleetStub(rc.env).snapshot()));
 
-route("GET", "/api/fleet/stream", async (rc) => fleetStub(rc.env).fetch(new Request("https://fleet/stream", { signal: rc.request.signal })));
+route("GET", "/api/fleet/stream", async (rc) =>
+	fleetStub(rc.env).fetch(new Request("https://fleet/stream", { signal: rc.request.signal, headers: { "x-fluid-client": clientId(rc) } })),
+);
 
 // Publishes the stock source bundled into the platform (committed stock/), optionally under a new tag.
 route("POST", "/api/admin/stock/publish", async (rc) => {
@@ -364,9 +398,11 @@ route("POST", "/api/gates/:repo", async (rc, { repo }) => {
 	let commit: string | null;
 	{
 		using handle = await openRepo(rc.env.ARTIFACTS, name);
-		commit = typeof body.commit === "string" ? body.commit : await headOf(handle, shortRef(branch));
+		commit = await headOf(handle, shortRef(branch));
 	}
-	if (!commit || !/^[0-9a-f]{40}$/.test(commit)) throw new HttpError(404, `branch ${branch} not found in ${name}`);
+	if (!commit || !/^[0-9a-f]{40}$/.test(commit)) throw new HttpError(404, "branch not found");
+	// Only the branch head is gated: a caller-chosen commit could name an object outside this fork.
+	if (body.commit !== undefined && body.commit !== commit) throw new HttpError(409, "commit is not the head of the branch");
 	const started = await startGateInstance(appExports(rc.ctx).GateWorkflow, gateInstanceId(name, branch, commit), { repo: name, branch, commit, mode: gateModeFor(branch), source: "direct" });
 	return json({ runId: started.runId, instanceId: started.id, created: started.created, commit }, started.created ? 202 : 200);
 });
@@ -389,6 +425,7 @@ route("POST", "/api/forks/:repo/upgrade", async (rc, { repo }) => {
 	if (!outcome.ok) throw new HttpError(409, `main moved since the upgrade was gated (${outcome.conflicts.filepaths.join(", ")}); a new upgrade run is needed`);
 	if (!outcome.alreadyMerged) await pushBranch(ws, remote, "main");
 	const updated = await fleet.update(name, { status: "passed", pinnedTag: tag, lastRun: { ...last, applied: true, at: new Date().toISOString() } });
+	forkInfoCache.delete(name);
 	return json({ repo: name, tag, commit: outcome.oid, fork: updated });
 });
 
@@ -458,7 +495,7 @@ route("POST", "/api/admin/fleet/cleanup", async (rc) => {
 				await fleet.remove(repo);
 				deleted.push(repo);
 			} catch (error) {
-				failed.push({ repo, error: error instanceof Error ? error.message : String(error) });
+				failed.push({ repo, error: scrubText(error instanceof Error ? error.message : String(error)) });
 			}
 		}
 	};
