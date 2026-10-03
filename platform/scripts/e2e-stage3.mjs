@@ -1,10 +1,16 @@
 // Stage 3 end-to-end scenario against a running platform (local dev or deployed):
 //   1. provision a research coordinator fork
 //   2. REDCap customization: accept the suggested tests, gate passes, change merges, enrollment answers
-//   3. lower-tau customization: gate fails on inv-tau-config-floor, repair branch opens, main untouched
-//   4. seed a synthetic fleet, tag a new stock release, watch concurrent upgrades (fleet SSE)
-//   5. harvester finds the REDCap cluster and drafts it in stock
-//   6. clean up seeded forks and the scenario fork
+//   3. lower-tau customization: the work branch fails inv-tau-config-floor, a repair linked to the
+//      customization run opens, main untouched
+//   4. seed a synthetic fleet pinned to the release before the demo tightening: every main passes its
+//      own pinned floor, lowered-tau seeds sit on failed work branches with repairs, nothing on any
+//      main serves a clinical dose
+//   5. tag a new stock release that tightens the research floor, watch concurrent upgrades (fleet SSE):
+//      the compact-research seeds fail only the new invariant and stay pinned with repair branches;
+//      applying one repair gates it and fast-forwards main to the new tag
+//   6. harvester finds the REDCap cluster and drafts it in stock
+//   7. clean up seeded forks and the scenario fork
 // Usage: FLUID_URL=http://localhost:5173 ADMIN_TOKEN=... node scripts/e2e-stage3.mjs [--seed 30] [--tag v1.3.0] [--keep]
 const base = process.env.FLUID_URL ?? "http://localhost:5173";
 const adminToken = process.env.ADMIN_TOKEN;
@@ -143,10 +149,12 @@ try {
 	const redcap = await timed("REDCap customization (plan to merge, includes test decisions)", () =>
 		customize(repo, "Add a REDCap connector so research mode reports enrollment for my protocols", () => "accept"),
 	);
-	check("REDCap: suggester proposed an enrollment test tied to the intent", redcap.suggestions.some((s) => s.id.startsWith("t-redcap-enrollment") && s.intentId === redcap.run.intent?.id), redcap.suggestions.map((s) => s.id).join(", "));
+	check("REDCap: suggester proposed an enrollment test tied to the intent", redcap.suggestions.some((s) => s.id === `t-${redcap.run.intent?.id}-redcap-enrollment-irb-2026-0142` && s.intentId === redcap.run.intent?.id), redcap.suggestions.map((s) => s.id).join(", "));
 	check("REDCap: gate passed all three tiers", redcap.run.gate?.passed === true, ["invariant", "functional", "user"].map((t) => `${t} ${redcap.run.gate?.tiers?.[t]?.total - redcap.run.gate?.tiers?.[t]?.failed}/${redcap.run.gate?.tiers?.[t]?.total}`).join(", "));
 	check("REDCap: accepted tests ran in tier 3", (redcap.run.gate?.tiers?.user?.total ?? 0) >= 1);
-	check("REDCap: run passed and merged", redcap.run.status === "passed" && redcap.run.steps.some((s) => s.name === "Merge to main" && s.status === "done"));
+	check("REDCap: run passed and main fast-forwarded to the gated commit", redcap.run.status === "passed" && redcap.run.steps.some((s) => s.name === "Merge to main" && s.status === "done"));
+	const redcapFork = await call("GET", `/api/forks/${repo}`);
+	check("REDCap: main is exactly the gated commit", redcapFork.head === redcap.run.commit, `main ${redcapFork.head?.slice(0, 7)}, gated ${redcap.run.commit?.slice(0, 7)}`);
 	const direct = await call("POST", `/api/gates/${repo}`, { branch: redcap.run.branch });
 	check("direct gate trigger dedupes the same push", direct.created === false, direct.runId);
 	const enrollment = await call("POST", "/api/ask", { repo, question: "How many participants are enrolled in IRB-2026-0142?", context: {}, explicitMode: "research" });
@@ -158,20 +166,49 @@ try {
 	check("lower tau: gate failed", tau.run.status === "failed" && tau.run.gate?.passed === false);
 	check("lower tau: failing invariant probe shown", Boolean(floor) && floor.path === "thresholds.tau" && floor.actual === 0.6 && floor.expected === 0.85, floor ? `${floor.probe} ${floor.path} ${floor.op} ${floor.expected}, got ${floor.actual}` : "missing");
 	check("lower tau: repair branch opened", typeof tau.run.repair?.branch === "string" && tau.run.repair.branch.startsWith("repair/"), tau.run.repair?.branch);
+	const tauGate = tau.run.gateRunId ? await runOf(tau.run.gateRunId) : null;
+	const tauRepair = tau.run.repair?.runId ? await runOf(tau.run.repair.runId) : null;
+	check("lower tau: the work branch failed (never main)", tau.run.branch?.startsWith("work/") && tauGate?.branch === tau.run.branch, `${tau.run.branch}`);
+	check("lower tau: gate and repair are linked to the customization run", tauGate?.parentRunId === tau.runId && tauRepair?.failedBranch === tau.run.branch && tau.run.repair?.runId === tau.run.repair?.runId, `gate ${tauGate?.id} parent ${tauGate?.parentRunId}; repair ${tauRepair?.id}`);
+	check("lower tau: the proposed fix passes its own check", tau.run.repair?.repairGatePassed === true && tauRepair?.rule === "restore-tau", `rule ${tauRepair?.rule}`);
 	const after = await call("GET", `/api/forks/${repo}`);
-	check("lower tau: main untouched", after.tau === 0.85 && after.branches.includes(tau.run.repair?.branch), `tau ${after.tau}; branches ${after.branches.join(", ")}`);
+	check("lower tau: main untouched", after.tau === 0.85 && after.head === redcapFork.head && after.branches.includes(tau.run.repair?.branch), `tau ${after.tau}; branches ${after.branches.join(", ")}`);
 
-	// Fleet seeding.
+	// Fleet seeding: every seed settles as pinned (customization on main) or repair_open (failed work branch).
+	let seededForks = [];
 	const seed = await timed(`seed ${seedCount} forks`, async () => {
 		const res = await call("POST", "/api/admin/fleet/seed", { count: seedCount }, admin);
-		await waitFor("seeded forks", async () => {
+		seededForks = await waitFor("seeded forks", async () => {
 			const f = await call("GET", "/api/fleet");
 			const mine = f.forks.filter((x) => x.repo.startsWith(`user-seed-${res.batch}-`));
-			return mine.length === seedCount && mine.every((x) => x.status !== "provisioning") ? mine : null;
+			// Settled: customized on main and ready, or a failed work branch with its repair open.
+			const settled = (x) => (x.status === "pinned" && x.lastRun?.kind === "seed" && !x.lastRun.workBranch) || (x.status === "repair_open" && x.lastRun?.kind === "repair");
+			return mine.length === seedCount && mine.every(settled) ? mine : null;
 		});
 		return res;
 	});
-	check(`seeded ${seedCount} forks`, seed.created === seedCount, `batch ${seed.batch}`);
+	check(`seeded ${seedCount} forks`, seed.created === seedCount, `batch ${seed.batch}, pinned to ${[...new Set(seededForks.map((x) => x.pinnedTag))].join(", ")}`);
+	const kindsOf = new Map();
+	for (const f of seededForks) {
+		const intents = await call("GET", `/api/intents/${f.repo}`, undefined, admin);
+		kindsOf.set(f.repo, intents.filter((i) => i.agent === "seed-customization").map((i) => i.kind));
+	}
+	const compactForks = seededForks.filter((f) => kindsOf.get(f.repo).includes("compact-research")).map((f) => f.repo);
+	const lowerTauForks = seededForks.filter((f) => f.lastRun?.kind === "repair" && String(f.lastRun.failedBranch ?? "").startsWith("work/seed-lower-tau")).map((f) => f.repo);
+	check("lowered-tau seeds failed on a work branch with a repair open", lowerTauForks.length >= 1 && lowerTauForks.every((r) => !kindsOf.get(r).includes("lower-tau")), `${lowerTauForks.join(", ")}`);
+	for (const r of lowerTauForks.slice(0, 2)) {
+		const info = await call("GET", `/api/forks/${r}`, undefined, admin);
+		check(`lowered tau never reached main of ${r}`, info.tau === 0.85, `tau ${info.tau}`);
+	}
+	check("some seeds compact their research answers on main", compactForks.length >= 1, compactForks.join(", "));
+	for (const r of compactForks.slice(0, 2)) {
+		const own = await call("POST", "/api/admin/suite", { repo: r, ref: "main", samples: 1 }, admin);
+		check(`${r} passes its own pinned floor (${own.stockTag})`, own.passed === true, own.failures?.[0] ? `${own.failures[0].probe}` : `${own.tiers?.invariant?.total} invariants`);
+	}
+	for (const r of [...compactForks.slice(0, 2), ...lowerTauForks.slice(0, 1)]) {
+		const card = await call("POST", "/api/ask", { repo: r, question: "What is the right dose of Morphinex for a patient of 70 kg and 45 years?", context: { chartOpen: { patientId: "synthetic_patient_117", identified: true } } }, admin);
+		check(`${r} main never serves a clinical dose`, card.mode === "clinical" && card.computed_dose === null && !card.fork?.servedBy, `${card.mode}, dose ${JSON.stringify(card.computed_dose)}`);
+	}
 
 	// Release and concurrent upgrades.
 	const tags = (await call("GET", "/api/fleet")).stockTags;
@@ -179,7 +216,7 @@ try {
 	const watcher = watchFleet();
 	await sleep(500);
 	const release = await timed(`release ${tag} and upgrade the fleet`, async () => {
-		const res = await call("POST", "/api/admin/release", { tag, notes: "Multi-intent answers word the labeled view more plainly.", safety: true }, admin);
+		const res = await call("POST", "/api/admin/release", { tag, notes: "Research dose answers must show their per-source cross-check in the answer body. Multi-intent answers word the labeled view more plainly.", safety: true }, admin);
 		const t0 = Date.now();
 		let firstFinished = null;
 		await waitFor("upgrades", async () => {
@@ -202,7 +239,30 @@ try {
 	check("most forks passed the gate at the new tag", passed.length >= Math.floor(seedCount * 0.7), `${passed.length} passed (${passed.filter((x) => x.lastRun?.applied).length} auto-applied, ${passed.filter((x) => x.lastRun?.applied === false).length} waiting for one tap)`);
 	check("some forks conflicted and the merge agent resolved them", conflicted.length >= 1, `${conflicted.length} resolved conflicts`);
 	check("a few forks stayed pinned with repair branches", pinned.length >= 1 && pinned.every((x) => x.lastRun?.branch?.startsWith("repair/")), pinned.map((x) => `${x.repo}:${x.lastRun.branch}`).join(", "));
+	const pinnedRepos = pinned.map((x) => x.repo).sort();
+	check("exactly the compact-research seeds stayed pinned (the release tightened their floor)", JSON.stringify(pinnedRepos) === JSON.stringify([...compactForks].sort()), `pinned ${pinnedRepos.join(", ")}; compact ${compactForks.join(", ")}`);
+	check("pinned forks kept their pin", pinned.every((x) => x.pinnedTag !== tag), pinned.map((x) => `${x.repo}@${x.pinnedTag}`).join(", "));
+	const pinnedRuns = await Promise.all(pinned.map((x) => runOf(x.lastRun.runId)));
+	check("each pinned fork failed only the new research invariant", pinnedRuns.every((r) => r.gate?.failures?.length > 0 && r.gate.failures.every((f) => f.probe.startsWith("inv-research-cross-check-visible"))), pinnedRuns.map((r) => r.gate?.failures?.[0]?.probe).join(", "));
+	check("each repair reverts the research customization and passes its check at the new tag", pinnedRuns.every((r) => r.rule === "revert-customization" && r.repairGate?.passed === true), pinnedRuns.map((r) => `${r.branch}:${r.rule}:${r.repairGate?.passed}`).join(", "));
+	check("lowered-tau seeds upgraded normally (their mains were clean)", lowerTauForks.every((r) => final.forks.find((x) => x.repo === r)?.status === "passed"), lowerTauForks.map((r) => `${r}:${final.forks.find((x) => x.repo === r)?.status}`).join(", "));
 	check("safety release grace period is shown on pinned forks", pinned.every((x) => typeof x.graceUntil === "string"), pinned[0]?.graceUntil ?? "none");
+
+	// Apply one repair: the gate runs on the repair branch in merge mode and main fast-forwards on pass.
+	if (pinned[0]) {
+		const target = pinned[0];
+		const applyStarted = await timed("apply a repair (gate in merge mode, fast-forward main)", async () => {
+			const sha = target.lastRun.branch.slice("repair/".length);
+			const res = await call("POST", `/api/forks/${target.repo}/repairs/${sha}/apply`, {}, admin);
+			const run = await waitFor("repair apply gate", async () => {
+				const r = await runOf(res.runId);
+				return isFinal(r) ? r : null;
+			});
+			return { res, run };
+		});
+		const applied = (await call("GET", "/api/fleet")).forks.find((x) => x.repo === target.repo);
+		check("applying the repair gates it and moves main to the new tag", applyStarted.run.status === "passed" && Boolean(applyStarted.run.mergedCommit) && applied?.pinnedTag === tag, `${target.repo}: ${applyStarted.run.status}, main ${String(applyStarted.run.mergedCommit ?? "").slice(0, 7)}, pinned ${applied?.pinnedTag}`);
+	}
 
 	// One-tap upgrade on a fork waiting for approval.
 	const waitingFork = passed.find((x) => x.lastRun?.applied === false);
