@@ -25,6 +25,7 @@ If a step fails after all its retries, the run is marked `failed` with the error
 - **Time limits.** Each fork call from the platform is limited to 10 seconds, and each sample in the runner to 5 seconds.
 - **Tier 3.** Tier 3 is the fork's `tests/user/manifest.json`, always run as tier `user`. A probe with `"disabled": true` is skipped, and the gate logs it with its `disabledReason`.
 - **Model access.** Fork isolates have no model access by default. Only the `:llm` variant, which `POST /api/ask` uses when `useModel` is set, gets the `LLM` capability. `LlmHost` limits model calls to 20 per minute per repo and 200 per minute across the platform.
+- **Gateway backstop.** The `fluid` AI Gateway itself allows at most 300 requests per minute (fixed window), set with `cf ai-gateway gateways update fluid --rate-limiting-limit 300 --rate-limiting-interval 60 --rate-limiting-technique fixed`. The update is a full PUT, so it repeats every current setting unchanged (`workers_ai_billing_mode` stays `postpaid`, `byok_only` stays false, no spend limits); rate limiting is not billed. It caps every model caller together, including the platform's own agents, if a code path ever skips the per-repo and global budgets.
 - **Repairs.** Repair branches are never merged automatically.
 
 ## Routes added in Stage 3
