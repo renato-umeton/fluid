@@ -83,7 +83,7 @@ export class SeedForkWorkflow extends WorkflowEntrypoint<Env, SeedForkParams> {
 		await step.do("provision", GIT_STEP, async () => {
 			const persona = findPersona(spec.persona);
 			if (!persona) throw new Error(`unknown persona ${spec.persona}`);
-			await provisionFork(this.env, { userId: spec.userId, persona, seeded: true, preferences: { auto_upgrade: spec.autoUpgrade, harvest_opt_in: spec.harvestOptIn } });
+			await provisionFork(this.env, { userId: spec.userId, persona, seeded: true, resume: true, preferences: { auto_upgrade: spec.autoUpgrade, harvest_opt_in: spec.harvestOptIn } });
 			return true;
 		});
 		const kinds = spec.kinds.filter((k): k is Exclude<SeedKind, "none"> => k !== "none");

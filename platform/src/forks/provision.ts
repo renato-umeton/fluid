@@ -101,16 +101,35 @@ export interface ProvisionInput {
 	persona: Persona;
 	preferences?: Preferences;
 	seeded?: boolean;
+	/** Refuse a new fork once the fleet holds this many (failed attempts do not count). */
+	maxTotal?: number;
+	/** A workflow retry continuing its own earlier attempt. */
+	resume?: boolean;
+}
+
+export class ProvisioningBusyError extends Error {
+	constructor(readonly repo: string) {
+		super(`fork ${repo} is already being provisioned`);
+		this.name = "ProvisioningBusyError";
+	}
+}
+
+export class FleetFullError extends Error {
+	constructor() {
+		super("the demo fleet is full; try again later");
+		this.name = "FleetFullError";
+	}
 }
 
 /** Creates the user's fork if needed and returns its info. Safe to call twice. */
 export async function provisionFork(env: Env, input: ProvisionInput): Promise<ForkInfo> {
 	const repoName = forkRepoName(input.userId);
 	const fleet = fleetStub(env);
-	const known = await fleet.get(repoName);
-	if (known && known.status !== "provisioning" && known.status !== "failed") return getForkInfo(env, repoName);
 	const stockTag = await currentStockTag(env);
-	await fleet.register({ repo: repoName, userId: input.userId, persona: input.persona.id, pinnedTag: stockTag, status: "provisioning", seeded: input.seeded });
+	const claim = await fleet.claimProvisioning({ repo: repoName, userId: input.userId, persona: input.persona.id, pinnedTag: stockTag, seeded: input.seeded, maxTotal: input.maxTotal, resume: input.resume });
+	if (claim.outcome === "exists") return getForkInfo(env, repoName);
+	if (claim.outcome === "busy") throw new ProvisioningBusyError(repoName);
+	if (claim.outcome === "full") throw new FleetFullError();
 	try {
 		const remote = await forkStock(env, repoName, input.persona);
 		const ws = await cloneRepo({ ...remote, ref: "main", singleBranch: true });

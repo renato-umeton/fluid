@@ -69,8 +69,25 @@ const GATES_PER_REPO = 20;
 const encoder = new TextEncoder();
 const HEARTBEAT_MS = 25_000;
 
+/**
+ * Fleet stream caps for the public demo. A subscriber whose unread backlog
+ * passes `backlogBytes` is dropped, so a client that stops reading cannot
+ * make this object buffer without bound.
+ */
+export const FLEET_STREAM_LIMITS = { total: 200, perClient: 5, backlogBytes: 256 * 1024 };
+
+/** A provisioning claim older than this is treated as abandoned and can be taken over. */
+export const PROVISIONING_STALE_MS = 10 * 60 * 1000;
+
+export type ClaimOutcome = "claimed" | "exists" | "busy" | "full";
+
+interface Subscriber {
+	writer: WritableStreamDefaultWriter<Uint8Array>;
+	client: string;
+}
+
 export class Fleet extends DurableObject<Env> {
-	private subscribers = new Set<WritableStreamDefaultWriter<Uint8Array>>();
+	private subscribers = new Set<Subscriber>();
 	private heartbeat: ReturnType<typeof setInterval> | null = null;
 
 	constructor(ctx: DurableObjectState, env: Env) {
@@ -87,8 +104,8 @@ export class Fleet extends DurableObject<Env> {
 		sql.exec("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL)");
 	}
 
-	register(input: { repo: string; userId: string; persona: string; pinnedTag: string; status?: ForkStatusInput; seeded?: boolean }): FleetFork {
-		const now = new Date().toISOString();
+	register(input: { repo: string; userId: string; persona: string; pinnedTag: string; status?: ForkStatusInput; seeded?: boolean }, at = Date.now()): FleetFork {
+		const now = new Date(at).toISOString();
 		this.ctx.storage.sql.exec(
 			"INSERT INTO forks (repo, user_id, persona, pinned_tag, status, seeded, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(repo) DO UPDATE SET persona = excluded.persona, pinned_tag = excluded.pinned_tag, status = excluded.status, updated_at = excluded.updated_at",
 			input.repo,
@@ -118,8 +135,30 @@ export class Fleet extends DurableObject<Env> {
 		return this.ctx.storage.sql.exec("SELECT * FROM forks ORDER BY created_at").toArray().map(toFork);
 	}
 
+	/** Forks that exist or are being provisioned; failed provisioning attempts do not count. */
 	count(): number {
-		return this.ctx.storage.sql.exec("SELECT count(*) AS n FROM forks").one().n as number;
+		return this.ctx.storage.sql.exec("SELECT count(*) AS n FROM forks WHERE status != 'failed'").one().n as number;
+	}
+
+	/**
+	 * Atomically reserves `repo` for provisioning. "exists": the fork is
+	 * already provisioned. "busy": another request is provisioning it (a
+	 * workflow retry passes `resume` to continue its own attempt; a claim
+	 * older than PROVISIONING_STALE_MS is taken over). "full": a new fork
+	 * would pass `maxTotal`. Durable Object calls run one at a time, so the
+	 * check and the write cannot interleave with another claim.
+	 */
+	claimProvisioning(
+		input: { repo: string; userId: string; persona: string; pinnedTag: string; seeded?: boolean; maxTotal?: number; resume?: boolean },
+		now = Date.now(),
+	): { outcome: ClaimOutcome; fork: FleetFork | null } {
+		const existing = this.get(input.repo);
+		if (existing && existing.status !== "provisioning" && existing.status !== "failed") return { outcome: "exists", fork: existing };
+		const provisioning = existing?.status === "provisioning";
+		if (provisioning && !input.resume && now - Date.parse(existing.updatedAt) < PROVISIONING_STALE_MS) return { outcome: "busy", fork: existing };
+		if (!provisioning && input.maxTotal !== undefined && this.count() >= input.maxTotal) return { outcome: "full", fork: null };
+		const fork = this.register({ repo: input.repo, userId: input.userId, persona: input.persona, pinnedTag: input.pinnedTag, status: "provisioning", seeded: input.seeded }, now);
+		return { outcome: "claimed", fork };
 	}
 
 	/** Updates status, pinned tag, and/or last run, then notifies subscribers. */
@@ -220,15 +259,29 @@ export class Fleet extends DurableObject<Env> {
 		};
 	}
 
-	/** GET /stream: an SSE stream that starts with a snapshot and then carries every change. */
+	/** Number of open stream subscribers. */
+	subscriberCount(): number {
+		return this.subscribers.size;
+	}
+
+	/**
+	 * GET /stream: an SSE stream that starts with a snapshot and then carries
+	 * every change. The caller passes the client key in x-fluid-client.
+	 */
 	override async fetch(request: Request): Promise<Response> {
 		if (new URL(request.url).pathname !== "/stream") return new Response("not found", { status: 404 });
-		const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
-		const writer = writable.getWriter();
-		this.subscribers.add(writer);
+		const client = request.headers.get("x-fluid-client") ?? "unknown";
+		if (this.subscribers.size >= FLEET_STREAM_LIMITS.total) return streamRefusal(503, "the fleet stream is at capacity; try again later");
+		if ([...this.subscribers].filter((s) => s.client === client).length >= FLEET_STREAM_LIMITS.perClient) return streamRefusal(429, "too many fleet streams from this client");
+		const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>(
+			{},
+			new ByteLengthQueuingStrategy({ highWaterMark: FLEET_STREAM_LIMITS.backlogBytes }),
+		);
+		const subscriber: Subscriber = { writer: writable.getWriter(), client };
+		this.subscribers.add(subscriber);
 		this.ensureHeartbeat();
-		void writer.write(encoder.encode(sse("snapshot", this.snapshot()))).catch(() => this.drop(writer));
-		request.signal?.addEventListener("abort", () => this.drop(writer));
+		this.send(subscriber, encoder.encode(sse("snapshot", this.snapshot())));
+		request.signal?.addEventListener("abort", () => this.drop(subscriber));
 		return new Response(readable, {
 			headers: { "content-type": "text/event-stream", "cache-control": "no-cache, no-transform", connection: "keep-alive" },
 		});
@@ -237,12 +290,22 @@ export class Fleet extends DurableObject<Env> {
 	private broadcast(event: FleetEvent): void {
 		if (this.subscribers.size === 0) return;
 		const chunk = encoder.encode(sse(event.type, event));
-		for (const writer of this.subscribers) void writer.write(chunk).catch(() => this.drop(writer));
+		for (const subscriber of this.subscribers) this.send(subscriber, chunk);
 	}
 
-	private drop(writer: WritableStreamDefaultWriter<Uint8Array>): void {
-		if (!this.subscribers.delete(writer)) return;
-		void writer.close().catch(() => undefined);
+	/** Writes to one subscriber, dropping it when it stopped reading or the stream failed. */
+	private send(subscriber: Subscriber, chunk: Uint8Array): void {
+		const desired = subscriber.writer.desiredSize;
+		if (desired === null || desired <= 0) {
+			this.drop(subscriber);
+			return;
+		}
+		void subscriber.writer.write(chunk).catch(() => this.drop(subscriber));
+	}
+
+	private drop(subscriber: Subscriber): void {
+		if (!this.subscribers.delete(subscriber)) return;
+		void subscriber.writer.abort().catch(() => undefined);
 		if (this.subscribers.size === 0 && this.heartbeat) {
 			clearInterval(this.heartbeat);
 			this.heartbeat = null;
@@ -253,9 +316,13 @@ export class Fleet extends DurableObject<Env> {
 		if (this.heartbeat) return;
 		this.heartbeat = setInterval(() => {
 			const ping = encoder.encode(`: ping ${Date.now()}\n\n`);
-			for (const writer of this.subscribers) void writer.write(ping).catch(() => this.drop(writer));
+			for (const subscriber of this.subscribers) this.send(subscriber, ping);
 		}, HEARTBEAT_MS);
 	}
+}
+
+function streamRefusal(status: number, message: string): Response {
+	return new Response(JSON.stringify({ error: message }), { status, headers: { "content-type": "application/json; charset=utf-8", "retry-after": "30" } });
 }
 
 /** Semantic version order, oldest first (v1.2.0 before v1.10.0). */

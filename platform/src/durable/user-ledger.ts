@@ -7,6 +7,7 @@ import type { Json } from "../lib/json.ts";
 import { cloneRepo, commitChanges, initRepo, pushBranch, writeFiles, type Remote } from "../git/ops.ts";
 import { ledgerRepoName } from "../lib/names.ts";
 import { headOf, isNotFound } from "../runtime/repo-files.ts";
+import { fleetStub } from "../stubs.ts";
 
 export const LEDGER_COMMIT_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const MODES = ["clinical", "research", "administrative"] as const;
@@ -36,6 +37,8 @@ export interface LedgerCommitResult {
 	commit: string | null;
 	records: number;
 	files: string[];
+	/** Set when nothing was committed for a reason other than "no new records". */
+	skipped?: "no-fork";
 }
 
 export class UserLedger extends DurableObject<Env> {
@@ -103,6 +106,8 @@ export class UserLedger extends DurableObject<Env> {
 			.toArray()
 			.map((r) => r.day as string);
 		if (dirtyDays.length === 0) return { repo: repoName, commit: null, records: 0, files: [] };
+		// Ledger repos exist only for users with a fork, so visitors who only ask stock cannot create repos.
+		if (!(await this.hasFork(userId))) return { repo: repoName, commit: null, records: 0, files: [], skipped: "no-fork" };
 		const files: Record<string, string> = {};
 		let count = 0;
 		for (const day of dirtyDays) {
@@ -121,12 +126,25 @@ export class UserLedger extends DurableObject<Env> {
 		return { repo: repoName, commit, records: count, files: Object.keys(files) };
 	}
 
+	/**
+	 * Daily commit. The alarm is set again only while records are still
+	 * waiting and the user has a fork; append() sets it when new records arrive.
+	 */
 	override async alarm(): Promise<void> {
 		try {
 			await this.commitPending();
 		} finally {
-			await this.ctx.storage.setAlarm(Date.now() + LEDGER_COMMIT_INTERVAL_MS);
+			const userId = this.userId();
+			if (userId && this.hasDirty() && (await this.hasFork(userId))) await this.ctx.storage.setAlarm(Date.now() + LEDGER_COMMIT_INTERVAL_MS);
 		}
+	}
+
+	private hasDirty(): boolean {
+		return this.ctx.storage.sql.exec("SELECT count(*) AS n FROM records WHERE dirty = 1").one().n !== 0;
+	}
+
+	private async hasFork(userId: string): Promise<boolean> {
+		return (await fleetStub(this.env).forksOfUser(userId)).length > 0;
 	}
 }
 
