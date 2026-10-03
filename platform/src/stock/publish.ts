@@ -123,7 +123,7 @@ export async function readStockFiles(env: Env, ref: string): Promise<Record<stri
 	using repo = await env.ARTIFACTS.get(STOCK_REPO);
 	const sha = await headOf(repo, ref);
 	if (!sha) throw new Error(`stock ref ${ref} not found`);
-	return readCommitFiles(repo, sha, { file: () => true });
+	return await readCommitFiles(repo, sha, { file: () => true });
 }
 
 /** Tags published in stock, newest first by semantic version. */

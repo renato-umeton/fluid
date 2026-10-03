@@ -58,7 +58,8 @@ export function tokensOf(intent: BuildTimeIntent): string[] {
 }
 
 function stem(word: string): string {
-	return word.replace(/(ments?|ings?|ed|es|s)$/, "") || word;
+	if (word.length <= 5 || /(ss|is|us)$/.test(word)) return word;
+	return word.replace(/(ments?|ings?|ed|s)$/, "") || word;
 }
 
 export function jaccard(a: string[], b: string[]): number {

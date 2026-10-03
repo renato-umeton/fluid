@@ -5,7 +5,7 @@
 // opted-in forks, clusters them, labels clusters with the model, and drafts
 // eligible ones as harvest/<slug> branches in stock.
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
-import { clusterRecords, deterministicLabel, LABEL_SCHEMA, labelPrompt, proposalOf, type HarvestProposal, type HarvestRecord } from "../agents/harvest-cluster.ts";
+import { clusterRecords, deterministicLabel, harvestable, LABEL_SCHEMA, labelPrompt, proposalOf, type HarvestProposal, type HarvestRecord } from "../agents/harvest-cluster.ts";
 import { buildIntent, intentJson, intentPath, cleanText } from "../agents/intent.ts";
 import { cloneRepo, commitChanges, checkoutBranch, pushBranch, readWorkspaceFile, writeFiles } from "../git/ops.ts";
 import synthetic from "../generated/synthetic.json";
@@ -140,7 +140,7 @@ export class HarvestWorkflow extends WorkflowEntrypoint<Env, HarvestParams> {
 			optedIn += part.optedIn;
 		}
 		const proposals = await step.do("cluster and label", { retries: { limit: 1, delay: "2 seconds" }, timeout: "5 minutes" }, async () => {
-			await log.step(`Read build-time intent records across ${repos.length} forks`, "done", `${optedIn} opted in; ${records.length} customization records`);
+			await log.step(`Read build-time intent records across ${repos.length} forks`, "done", `${optedIn} opted in; ${records.filter((r) => harvestable(r.intent)).length} customization records (onboarding, merge, and repair records are skipped)`);
 			await log.step("Cluster similar requests", "running");
 			const clusters = clusterRecords(records);
 			await log.step("Cluster similar requests", "done", `${clusters.length} clusters by request, purpose, and files (keyword Jaccard)`);
@@ -242,7 +242,7 @@ async function referenceFiles(env: Env, repo: string, paths: string[]): Promise<
 	const sha = await headOf(handle, "main");
 	if (!sha) return {};
 	const wanted = new Set(paths.filter((path) => isRuntimePath(path)));
-	return readCommitFiles(handle, sha, { file: (path) => wanted.has(path) });
+	return await readCommitFiles(handle, sha, { file: (path) => wanted.has(path) });
 }
 
 function proposalDoc(pr: HarvestProposal, branch: string): string {
