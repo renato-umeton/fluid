@@ -249,6 +249,18 @@ export async function pushBranch(ws: Workspace, remote: Remote, branch: string, 
 	return { ok: true, ref: `refs/heads/${branch}` };
 }
 
+/**
+ * Deletes a branch on the remote. isomorphic-git needs a local ref of the
+ * same name to expand, so a throwaway local branch is created first.
+ */
+export async function deleteRemoteBranch(ws: Workspace, remote: Remote, branch: string): Promise<void> {
+	const local = await git.listBranches({ fs: ws.fs, dir: ws.dir });
+	if (!local.includes(branch)) await git.branch({ fs: ws.fs, dir: ws.dir, ref: branch });
+	const result = await git.push({ fs: ws.fs, http: ws.http, dir: ws.dir, url: remote.url, ref: branch, remoteRef: branch, delete: true, onAuth: onAuthFor(remote.token) });
+	if (!result.ok) throw new Error(`deleteRemoteBranch: deleting ${branch} was rejected: ${JSON.stringify(result.refs)}`);
+	await git.deleteBranch({ fs: ws.fs, dir: ws.dir, ref: branch }).catch(() => undefined);
+}
+
 /** Tags must be pushed explicitly. */
 export async function pushTag(ws: Workspace, remote: Remote, tag: string): Promise<PushResult> {
 	const ref = `refs/tags/${tag}`;

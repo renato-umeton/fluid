@@ -2,7 +2,7 @@
 // commit the onboarding change on main: fluid.toml keeps the stock values and
 // gains the user's preferences, and a build-time intent record explains why.
 import synthetic from "../generated/synthetic.json";
-import { cloneRepo, commitChanges, listRemoteRefs, pushBranch, readWorkspaceFile, writeFiles, type Remote } from "../git/ops.ts";
+import { cloneRepo, commitChanges, deleteRemoteBranch, listRemoteRefs, pushBranch, readWorkspaceFile, writeFiles, type Remote } from "../git/ops.ts";
 import { forkRepoName, newIntentId, STOCK_REPO } from "../lib/names.ts";
 import { parseToml, setTomlValue } from "../lib/toml.ts";
 import { headOf, isNotFound, readCommitFiles, readTextFile } from "../runtime/repo-files.ts";
@@ -114,6 +114,10 @@ export async function provisionFork(env: Env, input: ProvisionInput): Promise<Fo
 	try {
 		const remote = await forkStock(env, repoName, input.persona);
 		const ws = await cloneRepo({ ...remote, ref: "main", singleBranch: true });
+		// The fork copies every stock branch; draft branches (harvest/*) are mothership work, not the user's.
+		for (const ref of await listRemoteRefs(remote)) {
+			if (ref.ref.startsWith("refs/heads/") && ref.ref !== "refs/heads/main") await deleteRemoteBranch(ws, remote, ref.ref.slice("refs/heads/".length));
+		}
 		const stockToml = await readWorkspaceFile(ws, "fluid.toml");
 		if (stockToml === null) throw new Error("stock has no fluid.toml");
 		// A retry after a partial failure may find the onboarding commit already pushed.
