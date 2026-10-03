@@ -170,7 +170,7 @@ As in spec section 8, stored at `.intent/<id>.json`, commit trailer `Intent-Id: 
 **Goal**: Single-page app served by the platform: persona switcher, context simulator (chart, document, screen label), chat with answer cards and override, attestation dialog, gate results, fleet view with live upgrade status, ledger and intent record viewers, harvest view.
 **Success Criteria**: All five demo scenes from spec section 13 can be performed in the browser.
 **Tests**: Component-level checks plus a scripted browser run of each scene.
-**Status**: Not Started
+**Status**: Complete in mock mode. `platform/public/` (plain HTML, CSS, ES modules, no build) covers all five scenes in a scripted browser run; screenshots in `docs/screenshots/`. Mock mode (`?mock=1`, or automatic when `/api/personas` fails) answers with the real engine from `public/vendor/stock-app.js`, which the platform build must copy from `stock/dist/app.js` (gitignored), else canned cards. Against the live platform it still needs Stage 3 routes and these optional fields: `Run.steps[{name,status,detail}]`, `Run.diff[]`, `Run.intent`, `Run.suggestions[{id,title,file,rationale,probe,decision}]`, gate `failures[{tier,probe,sample,samples,path,op,expected,actual}]` (runner per-probe failures also accepted), repair runs with `explanation`, `intentRefs[]`, `safety`, fleet `lastRun{runId,kind,tag,branch,applied}`, and statuses `pinned|upgrading|gating|passed|failed|repair_open`.
 
 ## Stage 5: Ship
 **Goal**: Deployed public demo, seeded fleet, README, LICENSE, `docs/DEMO_SCRIPT.md`, run instructions.

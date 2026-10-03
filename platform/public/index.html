@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fluid control plane</title>
+  <meta name="description" content="Fluid: a personal fork of a clinical assistant for every person in an academic medical center. Synthetic demo data only.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231d2d36'/%3E%3Cpath d='M9 24V8M9 14c0 4 7 3 7 8M9 14c0 3 12 2 12 10' stroke='%23dfe8ea' stroke-width='2.4' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <div class="shell">
+    <aside class="rail" aria-label="Fluid navigation">
+      <div class="brand">
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+          <path d="M9 26V6" stroke="#dfe8ea" stroke-width="2.4" stroke-linecap="round" fill="none"/>
+          <path d="M9 13c0 5 7 4 7 10v3" stroke="#67b3d6" stroke-width="2.4" stroke-linecap="round" fill="none"/>
+          <path d="M9 13c0 4 14 2 14 11v2" stroke="#b39ae0" stroke-width="2.4" stroke-linecap="round" fill="none"/>
+          <circle cx="9" cy="6" r="2.6" fill="#dcae4a"/>
+        </svg>
+        <div>
+          <div class="brand-name">Fluid</div>
+          <div class="brand-sub">Personal software for academic medicine</div>
+        </div>
+      </div>
+
+      <div class="rail-group">
+        <h2 id="persona-heading">Signed in as</h2>
+        <ul class="persona-list" id="persona-list" aria-labelledby="persona-heading"></ul>
+      </div>
+
+      <nav class="rail-group" aria-label="Views">
+        <h2>Views</h2>
+        <ul class="nav-list" id="nav-list">
+          <li><button class="nav-btn" data-view="workspace"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 3h12v8H6l-3 3v-3H2z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>Workspace</button></li>
+          <li><button class="nav-btn" data-view="fork"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="4" cy="3" r="1.6" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="4" cy="13" r="1.6" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="12" cy="5" r="1.6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M4 4.6v6.8M12 6.6c0 3-8 2-8 4.8" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>My fork</button></li>
+          <li><button class="nav-btn" data-view="customize"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 13l7-7M9 3l4 4M10.5 1.5l4 4-2 2-4-4z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>Customize</button></li>
+          <li><button class="nav-btn" data-view="fleet"><svg viewBox="0 0 16 16" aria-hidden="true"><g fill="currentColor"><rect x="2" y="2" width="3" height="3" rx=".5"/><rect x="6.5" y="2" width="3" height="3" rx=".5"/><rect x="11" y="2" width="3" height="3" rx=".5"/><rect x="2" y="6.5" width="3" height="3" rx=".5"/><rect x="6.5" y="6.5" width="3" height="3" rx=".5"/><rect x="11" y="6.5" width="3" height="3" rx=".5" opacity=".4"/><rect x="2" y="11" width="3" height="3" rx=".5"/><rect x="6.5" y="11" width="3" height="3" rx=".5" opacity=".4"/><rect x="11" y="11" width="3" height="3" rx=".5"/></g></svg>Fleet</button></li>
+          <li><button class="nav-btn" data-view="harvest"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4h4M3 8h6M3 12h3M11 4l2 4-2 4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Harvest</button></li>
+          <li><button class="nav-btn" data-view="about"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 7v4M8 4.6v.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>About</button></li>
+        </ul>
+      </nav>
+
+      <div class="rail-foot">
+        <span id="mode-flag"></span>
+        <button type="button" id="theme-toggle" aria-label="Switch color theme">Theme: system</button>
+      </div>
+    </aside>
+
+    <div class="main">
+      <div class="notice-bar" role="note">Synthetic demo data, not for clinical use. Every patient, person, drug, price, and guideline here is fictional.</div>
+      <header class="topbar">
+        <div class="topbar-title">
+          <h1 id="view-title">Workspace</h1>
+          <p id="view-sub"></p>
+        </div>
+        <div class="fork-pill" id="fork-pill" aria-live="polite"></div>
+      </header>
+      <main id="main" tabindex="-1">
+        <section class="view" id="view-workspace" aria-labelledby="view-title"></section>
+        <section class="view" id="view-fork" aria-labelledby="view-title" hidden></section>
+        <section class="view" id="view-customize" aria-labelledby="view-title" hidden></section>
+        <section class="view" id="view-fleet" aria-labelledby="view-title" hidden></section>
+        <section class="view" id="view-harvest" aria-labelledby="view-title" hidden></section>
+        <section class="view" id="view-about" aria-labelledby="view-title" hidden></section>
+      </main>
+    </div>
+  </div>
+
+  <dialog id="attest-dialog" aria-labelledby="attest-title">
+    <form method="dialog">
+      <div class="dialog-body">
+        <h2 id="attest-title">Attestation required</h2>
+        <p class="small">An identified patient is in context (an open chart or active order entry). The research answer includes a computed number, so it is held until you confirm:</p>
+        <p class="attest-statement">I am not making a decision for a patient right now.</p>
+        <p class="small muted">Your attestation is written to your run-time ledger with this answer, the fork commit, and the stock tag.</p>
+      </div>
+      <div class="dialog-actions">
+        <button class="btn" value="cancel">Keep clinical answer</button>
+        <button class="btn btn-primary" value="confirm" id="attest-confirm">Confirm and show research answer</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>
