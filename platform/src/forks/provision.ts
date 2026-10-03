@@ -143,7 +143,7 @@ export async function provisionFork(env: Env, input: ProvisionInput): Promise<Fo
 async function forkStock(env: Env, repoName: string, persona: Persona): Promise<Remote> {
 	using stock = await env.ARTIFACTS.get(STOCK_REPO);
 	try {
-		const fork = await stock.fork(repoName, { description: `Fluid fork for ${persona.displayName}`, defaultBranchOnly: false });
+		const fork = await stock.fork(repoName, { description: `Fluid fork for ${persona.displayName}`, defaultBranchOnly: true });
 		return { url: fork.remote, token: fork.token };
 	} catch (error) {
 		if ((error as { code?: string }).code !== "ALREADY_EXISTS" && !/already exists/i.test(String((error as Error).message))) throw error;

@@ -7,6 +7,7 @@ import { askFork, type PlatformExports } from "../runtime/loader.ts";
 import { RefNotFoundError } from "../runtime/refs.ts";
 import { RepoNotFoundError } from "../runtime/repo-files.ts";
 import { bundledStockRelease, publishStockRelease } from "../stock/publish.ts";
+import type { ReleaseMetadata } from "../stock/releases.ts";
 import { runGate } from "../gate/run.ts";
 import type { RunTimeRecord } from "../durable/user-ledger.ts";
 import { ledgerStub, quotaStub } from "../stubs.ts";
@@ -113,6 +114,15 @@ async function forkInfoOrNull(env: Env, repo: string): Promise<ForkInfo | null> 
 		if (error instanceof ForkNotFoundError) return null;
 		throw error;
 	}
+}
+
+async function recordRelease(env: Env, tag: string, release: ReleaseMetadata | null, commit: string): Promise<void> {
+	const fleet = fleetStub(env);
+	if (!release) {
+		await fleet.addStockTag(tag);
+		return;
+	}
+	await fleet.addRelease({ tag, notes: release.notes, safety: release.safety, date: release.date, graceDays: release.graceDays, graceUntil: release.graceUntil, commit });
 }
 
 // ---------- routes ----------
@@ -236,10 +246,14 @@ route("GET", "/api/fleet", async (rc) => json(await fleetStub(rc.env).snapshot()
 
 route("GET", "/api/fleet/stream", async (rc) => fleetStub(rc.env).fetch(new Request("https://fleet/stream", { signal: rc.request.signal })));
 
+// Publishes the stock source bundled into the platform (committed stock/), optionally under a new tag.
 route("POST", "/api/admin/stock/publish", async (rc) => {
 	requireAdmin(rc);
-	const result = await publishStockRelease(rc.env, bundledStockRelease());
-	await fleetStub(rc.env).addStockTag(result.tag);
+	const body = await readJson(rc.request);
+	const bundled = bundledStockRelease();
+	const tag = typeof body.tag === "string" ? body.tag : bundled.tag;
+	const result = await publishStockRelease(rc.env, { ...bundled, tag, notes: typeof body.notes === "string" ? body.notes : undefined, safety: body.safety === true });
+	await recordRelease(rc.env, result.tag, result.release, result.commit);
 	return json(result, result.alreadyPublished ? 200 : 201);
 });
 

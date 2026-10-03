@@ -3,16 +3,20 @@
 // with an annotated tag. Publishing an existing tag is a no-op, so the admin
 // route and the script are safe to re-run.
 import stockSource from "../generated/stock-source.json";
-import { cloneRepo, commitChanges, createTag, initRepo, listRemoteRefs, pushBranch, pushTag, replaceTree, type Remote, type Workspace } from "../git/ops.ts";
+import { cloneRepo, commitChanges, createTag, initRepo, listRemoteRefs, listTrackedFiles, pushBranch, pushTag, readWorkspaceFile, replaceTree, type Remote, type Workspace } from "../git/ops.ts";
 import { parseToml, setTomlValue } from "../lib/toml.ts";
 import { STOCK_REPO } from "../lib/names.ts";
-import { headOf, isNotFound, readCommitFiles } from "../runtime/repo-files.ts";
+import { headOf, isNotFound, readCommitFiles, readTextFile } from "../runtime/repo-files.ts";
+import { releaseMetadata, releaseMetadataPath, RELEASES_DIR, type ReleaseMetadata } from "./releases.ts";
 
 export interface StockRelease {
 	tag: string;
 	files: Record<string, string>;
 	intentId: string | null;
 	message?: string;
+	notes?: string;
+	/** A safety release tightens the floor; it carries a grace period (spec 7). */
+	safety?: boolean;
 }
 
 export interface PublishResult {
@@ -22,6 +26,7 @@ export interface PublishResult {
 	created: boolean;
 	alreadyPublished: boolean;
 	files: number;
+	release: ReleaseMetadata | null;
 }
 
 const TAG_PATTERN = /^v\d+\.\d+\.\d+(-[A-Za-z0-9.]+)?$/;
@@ -42,22 +47,30 @@ export function alignStockTag(files: Record<string, string>, tag: string): Recor
 export async function publishStockRelease(env: Env, release: StockRelease): Promise<PublishResult> {
 	if (!TAG_PATTERN.test(release.tag)) throw new Error(`invalid stock tag ${JSON.stringify(release.tag)}: expected vMAJOR.MINOR.PATCH`);
 	if (!release.files["app/index.ts"] && !release.files["app/index.js"]) throw new Error("stock release has no app/index.ts");
-	const files = alignStockTag(release.files, release.tag);
+	const releaseFiles = Object.fromEntries(Object.entries(release.files).filter(([path]) => !path.startsWith(RELEASES_DIR)));
+	const files = alignStockTag(releaseFiles, release.tag);
 	const target = await openOrCreateStock(env);
 	if (target.existingTagCommit) {
-		return { repo: STOCK_REPO, tag: release.tag, commit: target.existingTagCommit, created: false, alreadyPublished: true, files: Object.keys(files).length };
+		return { repo: STOCK_REPO, tag: release.tag, commit: target.existingTagCommit, created: false, alreadyPublished: true, files: Object.keys(files).length, release: await readReleaseMetadata(env, release.tag) };
 	}
 	const remote: Remote = { url: target.remote, token: target.token };
 	const ws: Workspace = target.empty ? await initRepo("main") : await cloneRepo({ ...remote, ref: "main", singleBranch: true });
-	await replaceTree(ws, files);
+	// Release metadata accumulates across releases: keep every earlier releases/<tag>.json.
+	const earlier: Record<string, string> = {};
+	for (const path of await listTrackedFiles(ws).catch(() => [] as string[])) {
+		if (path.startsWith(RELEASES_DIR)) earlier[path] = (await readWorkspaceFile(ws, path)) ?? "";
+	}
+	const previousTag = (await listStockTags(env).catch(() => [] as string[]))[0] ?? null;
+	const metadata = releaseMetadata({ tag: release.tag, notes: release.notes, safety: release.safety, previousTag, intentId: release.intentId });
+	await replaceTree(ws, { ...files, ...earlier, [releaseMetadataPath(release.tag)]: `${JSON.stringify(metadata, null, 2)}\n` });
 	const commit = await commitChanges(ws, {
-		message: release.message ?? `Stock release ${release.tag}\n\nPublishes the ${release.tag} floor: intent engine, mode contracts, policies, connectors, and the invariant and functional suites.`,
+		message: release.message ?? defaultMessage(release.tag, metadata),
 		intentId: release.intentId,
 	});
-	await createTag(ws, { tag: release.tag, message: `Fluid stock release ${release.tag}` });
+	await createTag(ws, { tag: release.tag, message: `Fluid stock release ${release.tag}${metadata.safety ? " (safety release)" : ""}\n\n${metadata.notes}`.trimEnd() });
 	await pushBranch(ws, remote, "main");
 	await pushTag(ws, remote, release.tag);
-	return { repo: STOCK_REPO, tag: release.tag, commit, created: target.created, alreadyPublished: false, files: Object.keys(files).length };
+	return { repo: STOCK_REPO, tag: release.tag, commit, created: target.created, alreadyPublished: false, files: Object.keys(files).length, release: metadata };
 
 	async function openOrCreateStock(e: Env) {
 		const existing = await tryGet(e, STOCK_REPO);
@@ -71,6 +84,26 @@ export async function publishStockRelease(env: Env, release: StockRelease): Prom
 		const mainCommit = tagCommit ? null : await headOf(repo, "main");
 		const token = tagCommit ? "" : (await repo.createToken("write", 900)).plaintext;
 		return { remote: info.remote, token, empty: !tagCommit && !mainCommit, created: false, existingTagCommit: tagCommit };
+	}
+}
+
+function defaultMessage(tag: string, metadata: ReleaseMetadata): string {
+	const kind = metadata.safety ? `safety release (grace period ${metadata.graceDays} days, until ${metadata.graceUntil?.slice(0, 10)})` : "release";
+	const notes = metadata.notes ? `\n\n${metadata.notes}` : "";
+	return `Stock ${kind} ${tag}\n\nPublishes the ${tag} floor: intent engine, mode contracts, policies, connectors, and the invariant and functional suites.${notes}`;
+}
+
+/** releases/<tag>.json at that tag, or null for tags published before metadata existed. */
+export async function readReleaseMetadata(env: Env, tag: string): Promise<ReleaseMetadata | null> {
+	const repo = await tryGet(env, STOCK_REPO);
+	if (!repo) return null;
+	using handle = repo;
+	const text = await readTextFile(handle, tag, releaseMetadataPath(tag)).catch(() => null);
+	if (!text) return null;
+	try {
+		return JSON.parse(text) as ReleaseMetadata;
+	} catch {
+		return null;
 	}
 }
 
