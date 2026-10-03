@@ -11,6 +11,7 @@ export interface RecordInput {
   identifiedPatientContext: boolean;
   forkCommit: string;
   stockTag: string;
+  tau: number;
 }
 
 export function runTimeRecord(input: RecordInput): RunTimeRecord {
@@ -24,11 +25,12 @@ export function runTimeRecord(input: RecordInput): RunTimeRecord {
     sources: input.sources.map((s) => s.id),
     fork_commit: input.forkCommit,
     stock_tag: input.stockTag,
+    tau: input.tau,
   };
 }
 
 /** True or false when it matters (identified patient in context) or was given; otherwise null. */
 function attestationValue(request: AskRequest, identifiedPatientContext: boolean): boolean | null {
-  if (request.attestation !== undefined) return request.attestation;
+  if (typeof request.attestation === "boolean") return request.attestation;
   return identifiedPatientContext ? false : null;
 }

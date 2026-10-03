@@ -17,8 +17,9 @@ export const ATTESTATION_HOLD_FACTS = [
   "To view it, confirm \"I am not making a decision for a patient right now.\" The attestation is recorded in the run-time ledger.",
 ];
 
-/** A dose amount in text, for example "7 mg" or "0.5 mcg". */
-export const DOSE_AMOUNT_PATTERN = /\d+(\.\d+)?\s*(mg|mcg|micrograms?|milligrams?|ml|units?)\b/i;
+/** A dose amount in text, for example "7 mg", "0.5 mcg", or "two tablets". */
+export const DOSE_AMOUNT_PATTERN =
+  /(?<![\w.])(\d+(\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|twelve|fifteen|twenty|thirty|fifty|hundred|half)[\s-]*(mgs?|mcg|µg|ug|gm|grams?|g|milligrams?|micrograms?|tabs?|tablets?|cc|ml|drops?|puffs?|patch(es)?|units?)(?!\w)/i;
 
 export interface ModeContract {
   purpose: string;

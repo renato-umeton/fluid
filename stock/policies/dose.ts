@@ -2,6 +2,7 @@
 // produced when units and weight band validate and at least two independent
 // registry publishers cover the case; disagreements are flagged, not hidden.
 import type { ComputedDose } from "../app/types.js";
+import { KNOWN_DRUGS } from "./drugs.js";
 import { STOCK_REGISTRY, registryDrugs, type DosingBand, type RegistryEntry } from "./registry.js";
 
 export interface DoseParameters {
@@ -33,21 +34,27 @@ export const MIN_INDEPENDENT_SOURCES = 2;
 export const DISCREPANCY_TOLERANCE = 0.1;
 const KG_PER_LB = 0.45359237;
 
-const WEIGHT_PATTERN = /(\d+(?:\.\d+)?)\s*(kg|kgs|kilograms?|lbs?|pounds?)\b/i;
+const WEIGHT_PATTERN = /(\d+(?:\.\d+)?)\s*(kg|kgs|kilograms?|lbs?|pounds?)\b/gi;
 const UNSUPPORTED_WEIGHT_PATTERN = /(\d+(?:\.\d+)?)\s*(g|grams?|st|stone|oz|ounces?)\b/i;
-const AGE_PATTERN = /(\d+(?:\.\d+)?)\s*-?\s*(years?|yrs?|yo|y\/o|months?)\b/i;
+const AGE_PATTERN = /(\d+(?:\.\d+)?)\s*-?\s*(years?|yrs?|yo|y\/o|months?)\b/gi;
+/** Two stated weights closer than this (after lb conversion) are the same weight. */
+const SAME_WEIGHT_KG = 0.5;
 
-export function parseDoseParameters(question: string, knownDrugs: string[] = registryDrugs(STOCK_REGISTRY)): DoseParameters {
+export function parseDoseParameters(question: string, knownDrugs: string[] = defaultDrugNames()): DoseParameters {
   const lower = question.toLowerCase();
-  const drug = knownDrugs.find((d) => lower.includes(d)) ?? null;
+  const drugs = knownDrugs.filter((d) => lower.includes(d));
   const notes: string[] = [];
   const problems: string[] = [];
-  if (!drug) problems.push("Drug name not found in the US source registry.");
+  if (drugs.length === 0) problems.push("Drug name not found in the US source registry.");
+  if (drugs.length > 1) problems.push(`Ambiguous drug: the question names more than one drug (${drugs.join(", ")}); ask about one drug at a time.`);
 
   const weightKg = parseWeight(question, notes, problems);
-  const ageYears = parseAge(question);
-  if (ageYears === null) problems.push("Age in years is required.");
-  return { drug, weightKg, ageYears, notes, problems };
+  const ageYears = parseAge(question, problems);
+  return { drug: drugs.length === 1 ? drugs[0]! : null, weightKg, ageYears, notes, problems };
+}
+
+function defaultDrugNames(): string[] {
+  return [...new Set([...registryDrugs(STOCK_REGISTRY), ...KNOWN_DRUGS.map((d) => d.id)])];
 }
 
 export function computeCrossCheckedDose(params: DoseParameters, entries: RegistryEntry[]): DoseOutcome {
@@ -96,24 +103,47 @@ function doseFor(entry: RegistryEntry, band: DosingBand, weightKg: number): Sour
 }
 
 function parseWeight(question: string, notes: string[], problems: string[]): number | null {
-  const match = WEIGHT_PATTERN.exec(question);
-  if (!match) {
+  const matches = [...question.matchAll(WEIGHT_PATTERN)];
+  if (matches.length === 0) {
     const unsupported = UNSUPPORTED_WEIGHT_PATTERN.exec(question);
     problems.push(unsupported ? `Weight unit "${unsupported[2]}" is not supported; use kg or lb.` : "Weight with a unit (kg or lb) is required.");
     return null;
   }
-  const value = Number(match[1]);
-  if (/^(kg|kgs|kilograms?)$/i.test(match[2]!)) return value;
-  const kg = roundTenth(value * KG_PER_LB);
-  notes.push(`Weight ${value} lb converted to ${kg} kg.`);
-  return kg;
+  const weights = matches.map((m) => {
+    const value = Number(m[1]);
+    const isKg = /^(kg|kgs|kilograms?)$/i.test(m[2]!);
+    return { stated: `${value} ${isKg ? "kg" : "lb"}`, value, kg: isKg ? value : roundTenth(value * KG_PER_LB), isKg };
+  });
+  const first = weights[0]!;
+  if (weights.some((w) => Math.abs(w.kg - first.kg) > SAME_WEIGHT_KG)) {
+    problems.push(`Ambiguous weight: the question states more than one weight (${unique(weights.map((w) => w.stated)).join(", ")}); state one weight.`);
+    return null;
+  }
+  const kgWeight = weights.find((w) => w.isKg);
+  if (kgWeight) return kgWeight.value;
+  notes.push(`Weight ${first.value} lb converted to ${first.kg} kg.`);
+  return first.kg;
 }
 
-function parseAge(question: string): number | null {
-  const match = AGE_PATTERN.exec(question);
-  if (!match) return null;
-  const value = Number(match[1]);
-  return /^months?$/i.test(match[2]!) ? Math.round((value / 12) * 100) / 100 : value;
+function parseAge(question: string, problems: string[]): number | null {
+  const ages = [...question.matchAll(AGE_PATTERN)].map((m) => {
+    const value = Number(m[1]);
+    const months = /^months?$/i.test(m[2]!);
+    return { stated: `${value} ${months ? "months" : "years"}`, years: months ? Math.round((value / 12) * 100) / 100 : value };
+  });
+  if (ages.length === 0) {
+    problems.push("Age in years is required.");
+    return null;
+  }
+  if (new Set(ages.map((a) => a.years)).size > 1) {
+    problems.push(`Ambiguous age: the question states more than one age (${unique(ages.map((a) => a.stated)).join(", ")}); state one age.`);
+    return null;
+  }
+  return ages[0]!.years;
+}
+
+function unique(items: string[]): string[] {
+  return [...new Set(items)];
 }
 
 function roundTenth(value: number): number {

@@ -9,6 +9,8 @@ const CHART_117 = { patientId: "synthetic_patient_117", identified: true };
 const env: ForkEnv = { data: loadSyntheticData(), forkCommit: "a91e3c0", fluidToml: 'stock_tag = "v1.0.0"\n[thresholds]\ntau = 0.85\n' };
 const ask = (req: Partial<AskRequest>, e: ForkEnv = env) => app.ask({ question: DOSING, context: {}, ...req }, e);
 
+const DOSE_TEXT = /\b\d+(\.\d+)?\s?(mg|mgs|mcg|µg|ug|ml|cc|tabs?|tablets?)(?!\w)|\b(one|two|three|four|five|six|seven|eight|nine|ten)\s(mg|milligrams?|tablets?)\b/i;
+
 function everyCard(card: AnswerCard): AnswerCard[] {
   return [card, ...(card.alternatives ?? [])];
 }
@@ -40,6 +42,26 @@ describe("spec section 2: the dosing question in three contexts", () => {
     expect(card.body).toMatch(/\$35,035 per month/);
     expect(card.body).toMatch(/Budget: Morphinex injection FY27 projected \$420,400/);
     expect(card.sources.some((s) => s.kind === "committee" && /v12 \(owner: Pharmacy and Therapeutics Committee\)/.test(s.title))).toBe(true);
+  });
+});
+
+describe("research sources", () => {
+  it("registry sources carry their synthetic publisher label", async () => {
+    const card = await ask({ context: { documentType: "manuscript" } });
+    expect(card.sources.map((s) => s.publisher)).toEqual(["US FDA (synthetic summary)", "US CDC (synthetic summary)", "Fictional acute pain specialty society (synthetic summary)"]);
+  });
+
+  it("a single-publisher drug gets no number in research mode", async () => {
+    const card = await ask({ question: "What is the right dose of Hydrolane for 70 kg and 45 years?", context: { documentType: "manuscript" } });
+    expect(card.mode).toBe("research");
+    expect(card.computed_dose).toBeNull();
+    expect(card.body).toMatch(/only 1 covers this case/);
+  });
+
+  it("several weights in one question withhold the number and name the parameter", async () => {
+    const card = await ask({ question: "Morphinex dose for 70 kg or 90 kg, 45 years?", context: { documentType: "manuscript" } });
+    expect(card.computed_dose).toBeNull();
+    expect(card.body).toMatch(/Ambiguous weight/);
   });
 });
 
@@ -89,13 +111,93 @@ describe("option B and attestation", () => {
     expect(card.framing.some((f) => f.startsWith("Attestation recorded"))).toBe(true);
   });
 
-  it("a raised tau with a chart open holds the research alternative", async () => {
-    const card = await ask({ context: { chartOpen: CHART_117 } }, { ...env, fluidToml: "[thresholds]\ntau = 0.95\n" });
-    expect(card.mode).toBe("multi");
+  it("a raised tau with a chart open still answers in clinical mode with no number", async () => {
+    for (const tau of ["0.95", "1.0"]) {
+      const card = await ask({ context: { chartOpen: CHART_117 } }, { ...env, fluidToml: `[thresholds]\ntau = ${tau}\n` });
+      expect(card.mode).toBe("clinical");
+      expect(JSON.stringify(card)).not.toMatch(DOSE_TEXT);
+    }
+  });
+
+  it("attestation without an explicit mode keeps an identified chart in clinical mode with no number", async () => {
+    const card = await ask({ context: { chartOpen: CHART_117 }, attestation: true });
+    expect(card.mode).toBe("clinical");
+    expect(card.computed_dose).toBeNull();
+    expect(JSON.stringify(card)).not.toMatch(DOSE_TEXT);
+  });
+});
+
+describe("fail closed on context flags", () => {
+  it("a chart without an identified flag is treated as identified: no computed dose anywhere", async () => {
+    for (const tau of ["0.85", "1.0"]) {
+      const card = await ask({ context: { chartOpen: { patientId: "synthetic_patient_117" } as never } }, { ...env, fluidToml: `[thresholds]\ntau = ${tau}\n` });
+      expect(card.mode).toBe("clinical");
+      expect(JSON.stringify(card)).not.toMatch(DOSE_TEXT);
+      expect(card.ledger.attestation).toBe(false);
+    }
+  });
+
+  it("a non-boolean truthy orderEntryActive counts as active order entry", async () => {
+    const card = await ask({ context: { orderEntryActive: "yes" as never, documentType: "manuscript" } });
+    expect(card.mode).toBe("clinical");
+    expect(card.signals).toContain("order_entry:true");
+  });
+
+  it("a non-boolean truthy onService counts as on service", async () => {
+    const card = await ask({ context: { onService: 1 as never, documentType: "manuscript" } });
+    expect(card.signals).toContain("on_service:true");
     expect(card.alternatives?.[0]?.mode).toBe("clinical");
-    const research = card.alternatives?.find((a) => a.mode === "research");
-    expect(research).toMatchObject({ computed_dose: null, requires_attestation: true });
-    expect(card.requires_attestation).toBe(true);
+  });
+
+  it("a null attestation is treated as absent", async () => {
+    const card = await ask({ context: { chartOpen: CHART_117 }, explicitMode: "research", attestation: null as never });
+    expect(card).toMatchObject({ requires_attestation: true, computed_dose: null });
+    expect(card.ledger.attestation).toBe(false);
+  });
+
+  it.each(["true", 1, 0, {}])("rejects a non-boolean attestation %o", async (attestation) => {
+    await expect(ask({ context: { chartOpen: CHART_117 }, explicitMode: "research", attestation: attestation as never })).rejects.toThrow(/attestation must be a boolean/);
+  });
+
+  it("rejects a history that is not an array", async () => {
+    await expect(ask({ history: "earlier I asked about my patient" as never })).rejects.toThrow(/history must be an array/);
+  });
+
+  it("rejects history turns without text", async () => {
+    await expect(ask({ history: [{ role: "user" }] as never })).rejects.toThrow(/history/);
+  });
+
+  it("rejects a chartOpen that is not an object", async () => {
+    await expect(ask({ context: { chartOpen: "synthetic_patient_117" as never } })).rejects.toThrow(/chartOpen/);
+  });
+});
+
+describe("user-supplied patient ids", () => {
+  it.each(["5 mg", "10mg", "two tablets"])("patientId %o does not crash and yields a clinical card with no dose text", async (patientId) => {
+    const card = await ask({ context: { chartOpen: { patientId, identified: true } } });
+    expect(card.mode).toBe("clinical");
+    expect(card.computed_dose).toBeNull();
+    expect(JSON.stringify(card)).not.toMatch(DOSE_TEXT);
+    expect(card.body).toMatch(/patient record for the open chart was not found/);
+  });
+
+  it("a well-formed patient id is still shown in the signals", async () => {
+    const card = await ask({ context: { chartOpen: CHART_117 } });
+    expect(card.signals).toContain("chart_open:synthetic_patient_117");
+  });
+});
+
+describe("effective tau on the card", () => {
+  it.each([
+    [undefined, 0.85],
+    ["[thresholds]\ntau = 0.95\n", 0.95],
+    ["[thresholds]\ntau = 0.5\n", 0.85],
+  ])("fluid.toml %o gives tau %s on the card, every alternative, and the ledger", async (fluidToml, tau) => {
+    const card = await ask({ context: { screenLabel: { label: "unknown", confidence: 0.4 } } }, { ...env, fluidToml });
+    for (const c of everyCard(card)) {
+      expect(c.tau).toBe(tau);
+      expect(c.ledger.tau).toBe(tau);
+    }
   });
 });
 
@@ -147,10 +249,24 @@ describe("optional model wording", () => {
     expect(card.signals).toContain("wording:model");
   });
 
-  it("rejects a clinical rewording that adds a dose and falls back to the template", async () => {
-    const card = await ask({ context: { chartOpen: CHART_117 } }, { ...env, llm: async () => ({ body: "Give 7 mg now." }) });
-    expect(card.body).not.toMatch(/7 mg/);
+  it("rejects a research rewording that adds a number word and falls back to the template", async () => {
+    const card = await ask({ context: { documentType: "manuscript" } }, { ...env, llm: async () => ({ body: "Give seven mg now." }) });
+    expect(card.body).toMatch(/Computed single dose: 7 mg/);
     expect(card.signals).toContain("wording:template-fallback");
+  });
+
+  it("never asks the model to reword a clinical card", async () => {
+    let calls = 0;
+    const card = await ask({ context: { chartOpen: CHART_117 } }, { ...env, llm: async () => { calls++; return { body: "Use the order set." }; } });
+    expect(calls).toBe(0);
+    expect(card.signals.some((s) => s.startsWith("wording:"))).toBe(false);
+  });
+
+  it("never asks the model to reword a held research card", async () => {
+    let calls = 0;
+    const card = await ask({ context: { chartOpen: CHART_117 }, explicitMode: "research" }, { ...env, llm: async () => { calls++; return { body: "Held." }; } });
+    expect(calls).toBe(0);
+    expect(card.body).toMatch(/Research answer held/);
   });
 
   it("falls back to the template when the model call fails", async () => {

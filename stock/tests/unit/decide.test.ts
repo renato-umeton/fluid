@@ -72,10 +72,56 @@ describe("attestation rule", () => {
     expect(decideFor({ context: { onService: true, documentType: "manuscript" } }).researchNeedsAttestation).toBe(false);
   });
 
-  it("a raised tau with a chart open still lists clinical first and holds research", () => {
-    const decision = decideFor({ context: { chartOpen: CHART } }, 0.95);
-    expect(decision).toMatchObject({ mode: "multi", optionB: true, researchNeedsAttestation: true });
+  it("attestation alone does not move an identified chart out of clinical mode", () => {
+    expect(decideFor({ context: { chartOpen: CHART }, attestation: true }, 0.95)).toMatchObject({ mode: "clinical", optionB: false });
+  });
+});
+
+describe("identified patient context at any tau (spec 6.1, 5.2)", () => {
+  it.each([0.85, 0.9, 0.95, 1])("an identified chart answers in clinical mode with tau %s", (tau) => {
+    expect(decideFor({ context: { chartOpen: CHART } }, tau)).toMatchObject({ mode: "clinical", answerModes: ["clinical"], researchNeedsAttestation: true });
+  });
+
+  it.each([0.95, 1])("active order entry answers in clinical mode with tau %s", (tau) => {
+    expect(decideFor({ context: { orderEntryActive: true, documentType: "manuscript" } }, tau).mode).toBe("clinical");
+  });
+
+  it("an explicit mode still wins over an identified chart", () => {
+    expect(decideFor({ context: { chartOpen: CHART }, explicitMode: "research" }, 1).mode).toBe("research");
+  });
+
+  it("a chart without an identified flag is treated as identified", () => {
+    const decision = decideFor({ context: { chartOpen: { patientId: "synthetic_patient_117" } as never } }, 1);
+    expect(decision).toMatchObject({ mode: "clinical", identifiedPatientContext: true, researchNeedsAttestation: true });
+  });
+
+  it("a chart marked identified: false is not an identified context", () => {
+    expect(decideFor({ context: { chartOpen: { patientId: "x", identified: false } } }).identifiedPatientContext).toBe(false);
+  });
+});
+
+describe("a real current patient stated in the question", () => {
+  const research = { documentType: "manuscript" as const, screenLabel: { label: "manuscript_editor", confidence: 1 }, calendarEvent: "Manuscript writing block" };
+  it.each([
+    "What dose of Morphinex should I give at the bedside for 70 kg and 45 years?",
+    "My patient is 70 kg and 45 years, what Morphinex dose?",
+    "Morphinex dose for an admitted man, 70 kg, 45 years?",
+    "Patient on the floor, 70 kg and 45 years: how much Morphinex?",
+    "I am in clinic now with a 70 kg 45 year old, Morphinex dosing?",
+  ])("never returns a single research card: %s", (question) => {
+    const decision = decideFor({ question, context: research });
+    expect(decision.mode).toBe("multi");
+    expect(decision.optionB).toBe(true);
     expect(decision.answerModes[0]).toBe("clinical");
+    expect(decision.answerModes).toContain("research");
+  });
+
+  it("does not apply to a non-dosing question", () => {
+    expect(decideFor({ question: "Summarize Morphinex literature for my patient handout at the bedside", context: research }).mode).toBe("research");
+  });
+
+  it("an explicit research mode still wins", () => {
+    expect(decideFor({ question: "My patient is 70 kg and 45 years, what Morphinex dose?", context: research, explicitMode: "research" }).mode).toBe("research");
   });
 });
 

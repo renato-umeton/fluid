@@ -6,7 +6,8 @@ export type Mode = "clinical" | "research" | "administrative";
 export const MODES: readonly Mode[] = ["clinical", "research", "administrative"];
 
 export interface ContextSignals {
-  chartOpen?: { patientId: string; identified: boolean } | null;
+  /** A chart is treated as identified unless identified is exactly false (fail closed). */
+  chartOpen?: { patientId: string; identified?: boolean } | null;
   orderEntryActive?: boolean;
   onService?: boolean;
   documentType?: "manuscript" | "grant" | "budget" | "irb" | null;
@@ -28,6 +29,8 @@ export interface SourceRef {
   id: string;
   title: string;
   kind: SourceKind;
+  /** Publisher label, set for US registry sources (always marked synthetic). */
+  publisher?: string;
 }
 
 export interface ComputedDose {
@@ -46,6 +49,8 @@ export interface RunTimeRecord {
   sources: string[];
   fork_commit: string;
   stock_tag: string;
+  /** Effective tau used for this answer (never below the stock minimum). */
+  tau: number;
 }
 
 export interface AnswerCard {
@@ -61,6 +66,8 @@ export interface AnswerCard {
   body: string;
   alternatives?: AnswerCard[];
   requires_attestation?: boolean;
+  /** Effective tau used for this answer (never below the stock minimum). */
+  tau: number;
   ledger: RunTimeRecord;
 }
 

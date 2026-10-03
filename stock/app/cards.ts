@@ -43,7 +43,7 @@ export function draftFor(mode: Mode, ctx: CardContext): Draft {
 
 async function modeCard(mode: Mode, ctx: CardContext, answerId: string, confidence: number): Promise<AnswerCard> {
   const draft = draftFor(mode, ctx);
-  const { body, wording } = await composeBody(mode, draft.facts, ctx.env.llm);
+  const { body, wording } = await composeBody(mode, draft.facts, ctx.env.llm, { held: draft.requires_attestation === true });
   const signals = signalLabels(ctx, wording);
   const card: AnswerCard = {
     answer_id: answerId,
@@ -56,6 +56,7 @@ async function modeCard(mode: Mode, ctx: CardContext, answerId: string, confiden
     sources: draft.sources,
     framing: draft.framing,
     body,
+    tau: ctx.decision.tau,
     ledger: record(ctx, answerId, mode, confidence, signals, draft.sources),
   };
   if (draft.requires_attestation) card.requires_attestation = true;
@@ -71,7 +72,9 @@ async function multiCard(ctx: CardContext): Promise<AnswerCard> {
   const signals = signalLabels(ctx, "template");
   const framing = [
     SYNTHETIC_NOTICE,
-    `Top intent confidence ${round(decision.confidence)} is below the threshold ${decision.tau}; labeled answers are shown for each plausible intent.`,
+    decision.currentPatientDosing
+      ? "The question describes a current patient, so the clinical answer is shown first; labeled answers are shown for each plausible intent."
+      : `Top intent confidence ${round(decision.confidence)} is below the threshold ${decision.tau}; labeled answers are shown for each plausible intent.`,
     ...(decision.optionB ? ["Clinical answer shown first because a clinical signal is present; other answers are one tap away."] : []),
   ];
   const labels = decision.answerModes.map((m) => `${MODE_LABEL[m]} (${round(classification.distribution[m])})`);
@@ -87,6 +90,7 @@ async function multiCard(ctx: CardContext): Promise<AnswerCard> {
     framing,
     body: `Intent is unclear, so this answer is shown per intent: ${labels.join(", ")}. Choose a mode to answer in that mode.`,
     alternatives,
+    tau: decision.tau,
     ledger: record(ctx, ctx.answerId, "multi", decision.confidence, signals, sources),
   };
   if (alternatives.some((a) => a.requires_attestation)) card.requires_attestation = true;
@@ -104,6 +108,7 @@ function record(ctx: CardContext, answerId: string, intent: Mode | "multi", conf
     identifiedPatientContext: ctx.decision.identifiedPatientContext,
     forkCommit: ctx.env.forkCommit ?? "uncommitted",
     stockTag: ctx.config.stockTag,
+    tau: ctx.decision.tau,
   });
 }
 

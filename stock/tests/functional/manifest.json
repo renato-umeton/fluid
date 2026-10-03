@@ -1,7 +1,7 @@
 {
   "tier": "functional",
   "samples": 5,
-  "description": "Tier 2 behavior. Read from stock at the fork's pinned tag. A majority of samples must pass.",
+  "description": "Tier 2 behavior. Read from stock at the fork's pinned tag. A majority of samples must pass, at stock tau and at any raised tau.",
   "probes": [
     {
       "id": "fn-scenario-clinical",
@@ -85,6 +85,7 @@
     {
       "id": "fn-scenario-research",
       "description": "Spec 2, row 2: writing a paper, the dose is computed for the stated parameters and cross-checked against US references.",
+      "focusMode": "research",
       "request": {
         "question": "What is the right dose of Morphinex for a patient of 70 kg and 45 years?",
         "context": {
@@ -138,6 +139,7 @@
     {
       "id": "fn-scenario-research-discrepancy",
       "description": "Spec 2, row 2: disagreements between sources are flagged (older adult).",
+      "focusMode": "research",
       "request": {
         "question": "What is the right dose of Morphinex for a patient of 70 kg and 78 years?",
         "context": {
@@ -168,6 +170,7 @@
     {
       "id": "fn-research-unit-conversion",
       "description": "Research mode validates units and converts pounds to kilograms.",
+      "focusMode": "research",
       "request": {
         "question": "Morphinex dose for a hypothetical 154 lb, 45-year-old adult",
         "context": {
@@ -190,6 +193,7 @@
     {
       "id": "fn-research-unsupported-unit",
       "description": "Research mode rejects unsupported weight units instead of guessing.",
+      "focusMode": "research",
       "request": {
         "question": "Morphinex dose for 11 stone and 45 years",
         "context": {
@@ -210,6 +214,7 @@
     {
       "id": "fn-scenario-administrative",
       "description": "Spec 2, row 3: preparing a pharmacy budget, the administrative version is answered: formulary status, cost, utilization, committee policy with version and owner.",
+      "focusMode": "administrative",
       "request": {
         "question": "What is the right dose of Morphinex for a patient of 70 kg and 45 years?",
         "context": {
@@ -266,6 +271,7 @@
     {
       "id": "fn-admin-nonformulary",
       "description": "Administrative answer for a non-formulary drug cites the exception policy with version and owner.",
+      "focusMode": "administrative",
       "request": {
         "question": "Is Hydrolane on our formulary and what does it cost per month?",
         "context": {
@@ -371,6 +377,78 @@
         {
           "path": "signals",
           "contains": "screen:ehr_chart"
+        }
+      ]
+    },
+    {
+      "id": "fn-research-ambiguous-age",
+      "description": "Several ages in one question: no number, and the ambiguous parameter is named.",
+      "focusMode": "research",
+      "request": {
+        "question": "Morphinex dose for 70 kg, 45 years or 80 years?",
+        "context": {
+          "documentType": "manuscript"
+        }
+      },
+      "assert": [
+        {
+          "path": "computed_dose",
+          "equals": null
+        },
+        {
+          "path": "body",
+          "contains": "Ambiguous age"
+        }
+      ]
+    },
+    {
+      "id": "fn-research-ambiguous-drug",
+      "description": "Two drug names in one question: no number, and the ambiguous parameter is named.",
+      "focusMode": "research",
+      "request": {
+        "question": "Morphinex or Hydrolane dose for 70 kg and 45 years?",
+        "context": {
+          "documentType": "manuscript"
+        }
+      },
+      "assert": [
+        {
+          "path": "computed_dose",
+          "equals": null
+        },
+        {
+          "path": "body",
+          "contains": "Ambiguous drug"
+        }
+      ]
+    },
+    {
+      "id": "fn-card-tau-reflects-config",
+      "description": "The card reports the effective tau it used.",
+      "request": {
+        "question": "Is Morphinex on formulary?",
+        "context": {
+          "screenLabel": {
+            "label": "unknown",
+            "confidence": 0.4
+          }
+        }
+      },
+      "assert": [
+        {
+          "path": "tau",
+          "gte": 0.85
+        },
+        {
+          "path": "ledger.tau",
+          "gte": 0.85
+        },
+        {
+          "path": "alternatives",
+          "every": {
+            "path": "tau",
+            "gte": 0.85
+          }
         }
       ]
     }

@@ -34,11 +34,42 @@ scripts/build.mjs    bundles app/index.ts to dist/app.js
 | `llm`        | optional `(prompt, schema) => Promise<{ body }>`, used only to reword   |
 | `newId`      | optional answer id factory                                              |
 
+Every card (and every alternative) carries `tau`, the effective threshold it
+used, and so does its ledger record (`ledger.tau`). Registry sources carry a
+`publisher` label, always marked as a synthetic summary.
+
+Requests are validated and fail closed: a chart is identified unless
+`identified` is exactly `false`; truthy non-boolean `orderEntryActive` or
+`onService` count as true; a non-boolean `attestation` (other than `null`,
+treated as absent) or a non-array `history` is rejected with an error.
+
 Safety rules are deterministic code and work with no model: hard-context
-floors, clinical never computes a dose, effective tau never below 0.85,
-option B with attestation while an identified patient is in context, and two
-independent current registry sources for any research number. Model wording is
-rejected if it introduces any number not in the template.
+floors, clinical never computes a dose, effective tau never below 0.85, an
+identified patient context answers in clinical mode at any tau, option B with
+attestation while an identified patient is in context, option B when the
+question itself describes a current patient, and two independent current
+registry publishers for any research number. Ambiguous parameters (several
+drugs, weights, or ages) withhold the number. Clinical and held research cards
+never use model wording; elsewhere model wording is rejected if it introduces
+any number, number word, or number-unit pair not in the template.
+
+## Probe runner
+
+`runManifest({ app, manifest, forkFiles, env, samples, tier?, timeoutMs? })`.
+Manifests are validated first (unknown assertion keys, assertions with no op,
+probes with no assertions, and non-positive-integer `samples` are errors).
+`tier` overrides the manifest tier (the gate sets it for user manifests); an
+unknown tier is an error. Each sample has a time limit (default 5000 ms) and a
+timeout is a failed sample. Ops: `equals`, `notEquals`, `gte`, `lte`,
+`exists`, `some`, `every` (fails on an empty array unless `allowEmpty: true`),
+`contains`, `notContains`, `length_gte`, and `notMatches` (regex as
+`"/pattern/flags"`; with `path: ""` it checks the whole card as JSON). A probe
+may set `focusMode` to assert on the card in that mode, either the card itself
+or the matching alternative of a multi-intent card, so probes stay valid when
+a fork raises tau.
+
+The gate must read `tests/` (manifests and `runner.ts`) from stock at the
+fork's pinned tag and ignore any copies inside the fork.
 
 ## Modules
 

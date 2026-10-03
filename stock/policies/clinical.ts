@@ -33,7 +33,8 @@ export interface ClinicalInput {
 
 export function clinicalAnswer({ question, context, data }: ClinicalInput): Draft {
   const drug = detectDrug(question);
-  const patientId = context.chartOpen?.identified ? context.chartOpen.patientId : null;
+  // Fail closed: only an explicit identified: false keeps the chart out of clinical context.
+  const patientId = context.chartOpen && context.chartOpen.identified !== false ? context.chartOpen.patientId : null;
   const patient = patientId ? findPatient(data, patientId) : null;
   const ageYears = patient?.ageYears ?? parseDoseParameters(question).ageYears;
   const policies = drug ? opioidPolicies(ageYears, patient) : [policyById("policy:clinical-decision-support-v2")];
@@ -73,7 +74,8 @@ function opioidPolicies(ageYears: number | null, patient: PatientSummary | null)
 
 function alerts(drug: DrugInfo | null, patient: PatientSummary | null, patientId: string | null): string[] {
   const lines: string[] = [];
-  if (patientId && !patient) lines.push(`Patient record ${patientId} was not found in the FHIR connector; policy shown without patient context.`);
+  // The raw id is user-supplied and never echoed into dose-checked text.
+  if (patientId && !patient) lines.push("The patient record for the open chart was not found in the FHIR connector; policy shown without patient context.");
   if (drug && patient?.allergies.includes(drug.id)) lines.push(`Alert: the chart lists an allergy to ${drug.display}. Review before ordering.`);
   return lines;
 }

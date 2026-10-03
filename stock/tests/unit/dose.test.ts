@@ -98,3 +98,47 @@ describe("computeCrossCheckedDose", () => {
     expect(result.ok && result.perSource.map((s) => s.entry.kind)).toEqual(["fda", "society"]);
   });
 });
+
+describe("ambiguous parameters withhold the number", () => {
+  it.each([
+    ["two drugs", "Morphinex or Hydrolane dose for 70 kg and 45 years?", /Ambiguous drug: the question names more than one drug \(morphinex, hydrolane\)/],
+    ["two weights", "Morphinex dose for 70 kg and 45 years, or 80 kg?", /Ambiguous weight: the question states more than one weight \(70 kg, 80 kg\)/],
+    ["two ages", "Morphinex dose for 70 kg, 45 years or 80 years?", /Ambiguous age: the question states more than one age \(45 years, 80 years\)/],
+    ["kg and lb that disagree", "Morphinex dose for 70 kg (200 lb), 45 years", /Ambiguous weight/],
+  ])("%s", (_label, question, reason) => {
+    const outcome = compute(question);
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.reason).toMatch(reason);
+  });
+
+  it("an ambiguous age is not used to pick a population", () => {
+    expect(parseDoseParameters("Morphinex dose for 70 kg, 45 years or 8 years?").ageYears).toBeNull();
+  });
+
+  it("the same value stated twice is not ambiguous", () => {
+    expect(compute("Morphinex dose for 70 kg and 45 years (45 years old, 70 kg)").ok).toBe(true);
+  });
+});
+
+describe("registry labeling and independence", () => {
+  it("every publisher is labeled as a synthetic summary", () => {
+    for (const entry of STOCK_REGISTRY.entries) expect(entry.publisher).toMatch(/\(synthetic summary\)$/);
+  });
+
+  it("every title says it is synthetic", () => {
+    for (const entry of STOCK_REGISTRY.entries) expect(entry.title).toMatch(/synthetic/i);
+  });
+
+  it("no title copies the real CDC guideline title", () => {
+    for (const entry of STOCK_REGISTRY.entries) expect(entry.title).not.toMatch(/clinical practice guideline for prescribing opioids for pain/i);
+  });
+
+  it("a drug covered by one publisher only gets no number, however many entries it has", () => {
+    const hydrolane = currentEntriesFor(STOCK_REGISTRY, "hydrolane");
+    expect(hydrolane.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(hydrolane.map((e) => e.publisher)).size).toBe(1);
+    const outcome = computeCrossCheckedDose(parseDoseParameters("Hydrolane dose for 70 kg and 45 years"), hydrolane);
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.reason).toMatch(/at least two independent registry sources; only 1/);
+  });
+});

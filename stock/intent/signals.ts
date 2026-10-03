@@ -43,7 +43,7 @@ const CALENDAR_KEYWORDS: Record<Mode, RegExp> = {
 const CALENDAR_WEIGHT = 1;
 
 const CONVERSATION_PHRASES: Record<Mode, string[]> = {
-  clinical: ["my patient", "this patient", "the patient in", "bedside", "admitted", "order set", "ordering", "right now", "pain score", "post-op day", "prn"],
+  clinical: ["my patient", "this patient", "the patient in", "bedside", "admitted", "on the floor", "in clinic now", "order set", "ordering", "right now", "pain score", "post-op day", "prn"],
   research: ["paper", "manuscript", "study", "literature", "cohort", "hypothetical", "references", "cite", "dataset", "trial", "protocol", "enrollment", "grant"],
   administrative: ["formulary", "cost", "costs", "price", "budget", "spend", "utilization", "committee", "p&t", "reimbursement", "per month"],
 };
@@ -59,10 +59,10 @@ export function explicitSignals(explicitMode: Mode | undefined): Signal[] {
 export function hardContextSignals(context: ContextSignals): Signal[] {
   const signals: Signal[] = [];
   const chart = context.chartOpen;
-  if (chart?.identified) {
-    signals.push({ label: `chart_open:${chart.patientId}`, layer: "hard", evidence: {}, clinicalFloor: IDENTIFIED_CONTEXT_CLINICAL_FLOOR });
+  if (chart && isIdentifiedChart(chart)) {
+    signals.push({ label: `chart_open:${displayPatientId(chart.patientId)}`, layer: "hard", evidence: {}, clinicalFloor: IDENTIFIED_CONTEXT_CLINICAL_FLOOR });
   } else if (chart) {
-    signals.push({ label: `chart_open_deidentified:${chart.patientId}`, layer: "hard", evidence: { clinical: 1 } });
+    signals.push({ label: `chart_open_deidentified:${displayPatientId(chart.patientId)}`, layer: "hard", evidence: { clinical: 1 } });
   }
   if (context.orderEntryActive) {
     signals.push({ label: "order_entry:true", layer: "hard", evidence: {}, clinicalFloor: IDENTIFIED_CONTEXT_CLINICAL_FLOOR });
@@ -113,8 +113,23 @@ export function hasClinicalSignal(signals: Signal[]): boolean {
 
 /** An identified patient is in front of the user: research numbers need attestation. */
 export function hasIdentifiedPatientContext(context: ContextSignals): boolean {
-  return Boolean(context.chartOpen?.identified) || Boolean(context.orderEntryActive);
+  return (context.chartOpen ? isIdentifiedChart(context.chartOpen) : false) || Boolean(context.orderEntryActive);
 }
+
+/** Fail closed: a chart counts as identified unless it is explicitly marked identified: false. */
+export function isIdentifiedChart(chart: NonNullable<ContextSignals["chartOpen"]>): boolean {
+  return chart.identified !== false;
+}
+
+/**
+ * Patient ids are user-supplied, so they are only echoed when they look like
+ * an id (a letter, then letters, digits, or underscores). Anything else, such
+ * as "5 mg", is replaced so it can never read as a dose on the card.
+ */
+export function displayPatientId(patientId: unknown): string {
+  return typeof patientId === "string" && SAFE_PATIENT_ID.test(patientId) ? patientId : "unrecognized_id";
+}
+const SAFE_PATIENT_ID = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 
 function keywordSignals(text: string, prefix: string, weight: number): Signal[] {
   const lower = text.toLowerCase();

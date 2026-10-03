@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { evaluate, passes, resolvePath, runManifest, type Manifest } from "../runner.js";
+import { DEFAULT_SAMPLE_TIMEOUT_MS, evaluate, passes, resolvePath, runManifest, validateManifest, type Manifest } from "../runner.js";
 import type { AnswerCard, ForkApp } from "../../app/types.js";
 
 const card = {
@@ -117,5 +117,137 @@ describe("runManifest", () => {
     const broken: ForkApp = { ask: async () => { throw new Error("boom"); } };
     const result = await runManifest({ app: broken, manifest: manifest("invariant") });
     expect(result.probes[0]?.failures[0]).toMatchObject({ op: "ask", actual: "boom" });
+  });
+});
+
+describe("notMatches", () => {
+  const ok = (assertion: Parameters<typeof evaluate>[0], target: unknown = card) => evaluate(assertion, target, "").length === 0;
+
+  it("tests a string field against a regex given as /pattern/flags", () => {
+    expect(ok({ path: "body", notMatches: "/\\d+\\s?mg/i" })).toBe(true);
+    expect(ok({ path: "body", notMatches: "/ORDER SET/i" })).toBe(false);
+  });
+
+  it("accepts a plain pattern without delimiters", () => {
+    expect(ok({ path: "body", notMatches: "order set" })).toBe(false);
+  });
+
+  it("path \"\" serializes the whole target to JSON", () => {
+    const withDose = { ...card, alternatives: [{ mode: "research", body: "Computed single dose: 7 mg" }] };
+    expect(ok({ path: "", notMatches: "/\\b\\d+\\s?mg\\b/i" })).toBe(true);
+    expect(ok({ path: "", notMatches: "/\\b\\d+\\s?mg\\b/i" }, withDose)).toBe(false);
+  });
+});
+
+describe("every on an empty array", () => {
+  const ok = (assertion: Parameters<typeof evaluate>[0], target: unknown) => evaluate(assertion, target, "").length === 0;
+
+  it("fails by default", () => {
+    expect(ok({ path: "alternatives", every: { path: "mode", equals: "clinical" } }, { alternatives: [] })).toBe(false);
+  });
+
+  it("passes with allowEmpty: true", () => {
+    expect(ok({ path: "alternatives", every: { path: "mode", equals: "clinical" }, allowEmpty: true }, { alternatives: [] })).toBe(true);
+  });
+});
+
+describe("manifest validation", () => {
+  const app: ForkApp = { ask: async () => card as unknown as AnswerCard };
+  const probe = { id: "p", request: { question: "q", context: {} }, assert: [{ path: "mode", equals: "clinical" }] };
+  const run = (manifest: unknown, extra: Record<string, unknown> = {}) => runManifest({ app, manifest: manifest as Manifest, ...extra });
+
+  it("accepts a well-formed manifest", () => {
+    expect(() => validateManifest({ tier: "invariant", samples: 2, probes: [probe] })).not.toThrow();
+  });
+
+  it("rejects an unknown assertion key, naming the probe and key", async () => {
+    await expect(run({ tier: "invariant", probes: [{ ...probe, assert: [{ path: "mode", equal: "clinical" }] }] })).rejects.toThrow(/probe p.*unknown assertion key "equal"/);
+  });
+
+  it("rejects unknown keys inside nested some and every", async () => {
+    await expect(run({ tier: "invariant", probes: [{ ...probe, assert: [{ path: "sources", some: { path: "kind", equal: "policy" } }] }] })).rejects.toThrow(/unknown assertion key "equal"/);
+  });
+
+  it("rejects an assertion with no op", async () => {
+    await expect(run({ tier: "invariant", probes: [{ ...probe, assert: [{ path: "mode" }] }] })).rejects.toThrow(/at least one op/);
+  });
+
+  it("rejects a probe with no assertions", async () => {
+    await expect(run({ tier: "invariant", probes: [{ ...probe, assert: [] }] })).rejects.toThrow(/at least one assertion/);
+  });
+
+  it.each([0, -1, 1.5, "3"])("rejects samples %o in the manifest, the probe, or the options", async (samples) => {
+    await expect(run({ tier: "invariant", samples, probes: [probe] })).rejects.toThrow(/samples must be a positive integer/);
+    await expect(run({ tier: "invariant", probes: [{ ...probe, samples }] })).rejects.toThrow(/samples must be a positive integer/);
+    await expect(run({ tier: "invariant", probes: [probe] }, { samples })).rejects.toThrow(/samples must be a positive integer/);
+  });
+
+  it("rejects an invalid notMatches regex", async () => {
+    await expect(run({ tier: "invariant", probes: [{ ...probe, assert: [{ path: "", notMatches: "/(/" }] }] })).rejects.toThrow(/notMatches/);
+  });
+
+  it("rejects an unknown focusMode", async () => {
+    await expect(run({ tier: "invariant", probes: [{ ...probe, focusMode: "billing" }] })).rejects.toThrow(/focusMode/);
+  });
+});
+
+describe("tier", () => {
+  const app: ForkApp = { ask: async () => card as unknown as AnswerCard };
+  const manifest: Manifest = { tier: "functional", probes: [{ id: "p", request: { question: "q", context: {} }, assert: [{ path: "mode", equals: "clinical" }] }] };
+
+  it("the caller's tier overrides the manifest tier", async () => {
+    expect((await runManifest({ app, manifest, tier: "user" })).tier).toBe("user");
+  });
+
+  it("an unknown tier string from the caller is an error", async () => {
+    await expect(runManifest({ app, manifest, tier: "gold" as never })).rejects.toThrow(/tier/);
+  });
+
+  it("an unknown tier string in the manifest is an error", async () => {
+    await expect(runManifest({ app, manifest: { ...manifest, tier: "gold" as never } })).rejects.toThrow(/tier/);
+  });
+
+  it("the caller's tier decides the pass rule", async () => {
+    let calls = 0;
+    const flaky: ForkApp = { ask: async () => ({ ...card, mode: ++calls === 2 ? "research" : "clinical" }) as unknown as AnswerCard };
+    expect((await runManifest({ app: flaky, manifest, samples: 3, tier: "invariant" })).passed).toBe(false);
+  });
+});
+
+describe("per-sample timeout", () => {
+  const manifest: Manifest = { tier: "invariant", probes: [{ id: "slow", request: { question: "q", context: {} }, assert: [{ path: "mode", equals: "clinical" }] }] };
+
+  it("a sample that exceeds the timeout is a recorded failure", async () => {
+    const slow: ForkApp = { ask: () => new Promise(() => {}) };
+    const result = await runManifest({ app: slow, manifest, timeoutMs: 20 });
+    expect(result.passed).toBe(false);
+    expect(result.probes[0]?.failures[0]).toMatchObject({ op: "timeout", expected: "answer within 20 ms" });
+  });
+
+  it("defaults to 5000 ms", () => {
+    expect(DEFAULT_SAMPLE_TIMEOUT_MS).toBe(5000);
+  });
+});
+
+describe("focusMode", () => {
+  const research = { mode: "research", computed_dose: { value: 7 } };
+  const multi = { mode: "multi", computed_dose: null, alternatives: [{ mode: "clinical", computed_dose: null }, research] };
+  const manifest: Manifest = {
+    tier: "invariant",
+    probes: [{ id: "f", focusMode: "research", request: { question: "q", context: {} }, assert: [{ path: "computed_dose.value", equals: 7 }] }],
+  };
+  const appReturning = (value: unknown): ForkApp => ({ ask: async () => value as AnswerCard });
+
+  it("asserts on the card itself when it is in the focus mode", async () => {
+    expect((await runManifest({ app: appReturning(research), manifest })).passed).toBe(true);
+  });
+
+  it("asserts on the matching alternative of a multi card", async () => {
+    expect((await runManifest({ app: appReturning(multi), manifest })).passed).toBe(true);
+  });
+
+  it("fails when neither the card nor an alternative is in the focus mode", async () => {
+    const result = await runManifest({ app: appReturning({ mode: "administrative" }), manifest });
+    expect(result.probes[0]?.failures[0]).toMatchObject({ op: "focusMode", expected: "research" });
   });
 });

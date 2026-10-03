@@ -53,7 +53,7 @@ export function registryDrugs(registry: Registry): string[] {
 }
 
 export function toSourceRef(entry: RegistryEntry): SourceRef {
-  return { id: entry.id, title: entry.title, kind: entry.kind };
+  return { id: entry.id, title: entry.title, kind: entry.kind, publisher: entry.publisher };
 }
 
 function validateEntry(entry: Partial<RegistryEntry>): void {

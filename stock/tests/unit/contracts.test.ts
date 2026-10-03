@@ -3,13 +3,14 @@ import {
   ATTESTATION_HOLD_STATEMENT,
   CLINICAL_JUDGMENT_STATEMENT,
   CROSS_CHECK_MISSING_STATEMENT,
+  DOSE_AMOUNT_PATTERN,
   MODE_CONTRACTS,
   SYNTHETIC_NOTICE,
   enforceContract,
   independentRegistrySources,
   type Draft,
 } from "../../policies/contracts.js";
-import { isSafeRewording } from "../../app/body.js";
+import { isSafeRewording, modelWordingAllowed } from "../../app/body.js";
 
 const POLICY = { id: "policy:opioid-adult-acute-v7", title: "Acute pain", kind: "policy" as const };
 const COMMITTEE = { id: "committee:pt-formulary-policy-v12", title: "Formulary v12", kind: "committee" as const };
@@ -94,5 +95,49 @@ describe("model rewording guard", () => {
 
   it("rejects an empty rewording", () => {
     expect(isSafeRewording("administrative", template, "  ")).toBe(false);
+  });
+});
+
+describe("model wording limits", () => {
+  const template = "Hypothetical parameters: Morphinex, 70 kg, 45 years.\nComputed single dose: 7 mg (per fda:morphinex-label-2025).";
+
+  it("never accepts model wording for a clinical card, even with no numbers", () => {
+    expect(isSafeRewording("clinical", "Use the order set.", "Use the order set.")).toBe(false);
+    expect(modelWordingAllowed("clinical", false)).toBe(false);
+  });
+
+  it("never accepts model wording for a held research card", () => {
+    expect(isSafeRewording("research", "Research answer held.", "Research answer held.", { held: true })).toBe(false);
+    expect(modelWordingAllowed("research", true)).toBe(false);
+    expect(modelWordingAllowed("research", false)).toBe(true);
+  });
+
+  it.each(["Give seven mg.", "About one hundred milligrams.", "Twenty units per kilo.", "Half a tablet."])("rejects number words not in the template: %s", (candidate) => {
+    expect(isSafeRewording("research", template, candidate)).toBe(false);
+  });
+
+  it.each(["7 mgs", "7 mcg", "7 µg", "7 ug", "7 g", "7 gm", "7 grams", "7 milligrams", "7 tabs", "7 tablets", "7 cc", "7 ml", "7 mL", "7 drops", "7 puffs", "7 patches", "7 units", "70 mg", "45 mg", "45 tablets"])(
+    "rejects a unit attached to a template number that the template does not attach: %s",
+    (amount) => {
+      expect(isSafeRewording("research", template, `The answer is ${amount}.`)).toBe(false);
+    },
+  );
+
+  it("accepts a unit attachment that is in the template", () => {
+    expect(isSafeRewording("research", template, "For 70 kg and 45 years the computed single dose is 7 mg.")).toBe(true);
+  });
+
+  it("accepts number words that are in the template", () => {
+    expect(isSafeRewording("administrative", "Two committee policies apply.", "two committee policies apply")).toBe(true);
+  });
+});
+
+describe("clinical dose amount detection", () => {
+  it.each(["7 mg", "0.5 mcg", "5 µg", "2 tabs", "two tablets", "10 mL", "1 patch", "half-tablet", "3 puffs", "4 units", "1 g"])("flags %s", (text) => {
+    expect(DOSE_AMOUNT_PATTERN.test(`Give ${text} now.`)).toBe(true);
+  });
+
+  it.each(["OS-114 (synthetic)", "stage 4 range", "age 45, weight 70 kg", "version 7"])("does not flag %s", (text) => {
+    expect(DOSE_AMOUNT_PATTERN.test(text)).toBe(false);
   });
 });

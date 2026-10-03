@@ -2,7 +2,7 @@
 // Every rule here is deterministic and covered by the invariant suite.
 import { MODES, type AskRequest, type Mode } from "../app/types.js";
 import { topIntent, type Classification } from "./classifier.js";
-import { isDosingQuestion } from "./questions.js";
+import { isDosingQuestion, statesCurrentPatient } from "./questions.js";
 import { hasClinicalSignal, hasIdentifiedPatientContext, type Signal } from "./signals.js";
 import { PLAUSIBLE_INTENT_MIN } from "./thresholds.js";
 
@@ -18,6 +18,8 @@ export interface Decision {
   researchNeedsAttestation: boolean;
   override: Mode | null;
   tau: number;
+  /** Multi-intent view because the question states a current patient, not because confidence is below tau. */
+  currentPatientDosing: boolean;
 }
 
 export interface DecideInput {
@@ -35,20 +37,33 @@ export function decide({ request, signals, classification, tau }: DecideInput): 
     researchNeedsAttestation: identifiedPatientContext && request.attestation !== true,
     override: request.explicitMode ?? null,
     tau,
+    currentPatientDosing: false,
   };
 
   if (request.explicitMode) {
     return { ...base, mode: request.explicitMode, answerModes: [request.explicitMode], confidence: distribution[request.explicitMode], optionB: false };
   }
 
+  // Spec 6.1 and 5.4 rule C: an identified patient in context answers in
+  // clinical mode whatever tau the user raised it to. Raising tau may only make
+  // Fluid more cautious, never move this case into the multi-intent view.
+  if (identifiedPatientContext) {
+    return { ...base, mode: "clinical", answerModes: ["clinical"], confidence: distribution.clinical, optionB: false };
+  }
+
+  const dosing = isDosingQuestion(request.question);
   const top = topIntent(distribution);
-  if (distribution[top] >= tau) {
+  // A dosing question that states a real current patient never gets a lone
+  // research card, however strong the research context: option B instead.
+  const currentPatientDosing = dosing && statesCurrentPatient(request.question);
+  if (distribution[top] >= tau && !(currentPatientDosing && top === "research")) {
     return { ...base, mode: top, answerModes: [top], confidence: distribution[top], optionB: false };
   }
 
-  const optionB = hasClinicalSignal(signals) && isDosingQuestion(request.question);
+  const optionB = (hasClinicalSignal(signals) && dosing) || currentPatientDosing;
   const byProbability = [...MODES].sort((a, b) => distribution[b] - distribution[a]);
   const plausible = byProbability.filter((mode, index) => index < 2 || distribution[mode] >= PLAUSIBLE_INTENT_MIN);
   const answerModes = optionB ? ["clinical" as const, ...plausible.filter((m) => m !== "clinical")] : plausible;
-  return { ...base, mode: "multi", answerModes, confidence: distribution[top], optionB };
+  const belowTau = distribution[top] < tau;
+  return { ...base, mode: "multi", answerModes, confidence: distribution[top], optionB, currentPatientDosing: currentPatientDosing && !belowTau };
 }
