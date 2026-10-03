@@ -322,6 +322,90 @@ export async function mergeInto(ws: Workspace, options: { ours: string; theirs: 
 	}
 }
 
+export interface ConflictVersions {
+	path: string;
+	base: string | null;
+	ours: string | null;
+	theirs: string | null;
+	/** Worktree text with conflict markers, when git produced one. */
+	marked: string | null;
+}
+
+/** Content to keep for a conflicted path; null deletes it. */
+export type ConflictResolver = (versions: ConflictVersions[]) => Promise<Record<string, string | null>>;
+
+export type ResolvedMergeOutcome =
+	| { ok: true; oid: string; fastForward: boolean; alreadyMerged: boolean; conflicts: string[] }
+	| { ok: false; error: string; conflicts: string[] };
+
+/**
+ * Merges `theirs` into local branch `ours`. Clean merges behave like
+ * mergeInto. On textual conflicts, git's merge result is kept for every
+ * clean path, `resolve` decides each conflicted path from its base, ours,
+ * and theirs versions, and a two-parent merge commit is written on `ours`.
+ */
+export async function mergeWithResolver(
+	ws: Workspace,
+	options: { ours: string; theirs: string; message: string; author?: GitAuthor; resolve: ConflictResolver },
+): Promise<ResolvedMergeOutcome> {
+	const first = await mergeInto(ws, options);
+	if (first.ok) return { ...first, conflicts: [] };
+	const conflicts = first.conflicts.filepaths;
+	await checkoutBranch(ws, options.ours);
+	const oursOid = await headCommit(ws, options.ours);
+	const theirsOid = await peelToCommit(ws, await resolveAnyRef(ws, options.theirs));
+	const [baseOid] = await git.findMergeBase({ fs: ws.fs, dir: ws.dir, oids: [oursOid, theirsOid] });
+	try {
+		await git.merge({ fs: ws.fs, dir: ws.dir, ours: options.ours, theirs: theirsOid, author: options.author ?? PLATFORM_AUTHOR, message: options.message, abortOnConflict: false });
+	} catch (error) {
+		if (!(error instanceof Errors.MergeConflictError)) throw error;
+	}
+	const versions: ConflictVersions[] = [];
+	for (const path of conflicts) {
+		versions.push({
+			path,
+			base: baseOid ? await readBlobAt(ws, baseOid as string, path) : null,
+			ours: await readBlobAt(ws, oursOid, path),
+			theirs: await readBlobAt(ws, theirsOid, path),
+			marked: await readWorkspaceFile(ws, path),
+		});
+	}
+	let resolved: Record<string, string | null>;
+	try {
+		resolved = await options.resolve(versions);
+	} catch (error) {
+		await git.checkout({ fs: ws.fs, dir: ws.dir, ref: options.ours, force: true });
+		return { ok: false, error: `conflict resolution failed: ${error instanceof Error ? error.message : String(error)}`, conflicts };
+	}
+	for (const path of conflicts) {
+		if (!(path in resolved)) {
+			await git.checkout({ fs: ws.fs, dir: ws.dir, ref: options.ours, force: true });
+			return { ok: false, error: `no resolution for ${path}`, conflicts };
+		}
+	}
+	for (const [path, content] of Object.entries(resolved)) {
+		if (content === null) await removeFiles(ws, [path]);
+		else await writeFiles(ws, { [path]: content });
+	}
+	// Stage everything git's merge left in the worktree (clean merges, additions, deletions).
+	for (const [filepath, head, workdir] of await git.statusMatrix({ fs: ws.fs, dir: ws.dir })) {
+		if (workdir === 0 && head === 1) await git.remove({ fs: ws.fs, dir: ws.dir, filepath });
+		else if (workdir !== 0) await git.add({ fs: ws.fs, dir: ws.dir, filepath });
+	}
+	const oid = await git.commit({ fs: ws.fs, dir: ws.dir, message: options.message.endsWith("\n") ? options.message : `${options.message}\n`, author: options.author ?? PLATFORM_AUTHOR, parent: [oursOid, theirsOid] });
+	return { ok: true, oid, fastForward: false, alreadyMerged: false, conflicts };
+}
+
+async function readBlobAt(ws: Workspace, commitOid: string, path: string): Promise<string | null> {
+	try {
+		const { blob } = await git.readBlob({ fs: ws.fs, dir: ws.dir, oid: commitOid, filepath: path });
+		return new TextDecoder().decode(blob);
+	} catch (error) {
+		if (error instanceof Errors.NotFoundError) return null;
+		throw error;
+	}
+}
+
 /** Resolves a short name (branch, tag, remote branch) or SHA to an object id. */
 export async function resolveAnyRef(ws: Workspace, ref: string): Promise<string> {
 	if (/^[0-9a-f]{40}$/.test(ref)) return ref;
