@@ -7,7 +7,7 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { clusterRecords, deterministicLabel, harvestable, LABEL_SCHEMA, labelPrompt, proposalOf, type HarvestProposal, type HarvestRecord } from "../agents/harvest-cluster.ts";
 import { buildIntent, intentJson, intentPath, cleanText } from "../agents/intent.ts";
-import { cloneRepo, commitChanges, checkoutBranch, pushBranch, readWorkspaceFile, writeFiles } from "../git/ops.ts";
+import { cloneRepo, commitChanges, checkoutBranch, deleteRemoteBranch, listRemoteRefs, pushBranch, readWorkspaceFile, writeFiles } from "../git/ops.ts";
 import synthetic from "../generated/synthetic.json";
 import { currentStockTag, findPersona, preferencesOf, provisionFork, readIntents } from "../forks/provision.ts";
 import { forkRepoName, newIntentId, STOCK_REPO } from "../lib/names.ts";
@@ -167,12 +167,14 @@ export class HarvestWorkflow extends WorkflowEntrypoint<Env, HarvestParams> {
 			await log.step("Draft stock feature branches for eligible clusters", "running");
 			const eligible = proposals.filter((pr) => pr.eligible && pr.referenceFork).slice(0, MAX_DRAFTS);
 			const result = proposals.map((pr) => ({ ...pr }));
-			if (eligible.length === 0) {
-				await log.step("Draft stock feature branches for eligible clusters", "done", "No cluster is eligible");
-				return result;
-			}
 			const remote = await repoRemote(this.env, STOCK_REPO, "write");
 			const ws = await cloneRepo({ ...remote, ref: "main", singleBranch: true });
+			// A harvest run replaces earlier drafts: harvest/* branches no current cluster drafts are removed.
+			const keep = new Set(eligible.map((pr) => `harvest/${pr.slug}`));
+			for (const ref of await listRemoteRefs(remote)) {
+				const name = ref.ref.replace(/^refs\/heads\//, "");
+				if (ref.ref.startsWith("refs/heads/harvest/") && !keep.has(name)) await deleteRemoteBranch(ws, remote, name);
+			}
 			for (const pr of eligible) {
 				const draftBranch = `harvest/${pr.slug}`;
 				const files = await referenceFiles(this.env, pr.referenceFork!, pr.proposedFiles);
@@ -199,7 +201,7 @@ export class HarvestWorkflow extends WorkflowEntrypoint<Env, HarvestParams> {
 				target.draftBranch = draftBranch;
 				target.retires = `When this ships in stock, upgrade agents retire the matching custom code in ${pr.count} forks, guided by these intent records.`;
 			}
-			await log.step("Draft stock feature branches for eligible clusters", "done", result.filter((x) => x.draftBranch).map((x) => `${x.draftBranch} (${x.count} forks)`).join(", "));
+			await log.step("Draft stock feature branches for eligible clusters", "done", result.filter((x) => x.draftBranch).map((x) => `${x.draftBranch} (${x.count} forks)`).join(", ") || "No cluster is eligible");
 			return result;
 		});
 		await step.do("finish", async () => {
