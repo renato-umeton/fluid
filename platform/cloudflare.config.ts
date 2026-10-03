@@ -37,6 +37,7 @@ export default defineConfig({
 			HarvestWorkflow: exports.workflow({ name: "fluid-harvest" }),
 		},
 		// Artifacts repo.pushed events (account-level subscription, see scripts/setup-events.mjs).
-		triggers: [triggers.queue({ name: "fluid-events", maxBatchSize: 10, maxBatchTimeout: 1 })],
+		// Messages that still fail after maxRetries go to fluid-events-dlq instead of being dropped.
+		triggers: [triggers.queue({ name: "fluid-events", maxBatchSize: 10, maxBatchTimeout: 1, maxRetries: 5, deadLetterQueue: "fluid-events-dlq" })],
 	},
 });

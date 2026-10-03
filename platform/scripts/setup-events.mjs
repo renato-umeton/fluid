@@ -1,5 +1,6 @@
 // Creates (idempotently) the account resources the gate needs in production:
 //   - queue "fluid-events" (the platform Worker consumes it, see cloudflare.config.ts)
+//   - queue "fluid-events-dlq", where fluid-events messages go after 5 failed deliveries
 //   - an account-level Artifacts event subscription "fluid-artifacts-pushed"
 //     delivering repo.pushed events from every repository to that queue
 // The subscription is account-wide; the consumer filters on namespace "fluid"
@@ -9,6 +10,7 @@
 import { execFileSync } from "node:child_process";
 
 const QUEUE = "fluid-events";
+const DEAD_LETTER_QUEUE = "fluid-events-dlq";
 const SUBSCRIPTION = "fluid-artifacts-pushed";
 const dryRun = process.argv.includes("--dry-run");
 
@@ -28,6 +30,16 @@ if (queue) {
 } else {
 	queue = cf(["queues", "create", "--queue-name", QUEUE]);
 	console.log(`created queue ${QUEUE} (${queue.queue_id})`);
+}
+
+const dlq = queues.find((q) => q.queue_name === DEAD_LETTER_QUEUE);
+if (dlq) {
+	console.log(`queue ${DEAD_LETTER_QUEUE} exists (${dlq.queue_id})`);
+} else if (dryRun) {
+	console.log(`would create queue ${DEAD_LETTER_QUEUE}`);
+} else {
+	const created = cf(["queues", "create", "--queue-name", DEAD_LETTER_QUEUE]);
+	console.log(`created queue ${DEAD_LETTER_QUEUE} (${created.queue_id})`);
 }
 
 const subscriptions = cf(["queues", "subscriptions", "list"]);
