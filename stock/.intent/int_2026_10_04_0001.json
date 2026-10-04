@@ -1,0 +1,11 @@
+{
+  "id": "int_2026_10_04_0001",
+  "author": "mothership:clinical-informatics",
+  "agent": null,
+  "request": "Ship an end-to-end regression suite that every landed change soaks against before it turns green",
+  "purpose": "A change can pass the single-answer tiers and still break a flow that spans several steps. The platform runs these scenarios against each fork's live main after every change lands (yellow), three times in a row, and rolls main back to the last green commit on a failure. The suite is read from stock at the pinned tag, like tiers 1 and 2.",
+  "modes_affected": ["clinical", "research", "administrative"],
+  "files": ["tests/e2e/manifest.json", "tests/e2e/runner.ts", "tests/runner.ts"],
+  "tests_added": ["tests/e2e/manifest.json"],
+  "stock_tag": "v1.10.0"
+}

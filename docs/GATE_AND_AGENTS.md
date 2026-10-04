@@ -14,6 +14,7 @@ All agent work runs in Workflows, declared in `platform/cloudflare.config.ts` an
 | `ReleaseWorkflow` | `fluid-release` | release | Starts one upgrade per fork that still needs the tag, in batches of 20 with a 1 second pause between batches. |
 | `UpgradeWorkflow` | `fluid-upgrade` | (tag, fork) | Creates `upgrade/<tag>`, merges the stock tag (the merge agent resolves conflicts), and runs the gate at the new tag. It then fast-forwards `main` if `auto_upgrade` is set, or records a pending upgrade for one-tap approval. On a fail the fork stays pinned and a repair opens. |
 | `SeedFleetWorkflow` and `SeedForkWorkflow` | `fluid-seed-fleet`, `fluid-seed-fork` | seed batch, seeded fork | Builds the synthetic demo fleet (see "Demo fleet"). |
+| `YellowWorkflow` | `fluid-yellow` | change landed on main (repo, commit) | Runs the end-to-end tiers against the live fork 3 times with a 10 second pause, plus the browser checks once. All passes turn the fork green; a failure rolls `main` back to the last green commit and opens a repair (see "Yellow to green"). |
 | `HarvestWorkflow` | `fluid-harvest` | harvest run | Reads intent records from forks that opted in, clusters them, labels the clusters with the model, and drafts the eligible ones as `harvest/<slug>` branches in `stock`. Each run replaces earlier drafts. |
 
 If a step fails after all its retries, the run is marked `failed` with the error and the instance ends as errored. A run is never left showing `running`.
@@ -62,6 +63,64 @@ The planner prompt states that look and layout (fonts, density, colors, tabs, ch
 - **One-tap approval.** A passed upgrade without `auto_upgrade` is stored as the fork's `pendingUpgrade` (`{tag, commit, runId}`), apart from `lastRun`, which later runs overwrite. `POST /api/forks/:repo/upgrade` fast-forwards `main` to that commit and refuses with 409 when `main` is no longer an ancestor of it.
 - **Customizations.** Before committing, the customization checks the planned files against `main`'s current files. A recipe (REDCap, tau) is applied again on the current files; a model plan whose files changed on `main` is refused with "run the request again". A retried commit step reuses a pushed commit whose `Intent-Id` matches instead of committing again.
 
+## Yellow to green
+
+Every change that passes the gate goes live on `main` at once, in a **yellow** state with a visible badge. That covers customizations (the gate fast-forward), auto upgrades, one-tap upgrades, and repair applies. A slower end-to-end regression suite then runs against the live fork in the background (`platform/src/workflows/yellow.ts`, one `YellowWorkflow` per landed commit, keyed by repo and commit).
+
+```mermaid
+stateDiagram-v2
+  [*] --> green: fork with no history
+  green --> yellow: a gated change lands on main
+  rolled_back --> yellow: the next gated change lands
+  yellow --> yellow: soak pass n of 3
+  yellow --> yellow: a newer change lands (older run cancelled)
+  yellow --> green: 3 consecutive passes
+  yellow --> rolled_back: a scenario or browser check fails
+```
+
+- **State.** The `Fleet` entry of each fork carries `health` (`yellow`, `green`, or `rolled_back`), `lastGreenCommit`, the soak progress (`pass` of `of`), the active run, the failure, and the browser tier result, plus a history of events (`GET /api/forks/:repo/health`). Every change is broadcast on the fleet stream. The transitions are pure code in `platform/src/yellow/state.ts`. Forks with no history read as green at their current `main`; the commit before their first landed change becomes their last green commit.
+- **Soak.** Three consecutive passes of every end-to-end tier, with a 10 second pause between them. The browser tier runs once per yellow period, after the first pass. Each pass is recorded on the run (`passes[]`) with every scenario, its steps, and their latencies.
+- **Rollback.** On a failure, if `main` is still at the yellow commit, `main` moves back to the last green commit's tree with a new revert commit on top of the yellow commit. History is kept and the push is never forced, so the remote refuses it if `main` moved meanwhile. The revert commit carries a build-time intent record (`agent: "yellow-rollback"`, `relies_on` the change's intent records, the failed scenario and step). The fork's pinned tag in the fleet follows the restored `fluid.toml`. Then the Repair workflow opens `repair/<short sha>` with reason `yellow`, the failing scenario and step as its failures, and the change's intent records as `relies_on`.
+- **Newer changes.** A change that lands while an older one is still soaking supersedes it: the older run stops at its next check (status `cancelled`), and the newer run decides for both. Its last green commit is still the one before the older change.
+- **No earlier green commit.** When there is nothing to roll back to (an admin re-check of a fork's current `main`), the failure is recorded, the fork stays yellow with no run, and a repair opens.
+
+### Who owns the suite
+
+The mothership owns it. Stock ships the core suite in `tests/e2e/manifest.json` and its pure runner `tests/e2e/runner.ts`. The platform reads both from stock at the fork's pinned tag, never from the fork, like tiers 1 and 2, and runs the runner in its own Worker Loader isolate (`stock-e2e-runner:<stock sha>`) built only from stock files. The runner reaches the live fork and the platform through one host callback over RPC.
+
+| Tier | Source | Notes |
+| :-- | :-- | :-- |
+| `stock` | `tests/e2e/manifest.json` in stock at the pinned tag | The core suite. |
+| `platform` | `PLATFORM_SCENARIOS` in `platform/src/yellow/tiers.ts` | Runs instead of the stock tier when the pinned tag predates the suite (an empty stock suite). The runner then comes from the stock source bundled into the platform. |
+| `user` | `tests/user/e2e.json` in the fork at the yellow commit | Extra scenarios from the user or the test suggester. A scenario cannot reuse a stock or platform id (it is rejected and logged); `"disabled": true` skips it and logs its `disabledReason`; at most 10 run. |
+
+Steps that touch platform state act for a synthetic test user scoped to the run (`e2e-<run id>`): asks go through the platform's own ask path (the same safety guard users get) at the yellow commit, and overrides and ledger reads use that user's own ledger. The real user's ledger never sees a soak.
+
+### Scenario format
+
+A scenario is an ordered list of steps with assertions on each step's result and references to earlier steps (`"$ask.answer_id"`) or the live fork (`"$live.commit"`, `"$live.stockTag"`). Step kinds: `ask` (request with context, `explicitMode`, `attestation`, optional `withHistory` for multi-turn, optional `focusMode`), `override` (records the override, optionally asks again in that mode), `ledger`, `intents`, and `config` (`fluid.toml` and `ui/preferences.json`, validated the way the platform reads them). `requires: { "connector": "redcap" }` skips a scenario or step when the fork has no such connector. Every step has a latency budget and a time limit. Details in `stock/README.md`.
+
+The stock suite covers: each mode answering with its contract (clinical, research with a two-source cross-check, administrative with a committee policy), the multi-intent view, the attestation flow, overrides reaching the ledger and the re-ask holding the number at the bedside, the clinical no-dose rule across a three-turn conversation, ledger records whose `fork_commit` equals the live commit and whose `stock_tag` is the pinned tag, the intent ledger, valid config files, the REDCap connector when present, the synthetic notice, and a latency budget per step.
+
+### Browser checks
+
+`platform/src/yellow/browser.ts` drives a real headless browser through Browser Rendering (`BROWSER` binding, `@cloudflare/puppeteer`), once per yellow period:
+
+1. load the app for the fork's user and see the fork in the top bar;
+2. ask the bedside question with a chart open and see a clinical card with no dose and an override control;
+3. see the fork's UI preferences render (font, density, accent, and the tabs under **Your tabs**);
+4. see no console errors.
+
+The browser signs in with a short-lived signed test session (at most 15 minutes, scoped to the run): a synthetic user that can read and ask that one fork, whose answers go to its own ledger, and that cannot change anything. The app URL is the one users reach (recorded from incoming requests). The tier is `unavailable` when there is no binding, Browser Rendering cannot start a browser, or the URL is local (`cf dev`); then the API tiers decide alone and the run says why. Seeded demo forks skip it, and the platform starts at most 6 browser sessions per minute, so a release that lands many forks at once does not flood Browser Rendering.
+
+### Test suggester
+
+For each customization the suggester also proposes end-to-end scenarios for `tests/user/e2e.json` (kind `e2e`), reviewed with the tier 3 tests (accept or reject; edit the file in the fork to change one). For a REDCap connector it proposes: ask an enrollment question in research mode, then override that answer to clinical and check that no enrollment number leaks into the clinical answer, and that the override reaches the ledger. UI preference, tau, and model-written changes get their own scenarios.
+
+### Admin-only test recipe
+
+`platform/src/agents/test-recipe.ts` is a clearly labeled test recipe, accepted only with the admin token: `[admin test] break ledger fork_commit` makes every ledger record name the constant `build-cache` as its fork commit. Tier 1 only checks that `fork_commit` exists, so the change passes tiers 1 to 3; the end-to-end suite checks it equals the live commit, so the soak catches it and rolls it back. `scripts/e2e-yellow.mjs` uses it.
+
 ## Safety fallback
 
 Spec 7's grace period is enforced. When the newest safety release whose grace period has ended is newer than a fork's pinned tag, and the fork has no passed upgrade to it waiting for approval, `POST /api/ask` on the fork's `main` is answered by `stock` at that release. The card carries the signal `safety_fallback:stock` and a framing line, the UI shows it as a notice, and the ledger records the signal. Asking a named branch is not redirected. As a backstop, the platform never serves a card (or alternative) in clinical mode with a computed dose: it refuses the fork's answer, answers with `stock` at the fork's pin, and marks the card `safety_guard:clinical_dose`.
@@ -87,6 +146,9 @@ POST /api/admin/release             {tag, notes, safety} -> {tag, upgradeRuns, r
 POST /api/admin/fleet/seed          {count} -> {created, batch, runId}     default 200, cap 500
 POST /api/admin/fleet/cleanup       {batch?} -> {deleted, failed}          deletes seeded forks only (user-seed-*)
 POST /api/admin/harvest             -> {runId}
+GET  /api/forks/:repo/health        -> {repo, health, history[]}             yellow to green state (Stage 6)
+POST /api/admin/e2e                 {repo, ref?} -> E2E result               one run of the end-to-end tiers, no state change
+POST /api/admin/yellow/:repo        -> {runId}                               re-check a fork's current main with a yellow soak
 GET  /api/harvest                   -> HarvestProposal[]
 ```
 

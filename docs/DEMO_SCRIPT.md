@@ -22,7 +22,7 @@ Live URL: https://fluid.renato83.workers.dev
 
 Do these in order, about 30 minutes before recording.
 
-1. **Deployment is current.** The deployed Worker runs the latest commit, and stock is published (`npm run publish-stock`, see `docs/DEPLOY.md`). The **Fleet** header lists stock tags up to the newest release (v1.9.0 at the last check), and the **Release** form suggests the next tag (v1.10.0).
+1. **Deployment is current.** The deployed Worker runs the latest commit, and stock is published (`npm run publish-stock`, see `docs/DEPLOY.md`). The **Fleet** header lists stock tags up to the newest release (v1.10.0 at the last check, the first tag with the stock end-to-end suite), and the **Release** form suggests the next tag (v1.11.0).
 2. **Admin secret ready.** Have the `ADMIN_TOKEN` value in your password manager. You will paste it once into the Fleet view. Never show it on screen: paste it before you start recording the Fleet scene, or blur it in editing.
 3. **Check the fleet.** The production fleet is already seeded with 200 forks pinned to v1.5.0. **Fleet** should show about 195 **Pinned** and 5 **Repair open**. The repair-open forks are seeds whose lowered-tau change failed on a work branch. Their `main` is clean, so they upgrade normally on release day. Leave the fleet alone if it looks like that. If it has already been released, or it looks wrong, reseed it:
    - `POST /api/admin/fleet/cleanup` with `{}` and the admin header. This deletes only `user-seed-*` forks.
@@ -140,6 +140,14 @@ Point out: the three tier boxes and their counts.
 
 Point out: the enrollment figure in the research card.
 
+**Optional shot 2.5b (0:20), yellow to green.** Before shot 2.5, stay on **Customize** for a moment after the gate passes. The top bar badge reads **Yellow: soak pass 1 of 3**, and the **Yellow phase** panel fills in: the stock end-to-end scenarios, Sam's accepted REDCap scenario, and the browser checks. About 40 seconds later it turns **Green**.
+
+> Passing the gate puts the change live right away, but with a yellow badge.
+> The mothership's end-to-end suite now runs against Sam's live fork, three times in a row, plus a real browser check of the app.
+> If any of it failed, main would roll back to the last green commit and a repair would open. Here it turns green.
+
+Point out: the badge in the top bar, the three-segment soak bar, and the scenario list with Sam's own `e2e-redcap-no-leak` scenario.
+
 **Optional shot 2.6 (0:20).** If there is time, stay on Sam and ask in **Customize**: "Always use palatino lino type kind of fonts and add a tab with charts". The run maps the request onto `ui/preferences.json` (the Palatino stack and a **Charts** tab), says what it mapped, proposes one config test, and passes all three tiers. The font changes and **Charts** appears under **Your tabs**.
 
 > Forks can change their own look too, but only through a declarative file the platform validates. No fork code runs in the browser.
@@ -195,7 +203,9 @@ Point out: the status line "Tagged v... N upgrade runs started."
 
 The production rehearsal (12 forks) finished in 43 seconds, and the first upgrade finished after 12 seconds. Expect a 200-fork release to take about 2 to 3 minutes. Of the 200 seeds, the 4 compact-research forks stay pinned with a repair branch. Everything else should pass, some after the merge agent resolves a conflict.
 
-Point out: the counters moving, the progress bar, and the stream lines arriving with fork names.
+Point out: the counters moving, the progress bar, and the stream lines arriving with fork names. As auto-upgraded forks pass, their squares turn **yellow** first: the upgrade is live, and the end-to-end suite is soaking on it. Over the next minute they turn green. Say so:
+
+> Yellow squares are forks that already run the new release. The end-to-end suite runs on each of them three times before they turn green; a failure would roll that fork back on its own.
 
 **Shot 4.4 (0:15).** When most squares are green, point at **Failed** and **Repair open**.
 

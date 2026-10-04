@@ -29,3 +29,14 @@ A fork can change how the control plane looks for its owner through one declarat
 - **Accessibility.** Every chart has a heading, a text summary as its caption, an SVG title, a legend when it has more than one series, a native tooltip per mark, and a "Show data as a table" view. Colors come from CSS variables, so charts follow the light and dark themes. The mode colors are the established identity colors of the UI and are close for some color vision deficiencies, so charts never rely on color alone: legends, captions, and tables carry the same information.
 - **Mock mode** serves `GET /api/forks/:repo/ui` and `GET /api/me/charts` from the in-browser data and simulates the UI recipe, so the same request works with `?mock=1`.
 
+
+## Yellow to green health
+
+Every change that lands on a fork's `main` is live in yellow until the end-to-end suite passes three times in a row (`docs/GATE_AND_AGENTS.md`, "Yellow to green"). `js/health.js` renders it with `h()` only.
+
+- **Top bar.** The fork pill starts with a health badge: **Green**, **Yellow: soak pass 2 of 3**, or **Rolled back**. While the fork is yellow, `app.js` polls `GET /api/forks/:repo/health` every 3 seconds, so the badge follows the soak to green or a rollback. Clicking it opens **My fork**.
+- **My fork.** The **Health: yellow to green** panel shows the badge, a three-segment soak progress bar, the yellow, green, or revert commit, the last green commit, the browser checks, the scenario list of the latest pass grouped by tier (stock, basic platform, your own), the failing step of a failed scenario (path, op, expected, actual), and the health history.
+- **Customize.** After the gate merges, the **Yellow phase** panel follows the yellow run until it is green, rolled back, or cancelled; the page keeps polling until then. End-to-end scenario suggestions (`tests/user/e2e.json`) list their steps and can be accepted or rejected.
+- **Fleet.** The grid and the counts show **Yellow (soaking)** and **Rolled back** over idle statuses (`displayStatus`, mirrored from `platform/src/yellow/state.ts`); yellow squares blink while they soak. Rolled back forks appear under **Needs attention**, and the fork detail shows the health badge.
+- **Colors.** `--yellow` and `--rolled` (with light and dark shades) are new tokens. The badge carries its state as text, so color is never the only signal; animation stops under `prefers-reduced-motion`.
+- **Mock mode** simulates the soak: a mock customization lands, goes yellow, passes three soak passes with the browser checks once, and turns green; a mock release shows auto-upgraded forks as yellow squares that turn green a few seconds later.

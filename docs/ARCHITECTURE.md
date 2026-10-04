@@ -28,6 +28,11 @@ flowchart TB
   W --> CW["Customize Workflow"] & RW["Release Workflow"] & HW["Harvest Workflow"]
   RW --> UW["Upgrade Workflow, one per fork"]
   GW -- fail --> RP["Repair Workflow"]
+  GW & UW -- landed on main --> YW["Yellow Workflow: e2e soak"]
+  YW -- runner isolate at pinned tag --> RN
+  YW -- fail: revert main --> F
+  YW -- fail --> RP
+  YW --> BR["Browser Rendering: browser checks"]
   CW & UW & GW --> RT["Worker Loader: fork isolate repo:sha"]
   GW & UW --> RN["Worker Loader: stock runner isolate"]
   RN -- ask callback over RPC --> RT
@@ -69,6 +74,13 @@ flowchart TB
   5. On a pass, fast-forward `main` to exactly the gated commit and push. If `main` moved in the meantime, merge `main` into the work branch, push it there, and gate that new commit. On a fail, leave `main` alone and start a `RepairWorkflow`.
 - **Merge rules.** Only the gate moves `main`, and only by fast-forward to a gated commit. `repair/*` branches are gated in check mode and never merged automatically. `upgrade/*` branches are gated by their own upgrade workflow. A fork's pinned stock tag only moves forward: a change that pins an older tag than the one on `main` cannot merge.
 - **Primitives.** Artifacts event subscriptions, Queues, Workflows, Worker Loader, isomorphic-git over an in-memory filesystem (`platform/src/git/ops.ts`, `platform/src/git/memory-fs.ts`) with repo-scoped tokens.
+
+### Yellow to green regression (extends spec 4.3 and 6)
+
+- **Rule.** Every change that passes the gate lands on `main` right away in the yellow state, with a badge. A stock-owned end-to-end suite then runs against the live fork; three consecutive passes turn it green, and a failure rolls `main` back to the last green commit and opens a repair linked to the change's intent records. Customizations, auto and one-tap upgrades, and repair applies all go through it.
+- **Code.** `platform/src/workflows/yellow.ts` (one `YellowWorkflow` per landed commit), `platform/src/yellow/state.ts` (pure state machine on the `Fleet` entry), `platform/src/yellow/run.ts` (one run of the tiers through the runner isolate and the host callback), `platform/src/yellow/tiers.ts` (stock, platform, and user tiers), `platform/src/yellow/rollback.ts` (revert commit on top of the yellow commit, never a force push), `platform/src/yellow/browser.ts` (browser checks). Stock: `stock/tests/e2e/manifest.json` and `stock/tests/e2e/runner.ts`.
+- **Isolation.** The scenario runner runs in its own isolate built only from stock files at the pinned tag (`stock-e2e-runner:<sha>`) and reaches the fork through one RPC callback; platform state (ledger, overrides) is touched only for a synthetic test user scoped to the run.
+- **Primitives.** Workflows, Worker Loader, Durable Objects, isomorphic-git, Browser Rendering. Details in `docs/GATE_AND_AGENTS.md`, "Yellow to green".
 
 ### Intent engine and mode contracts (spec 5)
 
@@ -126,10 +138,11 @@ flowchart TB
 | Artifacts binding | `env.ARTIFACTS`, `platform/src/runtime/repo-files.ts`, `platform/src/forks/provision.ts` | Create, fork, read files and logs, mint repo-scoped tokens |
 | isomorphic-git | `platform/src/git/ops.ts` | Commits, branches, tags, merges, and pushes from inside the Worker |
 | Worker Loader | `env.LOADER`, `platform/src/runtime/loader.ts` | One isolate per fork commit, and one per stock runner |
-| Workflows | `platform/src/workflows/*` | Gate, customize, repair, release, upgrade, seed, harvest |
+| Workflows | `platform/src/workflows/*` | Gate, customize, repair, release, upgrade, seed, harvest, yellow soak |
 | Queues with event subscriptions | queue `fluid-events`, `platform/src/events/*` | Start a gate on every push |
 | Durable Objects (SQLite) | `platform/src/durable/*` | Fleet registry and stream, run timelines, run-time ledger, quotas |
 | Workers AI with AI Gateway | `env.AI`, `platform/src/runtime/llm.ts`, gateway `fluid` | Agent planning, merge resolution, repair explanations, harvest labels, optional card wording |
+| Browser Rendering | `env.BROWSER`, `platform/src/yellow/browser.ts`, `@cloudflare/puppeteer` | The yellow soak's browser checks, once per yellow period |
 | Static assets | `platform/public/`, SPA fallback, `/api/*` runs the Worker first | The UI |
 
 Models (named only because the code pins them): `@cf/meta/llama-3.3-70b-instruct-fp8-fast` for fast structured calls, and `@cf/openai/gpt-oss-120b` for agent work inside Workflows. Every model call asks for JSON output and the result is validated against a schema in code.
@@ -164,7 +177,7 @@ These rules are plain code in `stock/` and work with no model at all. Invariants
 - Every card has the override control, and every answer writes a run-time record.
 - Requests are validated and fail closed (for example, a chart counts as identified unless `identified` is exactly `false`).
 
-The platform side is also deterministic: the consumer filter, the choice of floor source, the merge decision (only a passing gate merges), pin monotonicity, quota checks, the fallback merge rule, and the safety-release stock-mode rule.
+The platform side is also deterministic: the yellow soak and its rollback, the consumer filter, the choice of floor source, the merge decision (only a passing gate merges), pin monotonicity, quota checks, the fallback merge rule, and the safety-release stock-mode rule.
 
 ### What models may do
 
@@ -180,6 +193,7 @@ The platform side is also deterministic: the consumer filter, the choice of floo
 - Produce or change a clinical answer. Clinical cards and held research cards use template wording only.
 - Choose which tests run, or edit stock tests. The floor always comes from stock at the pinned tag.
 - Merge anything into `main`. Only a passing gate merges, and repairs are never merged automatically.
+- Decide whether a change stays on `main`. The end-to-end suite and the rollback rule are code; the suite comes from stock at the pinned tag.
 - Reach the network from a fork. Fork isolates have no outbound access, and model calls go through a budgeted RPC capability (20 per minute per repo, 200 per minute across the platform, 300 per minute at the gateway).
 
 ### Data
