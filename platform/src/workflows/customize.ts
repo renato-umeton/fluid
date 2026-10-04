@@ -3,7 +3,10 @@
 // suggester propose tier 3 probes, waits for the user's decisions, commits
 // the accepted tests, pushes, and starts the gate for that push.
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
+import { CandidateError, failureExplanation, MAX_REPAIRS, planWithRepairs, userFacingError } from "../agents/attempts.ts";
 import { diffEntries } from "../agents/diff.ts";
+import { checkImports } from "../agents/imports.ts";
+import { uiChange } from "../agents/ui-recipe.ts";
 import { buildIntent, cleanText, intentJson, intentPath, slugify } from "../agents/intent.ts";
 import { matchRecipe, protocolsFor, redcapChange, replanOnMovedMain, tauChange, type PlannedChange } from "../agents/recipes.ts";
 import { fallbackSuggestion, mergeUserManifest, suggestionsFromModel, suggestTests, SUGGESTION_SCHEMA, USER_MANIFEST, type Probe, type Suggestion } from "../agents/suggester.ts";
@@ -19,10 +22,12 @@ import { askCard, FORK_CALL_TIMEOUT_MS, loadForkRuntime, withTimeout } from "../
 import { isRuntimePath, transformTs } from "../runtime/modules.ts";
 import { headOf, openRepo, readCommitFiles } from "../runtime/repo-files.ts";
 import { runsStub } from "../stubs.ts";
+import { parseUiPreferences, UI_PREFERENCES_PATH } from "../ui/preferences.ts";
 import { appExports, ensureRun, errorText, GIT_STEP, linkGateParent, repoRemote, runLog, startGateInstance, guarded, steps, type CustomizeParams, type Steps } from "./common.ts";
 
 export const MODEL_LIMITS = { maxFiles: 3, maxFileChars: 16_000 };
 const MODEL_PATH = /^(app|intent|policies|connectors)\/[A-Za-z0-9_-]+(\/[A-Za-z0-9_-]+)*\.(ts|json)$/;
+const PLAN_TIMEOUT = "15 minutes";
 const DECISION_TIMEOUT = "1 hour";
 /** Waiting for the gate or repair: up to WAIT_ROUNDS event waits of WAIT_EACH each (about 30 minutes). */
 const WAIT_ROUNDS = 30;
@@ -44,9 +49,14 @@ export function checkModelFiles(files: { path: string; content: string }[]): str
 	if (files.length === 0) return "the plan changes no files";
 	if (files.length > MODEL_LIMITS.maxFiles) return `the plan changes ${files.length} files; at most ${MODEL_LIMITS.maxFiles} are allowed`;
 	for (const f of files) {
-		if (typeof f.path !== "string" || !MODEL_PATH.test(f.path) || f.path.includes("..")) return `path ${JSON.stringify(f.path)} is outside app/, intent/, policies/, connectors/`;
+		if (typeof f.path !== "string" || (f.path !== UI_PREFERENCES_PATH && !MODEL_PATH.test(f.path)) || f.path.includes("..")) return `path ${JSON.stringify(f.path)} is outside app/, intent/, policies/, connectors/ (and is not ${UI_PREFERENCES_PATH})`;
 		if (typeof f.content !== "string" || f.content.length === 0) return `${f.path} is empty`;
 		if (f.content.length > MODEL_LIMITS.maxFileChars) return `${f.path} is larger than ${MODEL_LIMITS.maxFileChars} characters`;
+		if (f.path === UI_PREFERENCES_PATH) {
+			const prefs = parseUiPreferences(f.content);
+			if (!prefs.ok) return `${f.path} is not valid UI preferences: ${prefs.errors.join("; ")}`;
+			continue;
+		}
 		try {
 			if (f.path.endsWith(".json")) JSON.parse(f.content);
 			else transformTs(f.content, f.path);
@@ -76,7 +86,7 @@ export class CustomizeWorkflow extends WorkflowEntrypoint<Env, CustomizeParams> 
 			using repo = await openRepo(this.env.ARTIFACTS, p.repo);
 			const sha = await headOf(repo, "main");
 			if (!sha) throw new Error(`${p.repo} has no main branch`);
-			const files = await readCommitFiles(repo, sha, { file: (path) => isRuntimePath(path) || path === "fluid.toml" || path === USER_MANIFEST, dir: (d) => ["app", "intent", "policies", "connectors", "tests", "tests/user"].some((x) => d === x || d.startsWith(`${x}/`)) });
+			const files = await readCommitFiles(repo, sha, { file: (path) => isRuntimePath(path) || path === "fluid.toml" || path === USER_MANIFEST || path === UI_PREFERENCES_PATH, dir: (d) => ["app", "intent", "policies", "connectors", "tests", "tests/user", "ui"].some((x) => d === x || d.startsWith(`${x}/`)) });
 			const intents = await readIntents(this.env, p.repo, sha);
 			const stockTag = pinnedTagOf(files["fluid.toml"]) ?? "unknown";
 			const custom = intents.filter((i) => i.agent && i.agent !== "onboarding");
@@ -84,32 +94,64 @@ export class CustomizeWorkflow extends WorkflowEntrypoint<Env, CustomizeParams> 
 			return { sha, files, stockTag, intentCount: intents.length };
 		});
 
-		const change = await step.do("plan the change", { retries: { limit: 1, delay: "2 seconds" }, timeout: "10 minutes" }, async () => {
+		// Plan, check, and load the change. A model-written change gets the exact error back and
+		// up to MAX_REPAIRS more tries; a recipe runs once. Nothing is committed until this passes.
+		const planned = await step.do("plan and validate the change", { retries: { limit: 1, delay: "2 seconds" }, timeout: PLAN_TIMEOUT }, async () => {
 			const recipe = matchRecipe(request);
+			const usesModel = !recipe;
+			let planOpen = true;
 			await log.step("Plan the change", "running", recipe ? `Matched the ${recipe.kind} recipe` : `Planning with ${AGENT_MODEL}`);
-			let planned: PlannedChange;
-			if (recipe?.kind === "redcap") {
-				planned = redcapChange({ indexSource: fork.files["app/index.ts"] ?? "", protocols: protocolsFor((synthetic as { personas: unknown }).personas, p.persona) });
-			} else if (recipe?.kind === "tau") {
-				planned = tauChange(fork.files["fluid.toml"] ?? "", recipe);
-			} else {
-				planned = await this.modelPlan(request, fork.files, fork.sha, p.runId);
-			}
-			await log.step("Plan the change", "done", planned.summary);
-			return planned;
+			const result = await planWithRepairs(
+				{
+					plan: async (feedback, attempt) => {
+						if (attempt > 1) {
+							planOpen = true;
+							await log.step("Plan the change", "running", `Repair ${attempt - 1} of ${MAX_REPAIRS}: the exact error went back to ${AGENT_MODEL}`);
+						}
+						let change: PlannedChange;
+						try {
+							if (recipe?.kind === "redcap") change = redcapChange({ indexSource: fork.files["app/index.ts"] ?? "", protocols: protocolsFor((synthetic as { personas: unknown }).personas, p.persona) });
+							else if (recipe?.kind === "tau") change = tauChange(fork.files["fluid.toml"] ?? "", recipe);
+							else if (recipe?.kind === "ui") change = uiChange(fork.files[UI_PREFERENCES_PATH] ?? null, request);
+							else change = await this.modelPlan(request, fork.files, feedback);
+						} catch (error) {
+							// A recipe that cannot apply (already applied, file changed shape) is the request's problem, not the platform's.
+							if (recipe && !(error instanceof CandidateError)) throw new CandidateError(errorText(error));
+							throw error;
+						}
+						planOpen = false;
+						await log.step("Plan the change", "done", change.mapped?.length ? `${change.summary}. Mapped: ${change.mapped.join("; ")}` : change.summary);
+						await log.step("Write code and load it in an isolate", "running");
+						return change;
+					},
+					validate: (change) => validateCandidate(this.env, exports, p.repo, fork.sha, change.files, fork.files),
+					onFailure: async (attempt, error, willRetry) => {
+						const detail = `Attempt ${attempt} failed: ${userFacingError(error)}${willRetry ? ". Sending the exact error back to the agent." : ""}`;
+						await log.step(planOpen ? "Plan the change" : "Write code and load it in an isolate", "failed", detail);
+					},
+				},
+				usesModel ? MAX_REPAIRS : 0,
+			);
+			if (!result.ok) return { ok: false as const, explanation: failureExplanation({ attempts: result.attempts, error: result.error, lastSummary: result.lastSummary, model: usesModel }) };
+			const runtime = Object.keys(result.change.files).some(isRuntimePath);
+			await log.step("Write code and load it in an isolate", "done", runtime ? `${Object.keys(result.change.files).length} file(s) changed; imports resolve, type-stripped, and answered a smoke question in a Worker Loader isolate${result.attempts > 1 ? ` (after ${result.attempts - 1} repair${result.attempts > 2 ? "s" : ""})` : ""}` : `${Object.keys(result.change.files).join(", ")} matches the UI preferences schema; no runtime code changed, so answer cards keep the stock contract`);
+			return { ok: true as const, change: result.change };
 		});
 
-		await step.do("validate the change", { retries: { limit: 1, delay: "2 seconds" }, timeout: "5 minutes" }, async () => {
-			await log.step("Write code and load it in an isolate", "running");
-			await validateInIsolate(this.env, exports, p.repo, fork.sha, change.files);
-			await log.step("Write code and load it in an isolate", "done", `${Object.keys(change.files).length} file(s) changed; type-stripped and answered a smoke question in a Worker Loader isolate`);
-			return true;
-		});
+		if (!planned.ok) {
+			await step.do("finish without a change", async () => {
+				await log.step("Nothing committed", "failed", planned.explanation);
+				await log.status("failed", { error: planned.explanation });
+				return true;
+			});
+			return { passed: false, branch: null, commit: null };
+		}
+		const change = planned.change;
 
 		const recorded = await step.do("record intent", async () => {
 			await log.step("Record build-time intent", "running");
 			const intentId = newIntentId();
-			const intent = buildIntent({ id: intentId, userId: p.userId, agent: "customization-agent", request, purpose: change.purpose, modes: change.modes_affected, files: [...Object.keys(change.files), intentPath(intentId)], stockTag: fork.stockTag, extra: { recipe: change.recipe } });
+			const intent = buildIntent({ id: intentId, userId: p.userId, agent: "customization-agent", request, purpose: change.purpose, modes: change.modes_affected, files: [...Object.keys(change.files), intentPath(intentId)], stockTag: fork.stockTag, extra: { recipe: change.recipe, ...(change.mapped?.length ? { mapped: change.mapped } : {}) } });
 			const before = Object.fromEntries(Object.keys(change.files).map((path) => [path, fork.files[path] ?? null]));
 			const diff = diffEntries({ ...before, [intentPath(intentId)]: null }, { ...change.files, [intentPath(intentId)]: intentJson(intent) }, { ...change.notes, [intentPath(intentId)]: "Why this change exists; the commit carries Intent-Id" });
 			const branch = `work/${slugify(request)}-${fnv1a(p.runId).slice(0, 4)}`;
@@ -276,51 +318,67 @@ export class CustomizeWorkflow extends WorkflowEntrypoint<Env, CustomizeParams> 
 	}
 
 
-	private async modelPlan(request: string, files: Record<string, string>, sha: string, runId: string): Promise<PlannedChange> {
-		const log = runLog(this.env, runId);
-		let feedback = "";
-		for (let attempt = 1; attempt <= 2; attempt++) {
-			const out = await callModel(this.env.AI, planPrompt(request, files, feedback), PLAN_SCHEMA, { model: AGENT_MODEL, maxTokens: 6000 });
-			const list = (Array.isArray(out.files) ? out.files : []) as { path: string; content: string }[];
-			const problem = checkModelFiles(list);
-			if (!problem) {
-				return {
-					summary: cleanText(String(out.summary), 200),
-					purpose: cleanText(String(out.purpose), 400),
-					modes_affected: (Array.isArray(out.modes_affected) ? out.modes_affected : []).map(String),
-					files: Object.fromEntries(list.map((f) => [f.path, f.content])),
-					notes: Object.fromEntries(list.map((f) => [f.path, files[f.path] === undefined ? "New file written by the customization agent" : "Edited by the customization agent"])),
-					recipe: "model",
-				};
-			}
-			feedback = `Your previous plan was rejected: ${problem}. Fix it.`;
-			await log.step("Plan the change", "running", `Attempt ${attempt} rejected: ${problem}`);
+	/** One model plan. A plan that breaks the file rules is a CandidateError, so its exact problem goes back to the model. */
+	private async modelPlan(request: string, files: Record<string, string>, feedback: string | null): Promise<PlannedChange> {
+		let out: Record<string, unknown>;
+		try {
+			out = await callModel(this.env.AI, planPrompt(request, files, feedback), PLAN_SCHEMA, { model: AGENT_MODEL, maxTokens: 6000 });
+		} catch (error) {
+			if (/not JSON|missing required key|should be|no content|not a JSON object/.test(errorText(error))) throw new CandidateError(`the plan was not valid JSON for the schema: ${errorText(error)}`);
+			throw error;
 		}
-		throw new Error(`the model did not produce a valid change: ${feedback}`);
+		const list = (Array.isArray(out.files) ? out.files : []) as { path: string; content: string }[];
+		const problem = checkModelFiles(list);
+		if (problem) throw new CandidateError(`the plan was rejected: ${problem}`);
+		return {
+			summary: cleanText(String(out.summary), 200),
+			purpose: cleanText(String(out.purpose), 400),
+			modes_affected: (Array.isArray(out.modes_affected) ? out.modes_affected : []).map(String),
+			files: Object.fromEntries(list.map((f) => [f.path, f.content])),
+			notes: Object.fromEntries(list.map((f) => [f.path, files[f.path] === undefined ? "New file written by the customization agent" : "Edited by the customization agent"])),
+			recipe: "model",
+		};
 	}
 }
 
-/** Loads the fork with the candidate files overlaid in a throwaway isolate variant and asks one question. */
-export async function validateInIsolate(env: Env, exports: Parameters<typeof loadForkRuntime>[0]["exports"], repo: string, sha: string, files: Record<string, string>): Promise<void> {
+/**
+ * Checks a candidate change before anything commits it: UI preferences
+ * against their schema; runtime files must parse and every import must
+ * resolve to a file in the fork or the change (statically, before loading);
+ * then the fork is loaded with the change overlaid in a throwaway isolate
+ * variant and asked one question. Any problem throws with the exact error.
+ */
+export async function validateCandidate(env: Env, exports: Parameters<typeof loadForkRuntime>[0]["exports"], repo: string, sha: string, files: Record<string, string>, tree: Record<string, string>): Promise<void> {
 	for (const [path, content] of Object.entries(files)) {
-		if (path.endsWith(".ts")) transformTs(content, path);
+		if (path === UI_PREFERENCES_PATH) {
+			const prefs = parseUiPreferences(content);
+			if (!prefs.ok) throw new Error(`${path} is not valid UI preferences: ${prefs.errors.join("; ")}`);
+		} else if (path.endsWith(".ts")) transformTs(content, path);
 		else if (path.endsWith(".json")) JSON.parse(content);
 	}
+	const runtime = Object.fromEntries(Object.entries(files).filter(([path]) => isRuntimePath(path)));
+	if (Object.keys(runtime).length === 0) return;
+	const unresolved = checkImports(runtime, tree);
+	if (unresolved.length) throw new Error(`imports do not resolve: ${unresolved.join("; ")}`);
 	const variant = `candidate-${fnv1a(JSON.stringify(files))}`;
 	const loaded = await loadForkRuntime({ env, exports }, repo, sha, { extraFiles: files, variant });
 	const card = (await withTimeout(askCard(loaded.fork, { question: "What is the formulary status of Morphinex?", context: {} }, { useModel: false }), FORK_CALL_TIMEOUT_MS, "candidate fork did not answer")) as { override_available?: unknown; ledger?: unknown };
 	if (card?.override_available !== true || !card.ledger) throw new Error("the changed fork answered without the card contract (override and ledger)");
 }
 
-function planPrompt(request: string, files: Record<string, string>, feedback: string): string {
+export function planPrompt(request: string, files: Record<string, string>, feedback: string | null): string {
 	const listing = Object.keys(files).filter((p) => p !== "fluid.toml" && p !== USER_MANIFEST).sort().join("\n");
 	const show = ["app/index.ts", "app/types.ts", "connectors/types.ts"].map((p) => `### ${p}\n${files[p] ?? "(missing)"}`).join("\n\n");
 	return `You customize one user's fork of Fluid, a clinical assistant runtime written in TypeScript (ES modules, relative imports end in ".js", no Node APIs, no network, no dependencies). Write the smallest change that does what the user asked.
 
-Rules: change at most ${MODEL_LIMITS.maxFiles} files, only under app/, intent/, policies/, or connectors/; give the complete new content of each file; keep app/index.ts default-exporting { ask }; every answer card keeps override_available, ledger, sources, and framing; clinical mode never computes a patient-specific dose; never lower tau or edit fluid.toml.
+Rules: change at most ${MODEL_LIMITS.maxFiles} files, only under app/, intent/, policies/, or connectors/ (plus ${UI_PREFERENCES_PATH}, see below); give the complete new content of each file; keep app/index.ts default-exporting { ask }; every answer card keeps override_available, ledger, sources, and framing; clinical mode never computes a patient-specific dose; never lower tau or edit fluid.toml.
+
+Imports: every relative import must name a file listed below or a file you write in this same change, with the ".js" extension (app/foo.ts is imported as "./foo.js"). Do not import a file that does not exist; to wrap existing code, edit it in place or import the existing module by its real name.
+
+Look and layout: fonts, density, colors, extra tabs, charts, and dashboards are never done in answer card code. The answer card JSON must stay the stock contract (no style, HTML, or layout fields). The UI reads look and layout only from ${UI_PREFERENCES_PATH}, a JSON object with optional keys: "font" (one of "system", "palatino", "georgia", "humanist-sans", "mono"), "density" ("comfortable" or "compact"), "accent" (one of "teal", "blue", "violet", "amber", "green", "rose", "slate"), and "tabs" (at most 4 objects {"title": plain text up to 40 characters, "widgets": 1 to 6 of "answers-by-intent", "confidence-distribution", "override-rate", "sources-by-kind", "intent-timeline", "gate-history"}). No other keys are allowed. If the request is about look and layout, write only that file.
 
 User request: ${request}
-${feedback ? `\n${feedback}\n` : ""}
+${feedback ? `\nYour previous attempt failed with this exact error. Fix it:\n${feedback}\n` : ""}
 Files in the fork:
 ${listing}
 
