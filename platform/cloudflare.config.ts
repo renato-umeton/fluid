@@ -17,6 +17,8 @@ export default defineConfig({
 			LOADER: bindings.workerLoader(),
 			// Browser Rendering for the yellow soak's browser checks (a remote browser; local dev cannot reach localhost).
 			BROWSER: bindings.browser({ dev: { remote: true } }),
+			// The URL users reach (the browser checks load the app there). Set FLUID_PUBLIC_ORIGIN when deploying; empty leaves the browser tier unavailable.
+			PUBLIC_ORIGIN: bindings.text(process.env.FLUID_PUBLIC_ORIGIN ?? ""),
 			USER_LEDGER: bindings.durableObject({ worker: "fluid", exportName: "UserLedger" }),
 			FLEET: bindings.durableObject({ worker: "fluid", exportName: "Fleet" }),
 			RUNS: bindings.durableObject({ worker: "fluid", exportName: "Runs" }),

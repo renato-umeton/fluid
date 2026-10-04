@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@cloudflare/puppeteer", () => ({ default: { launch: vi.fn() } }));
 
-const { bedsideCheck, browserPlan, isPublicOrigin, launchFailure, preferencesCheck, summarizeBrowser } = await import("../src/yellow/browser.ts");
+const { bedsideCheck, browserPlan, configuredOrigin, isPublicOrigin, launchFailure, preferencesCheck, summarizeBrowser } = await import("../src/yellow/browser.ts");
 const { testSession, verifySession, signSession, TEST_SESSION_MAX_MS, testUserId } = await import("../src/lib/session.ts");
 
 const SECRET = "a-test-secret-of-enough-length";
@@ -16,6 +16,18 @@ describe("browser tier plan", () => {
 		expect(browserPlan({ hasBinding: false, origin: "https://fluid.example.workers.dev", seeded: false })).toMatchObject({ run: false, status: "unavailable" });
 		expect(browserPlan({ hasBinding: true, origin: null, seeded: false })).toMatchObject({ run: false, status: "unavailable" });
 		expect(browserPlan({ hasBinding: true, origin: "http://localhost:5173", seeded: false })).toMatchObject({ run: false, status: "unavailable", detail: expect.stringMatching(/local development/) });
+	});
+
+	it("says how to configure the app URL when none is set", () => {
+		expect(browserPlan({ hasBinding: true, origin: null, seeded: false })).toMatchObject({ detail: expect.stringMatching(/PUBLIC_ORIGIN/) });
+	});
+
+	it("reads the app URL from the deployment's PUBLIC_ORIGIN, never from request traffic", () => {
+		expect(configuredOrigin({ PUBLIC_ORIGIN: "https://fluid.renato83.workers.dev/" })).toBe("https://fluid.renato83.workers.dev");
+		expect(configuredOrigin({ PUBLIC_ORIGIN: " https://fluid.example.org/app " })).toBe("https://fluid.example.org");
+		expect(configuredOrigin({ PUBLIC_ORIGIN: "" })).toBeNull();
+		expect(configuredOrigin({ PUBLIC_ORIGIN: "not a url" })).toBeNull();
+		expect(configuredOrigin({})).toBeNull();
 	});
 
 	it("skips seeded demo forks to limit browser usage during a release", () => {

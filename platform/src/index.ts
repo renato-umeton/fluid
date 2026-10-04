@@ -4,8 +4,6 @@ import { errorResponse, json, newRequestId } from "./api/http.ts";
 import { handleApi } from "./api/routes.ts";
 import { toHttpError } from "./api/validate.ts";
 import { handlePushEvents } from "./events/consumer.ts";
-import { fleetStub } from "./stubs.ts";
-import { ORIGIN_KEY } from "./workflows/yellow.ts";
 
 export { UserLedger } from "./durable/user-ledger.ts";
 export { Fleet } from "./durable/fleet.ts";
@@ -19,18 +17,11 @@ export { ReleaseWorkflow, UpgradeWorkflow } from "./workflows/upgrade.ts";
 export { HarvestWorkflow, SeedFleetWorkflow, SeedForkWorkflow } from "./workflows/fleet.ts";
 export { YellowWorkflow } from "./workflows/yellow.ts";
 
-/** The yellow soak's browser checks load the app from the URL users reach; each isolate records it once. */
-let originRecorded: string | null = null;
-
 export default {
 	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 		const url = new URL(request.url);
 		if (!url.pathname.startsWith("/api/")) return json({ error: "not found" }, 404);
 		if (!env.SESSION_SECRET) return json({ error: "SESSION_SECRET is not configured" }, 503);
-		if (originRecorded !== url.origin) {
-			originRecorded = url.origin;
-			ctx.waitUntil(fleetStub(env).setValue(ORIGIN_KEY, url.origin).catch(() => undefined));
-		}
 		try {
 			return await handleApi({ request, env, ctx, url });
 		} catch (error) {

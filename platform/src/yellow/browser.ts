@@ -35,9 +35,24 @@ const WAIT_MS = 25_000;
 export function browserPlan(input: { hasBinding: boolean; origin: string | null; seeded: boolean }): { run: true } | { run: false; status: "unavailable" | "skipped"; detail: string } {
 	if (input.seeded) return { run: false, status: "skipped", detail: "seeded demo fork: browser checks run for user forks only, to limit Browser Rendering usage" };
 	if (!input.hasBinding) return { run: false, status: "unavailable", detail: "no Browser Rendering binding (BROWSER) in this deployment" };
-	if (!input.origin) return { run: false, status: "unavailable", detail: "the app's public URL is not known yet (no request has reached this deployment)" };
+	if (!input.origin) return { run: false, status: "unavailable", detail: "the app's public URL is not configured (set PUBLIC_ORIGIN for this deployment)" };
 	if (!isPublicOrigin(input.origin)) return { run: false, status: "unavailable", detail: `${input.origin} is not reachable from Browser Rendering (local development)` };
 	return { run: true };
+}
+
+/**
+ * The URL users reach, from the deployment's PUBLIC_ORIGIN (set at deploy
+ * time), reduced to its origin. Request traffic never sets it, so a request
+ * through another hostname cannot point the browser checks elsewhere.
+ */
+export function configuredOrigin(env: { PUBLIC_ORIGIN?: string }): string | null {
+	const raw = (env.PUBLIC_ORIGIN ?? "").trim();
+	if (!raw) return null;
+	try {
+		return new URL(raw).origin;
+	} catch {
+		return null;
+	}
 }
 
 export function isPublicOrigin(origin: string): boolean {
