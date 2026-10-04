@@ -212,3 +212,17 @@ These numbers come from `cf dev` with Artifacts and AI remote. The first table i
 | Harvest across 31 forks | 12 s |
 
 Of the 31 forks, 30 passed, 6 of them after the merge agent resolved a conflict. The one compact-research seed failed only `inv-research-cross-check-visible` and stayed pinned with a repair branch; applying that repair moved its `main` to the new tag. The lowered-tau seed's `main` stayed clean (its change failed on a work branch), so it upgraded normally. Earlier, before the fixes, `--seed 200` upgraded 202 forks in 159 s with up to 110 in flight.
+
+### Yellow soak, measured on 2026-10-04
+
+`scripts/e2e-yellow.mjs` against production (fork on stock v1.10.0, stock tier 10 scenarios plus 1 skipped, user tier 1 scenario) and against `cf dev` with remote Artifacts:
+
+| Step | Production | Local |
+| --- | --- | --- |
+| Good change, request to merged (gate, including test decisions) | 17.9 s | 12.1 s |
+| Good change, yellow soak to green (3 passes, browser checks once) | 38.9 s | 48.2 s |
+| Admin test change, request to merged (tiers 1 to 3 passed) | 15.1 s | 10.1 s |
+| Admin test change, yellow to rolled back (revert commit pushed, repair started) | 18.4 s | 10.1 s |
+| Repair apply, gate (with the merge of main) and soak to green | 58.0 s | 54.8 s |
+
+On production the browser tier passed all four checks; locally it reports `unavailable` because the remote browser cannot reach `localhost`. A dry run of one pass (`POST /api/admin/e2e`) on seeded forks pinned to v1.5.0 (basic platform scenarios) took 2 to 4 seconds.

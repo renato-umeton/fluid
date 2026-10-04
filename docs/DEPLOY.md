@@ -101,7 +101,7 @@ npm run content
 npx cf deploy --secrets-file ~/.config/fluid/secrets.env
 ```
 
-`npm run content` regenerates the bundled stock and synthetic content in `src/generated/`. The deploy creates the Worker `fluid`, its four Durable Object classes (`UserLedger`, `Fleet`, `Runs`, `Quota`), its eight Workflows (`fluid-gate`, `fluid-customize`, `fluid-repair`, `fluid-upgrade`, `fluid-release`, `fluid-seed-fleet`, `fluid-seed-fork`, `fluid-harvest`), and the queue consumer. It prints the Worker URL. A new version can take a few seconds to reach every request.
+`npm run content` regenerates the bundled stock and synthetic content in `src/generated/`. The deploy creates the Worker `fluid`, its four Durable Object classes (`UserLedger`, `Fleet`, `Runs`, `Quota`), its nine Workflows (`fluid-gate`, `fluid-customize`, `fluid-repair`, `fluid-upgrade`, `fluid-release`, `fluid-seed-fleet`, `fluid-seed-fork`, `fluid-harvest`, `fluid-yellow`), the Browser Rendering binding `BROWSER` for the yellow soak's browser checks, and the queue consumer. It prints the Worker URL. A new version can take a few seconds to reach every request.
 
 Check it:
 
@@ -153,6 +153,12 @@ ADMIN_TOKEN=... FLUID_URL="$FLUID_URL" node scripts/e2e-stage3.mjs --seed 200
 
 It cleans up its own forks unless you pass `--keep`.
 
+The yellow to green scenario (a good change soaks to green; the admin-only test change passes tiers 1 to 3, fails end to end, and rolls back; applying its repair soaks to green) runs with:
+
+```sh
+ADMIN_TOKEN=... FLUID_URL="$FLUID_URL" node scripts/e2e-yellow.mjs
+```
+
 ## 10. Before you share the URL
 
 - `workers.dev` and preview URLs are on by default. Decide which ones you want public.
@@ -195,6 +201,7 @@ Notes:
 - Queue events go only to the deployed consumer, because the subscription is account-wide. Locally, the customize and upgrade Workflows start their gates directly, and `POST /api/gates/:repo` with `{"branch": "<branch>"}` gates any other branch by hand.
 - Pushes made from local dev also reach a deployed consumer on the same account. Purge `fluid-events` (step 5) before a first deploy that follows local testing.
 - The UI works with no backend at all: serve `platform/public/` and open `/?mock=1`.
+- The yellow soak's browser checks need a public https URL that Browser Rendering can reach, so under `cf dev` the browser tier reports `unavailable` and the API tiers decide.
 
 Tests:
 
@@ -218,7 +225,7 @@ npx cf queues delete "$QUEUE_ID"
 npx cf workers delete fluid
 
 # 3. Workflows
-for wf in fluid-gate fluid-customize fluid-repair fluid-upgrade fluid-release fluid-seed-fleet fluid-seed-fork fluid-harvest; do
+for wf in fluid-gate fluid-customize fluid-repair fluid-upgrade fluid-release fluid-seed-fleet fluid-seed-fork fluid-harvest fluid-yellow; do
   npx cf workflows delete "$wf"
 done
 
