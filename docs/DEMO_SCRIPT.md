@@ -22,7 +22,7 @@ Live URL: https://fluid.renato83.workers.dev
 
 Do these in order, about 30 minutes before recording.
 
-1. **Deployment is current.** The deployed Worker runs the latest commit, and stock is published (`npm run publish-stock`, see `docs/DEPLOY.md`). The **Fleet** header lists stock tags up to the newest release (v1.10.0 at the last check, the first tag with the stock end-to-end suite), and the **Release** form suggests the next tag (v1.11.0).
+1. **Deployment is current.** The deployed Worker runs the latest commit, and stock is published (`npm run publish-stock`, see `docs/DEPLOY.md`). The **Fleet** header lists stock tags up to the newest release (v1.11.0 at the last check; v1.10.0 was the first tag with the stock end-to-end suite, and v1.11.0 adds retryable soak failures and the regex limits), and the **Release** form suggests the next tag (v1.12.0). Use v1.12.0 on camera.
 2. **Admin secret ready.** Have the `ADMIN_TOKEN` value in your password manager. You will paste it once into the Fleet view. Never show it on screen: paste it before you start recording the Fleet scene, or blur it in editing.
 3. **Check the fleet.** The production fleet is already seeded with 200 forks pinned to v1.5.0. **Fleet** should show about 195 **Pinned** and 5 **Repair open**. The repair-open forks are seeds whose lowered-tau change failed on a work branch. Their `main` is clean, so they upgrade normally on release day. Leave the fleet alone if it looks like that. If it has already been released, or it looks wrong, reseed it:
    - `POST /api/admin/fleet/cleanup` with `{}` and the admin header. This deletes only `user-seed-*` forks.
@@ -219,7 +219,7 @@ Point out: the counters moving, the progress bar, and the stream lines arriving 
 > The user reviews the fix. Repairs never merge on their own.
 > Because this is a safety release, there is a grace period. After it ends, this capability runs in stock mode until the repair is merged. The customization stays safe on its branch.
 
-Pick a fork whose explanation reads well on camera during the dry run. The seeded forks that stay pinned carry a compact research customization. It passed at their pinned tag (v1.5.0) and fails only `inv-research-cross-check-visible`, the invariant the demo releases added after v1.5.0. Stock v1.10.0 already carries it (the publish keeps the latest release's tightened invariants), so the on-camera release no longer adds it in its own diff and its release intent lists no new tests; the seeds still fail it at the new tag because it is tighter than their pin.
+Pick a fork whose explanation reads well on camera during the dry run. The seeded forks that stay pinned carry a compact research customization. It passed at their pinned tag (v1.5.0) and fails only `inv-research-cross-check-visible`, the invariant the demo releases added after v1.5.0. Stock v1.10.0 and v1.11.0 already carry it (the publish keeps the latest release's tightened invariants and lists them in `keptInvariants`), so the on-camera release no longer adds it in its own diff and its release intent lists no new tests; the seeds still fail it at the new tag because it is tighter than their pin.
 
 Point out: the **Repair agent:** explanation, the safety release box, **Run steps**, **Proposed fix**, the failing probe under **Gate on the upgrade branch**, and the highlighted intent record it relied on.
 
