@@ -98,10 +98,11 @@ The first deploy of a new Worker fails until its secrets exist, so pass the file
 
 ```sh
 npm run content
+FLUID_PUBLIC_ORIGIN=https://fluid.<your-subdomain>.workers.dev \
 npx cf deploy --secrets-file ~/.config/fluid/secrets.env
 ```
 
-`npm run content` regenerates the bundled stock and synthetic content in `src/generated/`. The deploy creates the Worker `fluid`, its four Durable Object classes (`UserLedger`, `Fleet`, `Runs`, `Quota`), its nine Workflows (`fluid-gate`, `fluid-customize`, `fluid-repair`, `fluid-upgrade`, `fluid-release`, `fluid-seed-fleet`, `fluid-seed-fork`, `fluid-harvest`, `fluid-yellow`), the Browser Rendering binding `BROWSER` for the yellow soak's browser checks, and the queue consumer. It prints the Worker URL. A new version can take a few seconds to reach every request.
+`npm run content` regenerates the bundled stock and synthetic content in `src/generated/`. `FLUID_PUBLIC_ORIGIN` becomes the Worker's `PUBLIC_ORIGIN` text binding: the URL users reach, where the yellow soak's browser checks load the app. Set it on every deploy (the value is part of the deployed configuration). Without it the browser tier reports `unavailable` and the API tiers decide alone. The deploy creates the Worker `fluid`, its four Durable Object classes (`UserLedger`, `Fleet`, `Runs`, `Quota`), its nine Workflows (`fluid-gate`, `fluid-customize`, `fluid-repair`, `fluid-upgrade`, `fluid-release`, `fluid-seed-fleet`, `fluid-seed-fork`, `fluid-harvest`, `fluid-yellow`), the Browser Rendering binding `BROWSER` for the yellow soak's browser checks, and the queue consumer. It prints the Worker URL. A new version can take a few seconds to reach every request.
 
 Check it:
 
@@ -151,7 +152,13 @@ The full scripted scenario (customize, failed gate, release, harvest) runs with:
 ADMIN_TOKEN=... FLUID_URL="$FLUID_URL" node scripts/e2e-stage3.mjs --seed 200
 ```
 
-It cleans up its own forks unless you pass `--keep`.
+It cleans up its own forks unless you pass `--keep`. To rehearse without publishing a new stock tag, pass `--tag` with the latest existing tag: the release then only re-runs that tag's fan-out. The script waits for every yellow soak after the release and reports the peak number of forks in yellow and any fork rolled back.
+
+Forks that existed before the yellow soak read as green without ever passing the end-to-end suite. The baseline dry-runs the suite once against every fork's `main` and flags the forks that fail on their fleet entries. It never rolls anything back or changes a fork's `main` or health:
+
+```sh
+ADMIN_TOKEN=... FLUID_URL="$FLUID_URL" node scripts/baseline.mjs
+```
 
 The yellow to green scenario (a good change soaks to green; the admin-only test change passes tiers 1 to 3, fails end to end, and rolls back; applying its repair soaks to green) runs with:
 
