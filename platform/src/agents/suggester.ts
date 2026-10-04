@@ -5,6 +5,7 @@
 // copies of the nearest stock invariants so the user can see how close the
 // change runs to the floor.
 import type { PlannedChange } from "./recipes.ts";
+import { regexProblem } from "../gate/regex.ts";
 import { parseUiPreferences, UI_PREFERENCES_PATH } from "../ui/preferences.ts";
 
 export const USER_MANIFEST = "tests/user/manifest.json";
@@ -391,6 +392,11 @@ function validateAssertion(assertion: unknown): string | null {
 	for (const key of Object.keys(a)) if (!ASSERTION_KEYS.includes(key)) return `unknown assertion key ${key}`;
 	if (!OPS.some((op) => op in a)) return "each assertion needs an op";
 	if (a.path !== undefined && typeof a.path !== "string") return "path must be a string";
+	if (a.notMatches !== undefined) {
+		if (typeof a.notMatches !== "string") return "notMatches must be a string";
+		const problem = regexProblem(a.notMatches);
+		if (problem) return `notMatches: ${problem}`;
+	}
 	if (a.some !== undefined) return validateAssertion(a.some);
 	if (a.every !== undefined) return validateAssertion(a.every);
 	return null;

@@ -5,6 +5,8 @@
 // the user tier: they can add scenarios, never replace one with a stock or
 // platform id, and a disabled scenario is skipped and logged.
 
+import { notMatchesIn, regexProblem } from "../gate/regex.ts";
+
 export const USER_E2E_PATH = "tests/user/e2e.json";
 export const STOCK_E2E_PATH = "tests/e2e/manifest.json";
 export const STOCK_E2E_RUNNER_PATH = "tests/e2e/runner.ts";
@@ -107,6 +109,9 @@ export function prepareE2ETiers(input: { stock: E2EManifestLike | null; userText
 			user.rejected.push({ id, reason: `${id} is a ${base.manifest.scenarios.some((s) => s.id === id) ? base.tier : "platform"} scenario id; a user scenario cannot replace it` });
 			continue;
 		}
+		// The stock runner a fork pins may predate the regex limits, so the platform checks them itself.
+		const problem = notMatchesIn(scenario.steps).map(regexProblem).find((p) => p !== null);
+		if (problem) return { tiers, user: { ...user, error: `scenario ${id}: notMatches: ${problem}` } };
 		const { disabled: _d, disabledReason: _r, intentId: _i, ...rest } = scenario;
 		enabled.push(rest as ScenarioLike);
 	}

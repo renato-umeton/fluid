@@ -7,6 +7,7 @@
 //     here against the parsed JSON, with the runner's assertion semantics,
 //     and merged into the user tier result.
 import { parseUiPreferences, UI_PREFERENCES_PATH } from "../ui/preferences.ts";
+import { regexProblem } from "./regex.ts";
 import type { GateFailure, RunnerFailure, RunnerManifestResult, RunnerProbeResult } from "./tiers.ts";
 
 export const UI_INVARIANT_ID = "ui-preferences-valid";
@@ -125,6 +126,8 @@ function check(op: Exclude<(typeof OPS)[number], "some" | "every">, expected: un
 }
 
 function parseRegex(source: string): RegExp {
+	const problem = regexProblem(source);
+	if (problem) throw new Error(`notMatches: ${problem}`);
 	const literal = /^\/(.*)\/([a-z]*)$/s.exec(source);
 	if (!literal) return new RegExp(source);
 	return new RegExp(literal[1]!, literal[2]!.replace(/[gy]/g, ""));
