@@ -271,7 +271,9 @@ try {
 	check("each pinned fork failed only the new research invariant", pinnedRuns.every((r) => r.gate?.failures?.length > 0 && r.gate.failures.every((f) => f.probe.startsWith("inv-research-cross-check-visible"))), pinnedRuns.map((r) => r.gate?.failures?.[0]?.probe).join(", "));
 	check("each repair reverts the research customization and passes its check at the new tag", pinnedRuns.every((r) => r.rule === "revert-customization" && r.repairGate?.passed === true), pinnedRuns.map((r) => `${r.branch}:${r.rule}:${r.repairGate?.passed}`).join(", "));
 	check("lowered-tau seeds upgraded normally (their mains were clean)", lowerTauForks.every((r) => final.forks.find((x) => x.repo === r)?.status === "passed"), lowerTauForks.map((r) => `${r}:${final.forks.find((x) => x.repo === r)?.status}`).join(", "));
-	check("safety release grace period is shown on pinned forks", pinned.every((x) => typeof x.graceUntil === "string"), pinned[0]?.graceUntil ?? "none");
+	// A re-run of an existing tag keeps that tag's metadata; only a safety release has a grace period.
+	if (release.release?.safety) check("safety release grace period is shown on pinned forks", pinned.every((x) => typeof x.graceUntil === "string"), pinned[0]?.graceUntil ?? "none");
+	else console.log(`SKIP grace period check: ${tag} is not a safety release`);
 
 	// Apply one repair: the gate runs on the repair branch in merge mode and main fast-forwards on pass.
 	if (pinned[0]) {
