@@ -102,7 +102,9 @@ export function recordBrowser(state: HealthState, input: { runId: string; browse
 
 /**
  * The suite failed. With `revertCommit`, main was moved back to the last
- * green commit by that new commit: the fork is rolled back. Without it
+ * green commit by that new commit: the fork is rolled back, and the revert
+ * commit (the green tree plus the rollback intent record) becomes the last
+ * green commit, so a later rollback keeps that record. Without it
  * (no earlier green commit to return to), the fork stays yellow with the
  * failure recorded and no run left to change it.
  */
@@ -113,9 +115,21 @@ export function recordFailure(state: HealthState, input: { runId: string; failur
 		return { state: { ...state, runId: null, failure: input.failure }, events: [failed] };
 	}
 	return {
-		state: { ...state, health: "rolled_back", commit: input.revertCommit, runId: null, since: input.at, failure: input.failure, rolledBackFrom: state.commit },
+		state: { ...state, health: "rolled_back", commit: input.revertCommit, lastGreenCommit: input.revertCommit, runId: null, since: input.at, failure: input.failure, rolledBackFrom: state.commit },
 		events: [failed, { at: input.at, event: "rolled_back", commit: input.revertCommit, runId: input.runId, detail: `main moved back to the tree of ${short(state.lastGreenCommit)} with revert commit ${short(input.revertCommit)}` }],
 	};
+}
+
+/**
+ * What a recorded pass means for the run. A retried final pass finds the
+ * fork already green at this commit (the first attempt recorded it), which
+ * is a success, not a superseded run.
+ */
+export function passVerdict(outcome: { state: HealthState; stale: boolean } | null, commit: string): { stale: boolean; health: Health | null } {
+	if (!outcome) return { stale: true, health: null };
+	if (!outcome.stale) return { stale: false, health: outcome.state.health };
+	if (outcome.state.health === "green" && outcome.state.lastGreenCommit === commit) return { stale: false, health: "green" };
+	return { stale: true, health: null };
 }
 
 /** The run stopped without a verdict (main moved on). Only the current run changes the state. */

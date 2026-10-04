@@ -44,7 +44,7 @@ describe("Fleet yellow to green state", () => {
 		fleet.yellowStart("user-a", { commit: C, runId: "run_2", previous: B, source: "customize" });
 		expect(fleet.yellowFailure("user-a", { runId: "run_1", failure, revertCommit: R })?.stale).toBe(true);
 		expect(fleet.yellowCancel("user-a", { runId: "run_1", reason: "superseded" })?.stale).toBe(true);
-		expect(fleet.yellowFailure("user-a", { runId: "run_2", failure, revertCommit: R })).toMatchObject({ stale: false, state: { health: "rolled_back", commit: R, lastGreenCommit: A, rolledBackFrom: C } });
+		expect(fleet.yellowFailure("user-a", { runId: "run_2", failure, revertCommit: R })).toMatchObject({ stale: false, state: { health: "rolled_back", commit: R, lastGreenCommit: R, rolledBackFrom: C } });
 		expect(fleet.healthHistory("user-a").map((e) => e.event)).toEqual(["rolled_back", "failed", "cancelled", "yellow", "superseded", "yellow"]);
 	});
 

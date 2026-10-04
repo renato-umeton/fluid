@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cancelRun, displayStatus, initialHealth, recordBrowser, recordFailure, recordPass, SOAK_PASSES, startYellow, type HealthState } from "../src/yellow/state.ts";
+import { cancelRun, displayStatus, initialHealth, passVerdict, recordBrowser, recordFailure, recordPass, SOAK_PASSES, startYellow, type HealthState } from "../src/yellow/state.ts";
 
 const A = "a".repeat(40);
 const B = "b".repeat(40);
@@ -54,12 +54,14 @@ describe("yellow state machine", () => {
 		expect(recordFailure(s, { runId: "run_y1", failure, revertCommit: R, at })).toMatchObject({ state: s, stale: true });
 	});
 
-	it("a failure with a revert commit rolls the fork back and keeps the last green commit", () => {
+	it("a failure with a revert commit rolls the fork back, and the revert commit becomes the last green", () => {
 		const s = recordPass(yellow(), { runId: "run_y1", pass: 1, at }).state;
 		const t = recordFailure(s, { runId: "run_y1", failure, revertCommit: R, at });
-		expect(t.state).toMatchObject({ health: "rolled_back", commit: R, lastGreenCommit: A, rolledBackFrom: B, runId: null, failure });
+		// The revert commit has the green tree plus the rollback intent record, so a later rollback keeps that record.
+		expect(t.state).toMatchObject({ health: "rolled_back", commit: R, lastGreenCommit: R, rolledBackFrom: B, runId: null, failure });
 		expect(t.events.map((e) => e.event)).toEqual(["failed", "rolled_back"]);
 		expect(t.events[0]!.detail).toContain("failed at step ask");
+		expect(t.events[1]!.detail).toContain(`tree of ${A.slice(0, 7)}`);
 	});
 
 	it("a failure with nothing to roll back to stays yellow with the failure recorded", () => {
@@ -67,16 +69,31 @@ describe("yellow state machine", () => {
 		expect(t.state).toMatchObject({ health: "yellow", runId: null, failure });
 	});
 
-	it("after a rollback the next change starts yellow from the same last green commit", () => {
+	it("after a rollback the next change starts yellow with the revert commit as its last green", () => {
 		const rolled = recordFailure(yellow(), { runId: "run_y1", failure, revertCommit: R, at }).state;
 		const t = startYellow(rolled, { commit: C, runId: "run_y2", previous: R, source: "customize", at });
-		expect(t.state).toMatchObject({ health: "yellow", lastGreenCommit: A, failure: null, rolledBackFrom: null });
+		expect(t.state).toMatchObject({ health: "yellow", lastGreenCommit: R, failure: null, rolledBackFrom: null });
 	});
 
 	it("after a green the next change rolls back to that green", () => {
 		let s = yellow();
 		for (const pass of [1, 2, 3]) s = recordPass(s, { runId: "run_y1", pass, at }).state;
 		expect(startYellow(s, { commit: C, runId: "run_y2", previous: B, source: "customize", at }).state.lastGreenCommit).toBe(B);
+	});
+
+	it("a retried final pass after the fork already turned green is not stale", () => {
+		let s = yellow();
+		for (const pass of [1, 2, 3]) s = recordPass(s, { runId: "run_y1", pass, at }).state;
+		const again = recordPass(s, { runId: "run_y1", pass: 3, at });
+		expect(again.stale).toBe(true);
+		expect(passVerdict({ state: again.state, stale: true }, B)).toEqual({ stale: false, health: "green" });
+	});
+
+	it("a pass for a commit that is not the last green one stays stale", () => {
+		const s = startYellow(yellow(B), { commit: C, runId: "run_y2", previous: B, source: "upgrade", at }).state;
+		expect(passVerdict({ state: s, stale: true }, B)).toEqual({ stale: true, health: null });
+		expect(passVerdict(null, B)).toEqual({ stale: true, health: null });
+		expect(passVerdict({ state: s, stale: false }, C)).toEqual({ stale: false, health: "yellow" });
 	});
 
 	it("records the browser tier on the current run only", () => {
