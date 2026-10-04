@@ -11,6 +11,7 @@ import { bundledStockRelease, compareSemverDesc, listStockTags, publishStockRele
 import type { ReleaseMetadata } from "../stock/releases.ts";
 import { runGate } from "../gate/run.ts";
 import { runE2E } from "../yellow/run.ts";
+import { BASELINE_LIMITS, baselinePage, baselineRecord } from "../yellow/baseline.ts";
 import { isAdminTestRequest } from "../agents/test-recipe.ts";
 import type { GateResult } from "../gate/tiers.ts";
 import type { RunTimeRecord } from "../durable/user-ledger.ts";
@@ -258,7 +259,7 @@ route("GET", "/api/forks/:repo/health", async (rc, { repo }) => {
 	const fleet = fleetStub(rc.env);
 	const entry = await fleet.get(name);
 	if (!entry) throw new HttpError(404, "fork not found");
-	return json({ repo: name, health: entry.health, history: await fleet.healthHistory(name, 30) });
+	return json({ repo: name, health: entry.health, baseline: entry.baseline, history: await fleet.healthHistory(name, 30) });
 });
 
 // Fork-owned UI preferences (ui/preferences.json on main), validated against the platform schema.
@@ -402,6 +403,56 @@ route("POST", "/api/admin/e2e", async (rc) => {
 	if (!commit) throw new HttpError(404, "ref not found");
 	return json(await runE2E({ env: rc.env, exports: exportsOf(rc.ctx) }, { repo, commit, runId: `run_e2e_dry_${commit.slice(0, 8)}_${Date.now().toString(36)}` }));
 });
+
+// Fleet baseline: one dry run of the end-to-end tiers against each fork's main, a page at a time.
+// It records the result on the fork (a failing fork is flagged) and changes nothing else: no rollback, no health change.
+route("POST", "/api/admin/fleet/baseline", async (rc) => {
+	requireAdmin(rc);
+	const body = await readJson(rc.request);
+	const fleet = fleetStub(rc.env);
+	const all = (await fleet.list()).filter((f) => f.status !== "provisioning").map((f) => f.repo);
+	const offset = typeof body.offset === "number" ? body.offset : 0;
+	const page = baselinePage(all, { offset, limit: typeof body.limit === "number" ? body.limit : BASELINE_LIMITS.defaultPage });
+	const concurrency = Math.min(BASELINE_LIMITS.maxConcurrency, Math.max(1, Math.floor(typeof body.concurrency === "number" ? body.concurrency : BASELINE_LIMITS.defaultConcurrency)));
+	const record = body.record !== false;
+	const results: Record<string, unknown>[] = [];
+	let next = 0;
+	const worker = async () => {
+		while (next < page.repos.length) {
+			const repo = page.repos[next++]!;
+			results.push(await baselineFork(rc, repo, record));
+		}
+	};
+	await Promise.all(Array.from({ length: Math.min(concurrency, page.repos.length) }, worker));
+	results.sort((a, b) => String(a.repo).localeCompare(String(b.repo)));
+	return json({ total: all.length, offset: Math.max(0, Math.floor(offset)), count: page.repos.length, next: page.next, recorded: record, results });
+});
+
+async function baselineFork(rc: RouteContext, repo: string, record: boolean): Promise<Record<string, unknown>> {
+	try {
+		let commit: string | null;
+		{
+			using handle = await openRepo(rc.env.ARTIFACTS, repo);
+			commit = await headOf(handle, "main");
+		}
+		if (!commit) return { repo, error: "no main branch" };
+		const deps = { env: rc.env, exports: exportsOf(rc.ctx) };
+		const runId = `run_baseline_${commit.slice(0, 8)}_${Date.now().toString(36)}`;
+		let run = await runE2E(deps, { repo, commit, runId });
+		let retried = false;
+		if (!run.passed && run.retryable) {
+			run = await runE2E(deps, { repo, commit, runId, fresh: `baseline-${Date.now().toString(36)}` });
+			retried = true;
+		}
+		// Failures that may come from the platform do not flag a fork.
+		if (!run.passed && run.retryable) return { repo, commit, inconclusive: true, retried, failure: baselineRecord(run).failure };
+		const baseline = baselineRecord(run);
+		if (record) await fleetStub(rc.env).recordBaseline(repo, baseline);
+		return { repo, ...baseline, retried };
+	} catch (error) {
+		return { repo, error: scrubText(error instanceof Error ? error.message : String(error)).slice(0, 300) };
+	}
+}
 
 // Starts a yellow soak on a fork's current main (re-verifies a fork; with no earlier green commit a failure cannot roll back).
 route("POST", "/api/admin/yellow/:repo", async (rc, { repo }) => {

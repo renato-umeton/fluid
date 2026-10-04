@@ -2,7 +2,7 @@
 import { api, adminKey, setAdminKey } from "../api.js";
 import { h, mount, fmtTime, statusTag } from "../dom.js";
 import { renderTimeline, renderDiff, renderGate, renderIntent, repairApply } from "./shared.js";
-import { forkSummaryText } from "../fleet-summary.js";
+import { baselineText, forkSummaryText } from "../fleet-summary.js";
 import { displayStatus, healthBadge, healthText } from "../health.js";
 
 export const title = "Fleet";
@@ -254,6 +254,7 @@ async function renderDrill(repo) {
   mount(el, h("div", { class: "drill" },
     head,
     summary(f, run),
+    baselineText(f) ? h("p", { class: "small muted" }, baselineText(f)) : null,
     run?.explanation ? h("div", { class: "explain" }, h("strong", {}, run.kind === "repair" ? "Repair agent: " : ""), run.explanation) : null,
     run?.safety ? h("div", { class: "explain", style: { borderColor: "var(--fail)", background: "var(--fail-bg)" } }, run.safety) : null,
     run?.kind === "repair" && run.branch ? repairApply(repo, run.branch, { gatePassed: run.repairGate?.passed ?? null }) : null,

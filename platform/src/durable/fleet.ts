@@ -3,6 +3,7 @@
 // changes are broadcast to Server-Sent Events subscribers (the fleet view).
 import { DurableObject } from "cloudflare:workers";
 import type { Json } from "../lib/json.ts";
+import type { BaselineRecord } from "../yellow/baseline.ts";
 import { cancelRun, initialHealth, recordBrowser, recordFailure, recordPass, startYellow, type BrowserSummary, type HealthEvent, type HealthFailure, type HealthState, type Transition } from "../yellow/state.ts";
 
 /**
@@ -67,6 +68,8 @@ export interface FleetFork {
 	updatedAt: string;
 	/** Yellow to green lifecycle of main (a fork with no history is green). */
 	health: HealthState;
+	/** Latest fleet baseline: one dry run of the end-to-end tiers against main (a failing one flags the fork; nothing rolls back). */
+	baseline: BaselineRecord | null;
 }
 
 export interface FleetSnapshot {
@@ -74,6 +77,7 @@ export interface FleetSnapshot {
 	releases: ReleaseRecord[];
 	counts: Record<string, number>;
 	healthCounts: Record<string, number>;
+	baselineCounts: { passed: number; flagged: number; none: number };
 	forks: (Omit<FleetFork, "userId" | "createdAt"> & { graceUntil: string | null })[];
 }
 
@@ -120,6 +124,7 @@ export class Fleet extends DurableObject<Env> {
 		const columns = sql.exec("PRAGMA table_info(forks)").toArray().map((r) => r.name as string);
 		if (!columns.includes("pending_upgrade")) sql.exec("ALTER TABLE forks ADD COLUMN pending_upgrade TEXT");
 		if (!columns.includes("health")) sql.exec("ALTER TABLE forks ADD COLUMN health TEXT");
+		if (!columns.includes("baseline")) sql.exec("ALTER TABLE forks ADD COLUMN baseline TEXT");
 		sql.exec("CREATE TABLE IF NOT EXISTS health_history (seq INTEGER PRIMARY KEY AUTOINCREMENT, repo TEXT NOT NULL, event TEXT NOT NULL)");
 		sql.exec("CREATE INDEX IF NOT EXISTS health_history_repo ON health_history (repo, seq)");
 		sql.exec("CREATE TABLE IF NOT EXISTS stock_tags (tag TEXT PRIMARY KEY, published_at TEXT NOT NULL)");
@@ -229,6 +234,15 @@ export class Fleet extends DurableObject<Env> {
 
 	yellowCancel(repo: string, input: { runId: string; reason: string }): { state: HealthState; stale: boolean } | null {
 		return this.transitionReport(repo, (state, at) => cancelRun(state, { ...input, at }));
+	}
+
+	/** Stores a fork's baseline result. It never touches health, status, or main. */
+	recordBaseline(repo: string, baseline: BaselineRecord): FleetFork | null {
+		if (!this.get(repo)) return null;
+		this.ctx.storage.sql.exec("UPDATE forks SET baseline = ? WHERE repo = ?", JSON.stringify(baseline), repo);
+		const fork = this.get(repo)!;
+		this.broadcast({ type: "fork", fork });
+		return fork;
 	}
 
 	/** Health events for a fork, newest first. */
@@ -342,12 +356,15 @@ export class Fleet extends DurableObject<Env> {
 		const forks = this.list();
 		const healthCounts: Record<string, number> = { green: 0, yellow: 0, rolled_back: 0 };
 		for (const fork of forks) healthCounts[fork.health.health] = (healthCounts[fork.health.health] ?? 0) + 1;
+		const baselineCounts = { passed: 0, flagged: 0, none: 0 };
+		for (const fork of forks) baselineCounts[fork.baseline ? (fork.baseline.passed ? "passed" : "flagged") : "none"]++;
 		return {
 			stockTags: this.stockTags(),
 			releases,
 			counts: this.counts(),
 			healthCounts,
-			forks: forks.map(({ repo, persona, pinnedTag, status, lastRun, pendingUpgrade, updatedAt, seeded, health }) => ({
+			baselineCounts,
+			forks: forks.map(({ repo, persona, pinnedTag, status, lastRun, pendingUpgrade, updatedAt, seeded, health, baseline }) => ({
 				repo,
 				persona,
 				pinnedTag,
@@ -357,6 +374,7 @@ export class Fleet extends DurableObject<Env> {
 				updatedAt,
 				seeded,
 				health,
+				baseline,
 				// A pinned fork that failed a safety release shows when its stock-mode fallback starts (spec 7).
 				graceUntil: status === "repair_open" || status === "failed" ? graceOf(lastRun?.tag as string | undefined) : null,
 			})),
@@ -454,5 +472,6 @@ function toFork(row: Record<string, unknown>): FleetFork {
 		createdAt: row.created_at as string,
 		updatedAt: row.updated_at as string,
 		health: row.health ? (JSON.parse(row.health as string) as HealthState) : initialHealth(row.created_at as string),
+		baseline: row.baseline ? (JSON.parse(row.baseline as string) as BaselineRecord) : null,
 	};
 }

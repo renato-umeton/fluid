@@ -22,3 +22,13 @@ export function forkSummaryText(f, latestTag, hasRun) {
   }[f.status];
   return text || f.status;
 }
+
+/** One line about the fork's fleet baseline (a dry run of the end-to-end suite on main), or null when it has none. */
+export function baselineText(f) {
+  const b = f.baseline;
+  if (!b) return null;
+  const at = `main at ${String(b.commit ?? "").slice(0, 7)}`;
+  if (b.passed) return `Baseline: the end-to-end suite passed on ${at}${b.stockTag ? ` (stock ${b.stockTag})` : ""}.`;
+  const what = b.failure ? `${b.failure.tier} scenario ${b.failure.scenario} failed${b.failure.step ? ` at step ${b.failure.step}` : ""} (${b.failure.detail})` : "the end-to-end suite failed";
+  return `Baseline flagged: ${what} on ${at}. Nothing was rolled back; review the fork.`;
+}
