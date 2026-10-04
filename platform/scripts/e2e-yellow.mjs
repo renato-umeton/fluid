@@ -5,8 +5,8 @@
 //   3. a bad change (the admin-only test recipe: every ledger record names a constant fork commit)
 //      passes tiers 1 to 3, goes live in yellow, fails the end-to-end suite, and main rolls back to the
 //      last green commit with a new revert commit; a repair opens linked to the change's intent record
-//   4. applying that repair goes through the gate and yellow again (main moved, so the gate merges main
-//      into the repair branch first) and turns green
+//   4. applying that repair (it starts from the rolled back main, so it keeps the green tree) goes
+//      through the gate and yellow again and turns green
 //   5. clean up the fork
 // Usage: FLUID_URL=http://localhost:5173 ADMIN_TOKEN=... node scripts/e2e-yellow.mjs [--keep] [--no-apply]
 const base = process.env.FLUID_URL ?? "http://localhost:5173";

@@ -6,8 +6,10 @@
 //   4. seed a synthetic fleet pinned to the release before the demo tightening: every main passes its
 //      own pinned floor, lowered-tau seeds sit on failed work branches with repairs, nothing on any
 //      main serves a clinical dose
-//   5. tag a new stock release that tightens the research floor, watch concurrent upgrades (fleet SSE):
+//   5. tag a new stock release that tightens the research floor (or, with --tag naming the latest
+//      existing tag, re-run its fan-out without publishing), watch concurrent upgrades (fleet SSE):
 //      the compact-research seeds fail only the new invariant and stay pinned with repair branches;
+//      every landed upgrade soaks in yellow and turns green, and no good fork is rolled back;
 //      applying one repair gates it and fast-forwards main to the new tag
 //   6. harvester finds the REDCap cluster and drafts it in stock
 //   7. clean up seeded forks and the scenario fork
@@ -91,10 +93,11 @@ async function customize(repo, request, decide) {
 	return { runId, suggestions: waiting.suggestions ?? [], run: final };
 }
 
-/** Follows the fleet SSE stream and records the largest number of forks upgrading or gating at once. */
+/** Follows the fleet SSE stream and records the largest number of forks upgrading or gating, and soaking in yellow, at once. */
 function watchFleet() {
 	const status = new Map();
-	const state = { maxInFlight: 0, events: 0, at: null, stop: () => {} };
+	const health = new Map();
+	const state = { maxInFlight: 0, maxYellow: 0, yellowAt: null, events: 0, at: null, stop: () => {} };
 	const controller = new AbortController();
 	state.stop = () => controller.abort();
 	(async () => {
@@ -114,9 +117,14 @@ function watchFleet() {
 				if (!data) continue;
 				const event = JSON.parse(data.slice(6));
 				state.events++;
-				if (event.type === "snapshot") for (const f of event.forks) status.set(f.repo, f.status);
-				if (event.type === "fork") status.set(event.fork.repo, event.fork.status);
-				if (event.type === "removed") status.delete(event.repo);
+				if (event.type === "snapshot") for (const f of event.forks) (status.set(f.repo, f.status), health.set(f.repo, f.health?.health));
+				if (event.type === "fork") (status.set(event.fork.repo, event.fork.status), health.set(event.fork.repo, event.fork.health?.health));
+				if (event.type === "removed") (status.delete(event.repo), health.delete(event.repo));
+				const yellow = [...health.values()].filter((h) => h === "yellow").length;
+				if (yellow > state.maxYellow) {
+					state.maxYellow = yellow;
+					state.yellowAt = new Date().toISOString();
+				}
 				const inFlight = [...status.values()].filter((s) => s === "upgrading" || s === "gating").length;
 				if (inFlight > state.maxInFlight) {
 					state.maxInFlight = inFlight;
@@ -213,6 +221,8 @@ try {
 	// Release and concurrent upgrades.
 	const tags = (await call("GET", "/api/fleet")).stockTags;
 	const tag = opt("--tag", nextMinor(tags));
+	// Re-running the latest tag's fan-out (no new stock tag) skips forks already on it, such as the scenario fork.
+	const expectedRuns = (await call("GET", "/api/fleet")).forks.filter((x) => x.status !== "provisioning" && x.pinnedTag !== tag).length;
 	const watcher = watchFleet();
 	await sleep(500);
 	const release = await timed(`release ${tag} and upgrade the fleet`, async () => {
@@ -228,13 +238,28 @@ try {
 		}, { timeoutMs: 900_000, everyMs: 2000 });
 		return { ...res, firstFinishedMs: firstFinished };
 	});
+	// Every upgrade that landed on main soaks in yellow; wait until no soak is still running.
+	const soak = await timed("yellow soaks after the release", async () => {
+		const t0 = Date.now();
+		const f = await waitFor("yellow soaks", async () => {
+			const fleet = await call("GET", "/api/fleet");
+			return fleet.forks.some((x) => x.health?.health === "yellow" && x.health.runId) ? null : fleet;
+		}, { timeoutMs: 1_800_000, everyMs: 5000 });
+		return { fleet: f, ms: Date.now() - t0 };
+	});
 	watcher.stop();
+	const landed = soak.fleet.forks.filter((x) => x.lastRun?.tag === tag && x.lastRun.kind === "upgrade" && x.lastRun.applied === true);
+	const rolledBack = soak.fleet.forks.filter((x) => x.health?.health === "rolled_back");
+	const stuckYellow = soak.fleet.forks.filter((x) => x.health?.health === "yellow");
+	check("every upgrade that landed soaked to green", landed.length > 0 && landed.every((x) => x.health?.health === "green" && x.health.lastGreenCommit === x.lastRun.commit), `${landed.filter((x) => x.health?.health === "green").length} of ${landed.length} green; peak ${watcher.maxYellow} yellow at once`);
+	check("no good fork was rolled back", rolledBack.length === 0, rolledBack.map((x) => `${x.repo}: ${x.health.failure?.scenario} ${x.health.failure?.detail ?? ""}`).join("; ") || "none");
+	check("no fork was left yellow", stuckYellow.length === 0, stuckYellow.map((x) => x.repo).join(", ") || "none");
 	const final = await call("GET", "/api/fleet");
 	const upgraded = final.forks.filter((x) => x.lastRun?.tag === tag || x.pinnedTag === tag);
 	const passed = upgraded.filter((x) => x.status === "passed");
 	const pinned = final.forks.filter((x) => x.status === "repair_open" && x.lastRun?.tag === tag);
 	const conflicted = passed.filter((x) => (x.lastRun?.conflicts ?? 0) > 0);
-	check(`release ${tag} fanned out to every fork`, release.upgradeRuns === final.forks.length, `${release.upgradeRuns} upgrade runs`);
+	check(`release ${tag} fanned out to every fork not already on it`, release.upgradeRuns === expectedRuns, `${release.upgradeRuns} upgrade runs of ${expectedRuns} expected`);
 	check("upgrades ran concurrently", watcher.maxInFlight >= Math.min(10, seedCount), `max ${watcher.maxInFlight} forks upgrading or gating at once (SSE, ${watcher.events} events)`);
 	check("most forks passed the gate at the new tag", passed.length >= Math.floor(seedCount * 0.7), `${passed.length} passed (${passed.filter((x) => x.lastRun?.applied).length} auto-applied, ${passed.filter((x) => x.lastRun?.applied === false).length} waiting for one tap)`);
 	check("some forks conflicted and the merge agent resolved them", conflicted.length >= 1, `${conflicted.length} resolved conflicts`);
@@ -285,6 +310,8 @@ try {
 	for (const [k, v] of Object.entries(timings)) console.log(`  ${k}: ${v}`);
 	console.log(`  first upgrade finished after: ${((release.firstFinishedMs ?? 0) / 1000).toFixed(1)} s`);
 	console.log(`  max concurrent upgrades/gates (SSE): ${watcher.maxInFlight} at ${watcher.at}`);
+	console.log(`  max concurrent yellow soaks (SSE): ${watcher.maxYellow} at ${watcher.yellowAt}; soaks settled ${(soak.ms / 1000).toFixed(1)} s after the upgrades`);
+	console.log(`  yellow outcome: ${landed.filter((x) => x.health?.health === "green").length} of ${landed.length} landed upgrades green, ${rolledBack.length} rolled back, ${stuckYellow.length} left yellow`);
 	console.log(`  outcome: ${passed.length} passed, ${conflicted.length} with resolved conflicts, ${pinned.length} pinned with repair branches`);
 } catch (error) {
 	failures++;
