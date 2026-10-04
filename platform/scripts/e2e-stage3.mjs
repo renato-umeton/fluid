@@ -222,7 +222,8 @@ try {
 	const tags = (await call("GET", "/api/fleet")).stockTags;
 	const tag = opt("--tag", nextMinor(tags));
 	// Re-running the latest tag's fan-out (no new stock tag) skips forks already on it, such as the scenario fork.
-	const expectedRuns = (await call("GET", "/api/fleet")).forks.filter((x) => x.status !== "provisioning" && x.pinnedTag !== tag).length;
+	const handledAt = (x) => x.lastRun?.tag === tag && (x.lastRun.kind === "upgrade" || x.lastRun.kind === "repair") && x.health?.health !== "rolled_back";
+	const expectedRuns = (await call("GET", "/api/fleet")).forks.filter((x) => x.status !== "provisioning" && x.pinnedTag !== tag && x.pendingUpgrade?.tag !== tag && !handledAt(x)).length;
 	const watcher = watchFleet();
 	await sleep(500);
 	const release = await timed(`release ${tag} and upgrade the fleet`, async () => {
