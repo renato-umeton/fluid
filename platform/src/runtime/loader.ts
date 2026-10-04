@@ -5,7 +5,7 @@
 // Isolates are keyed by repo:sha (plus a variant), and the transformed module
 // map is cached per key in this isolate.
 import synthetic from "../generated/synthetic.json";
-import { buildModuleMap, buildRunnerModuleMap, isRuntimePath, RUNTIME_DIRS, type ModuleMap } from "./modules.ts";
+import { buildE2ERunnerModuleMap, buildModuleMap, buildRunnerModuleMap, isRuntimePath, RUNTIME_DIRS, type ModuleMap } from "./modules.ts";
 import { resolveCommit, shortRef } from "./refs.ts";
 import { openRepo, readCommitFiles } from "./repo-files.ts";
 
@@ -202,6 +202,31 @@ export function loadRunner(env: Env, stockSha: string, stockFiles: Record<string
 		};
 	});
 	return worker.getEntrypoint("Runner") as unknown as RunnerEntrypoint;
+}
+
+/** RPC surface of the yellow soak's runner isolate (see modules.ts e2eRunnerEntrySource). */
+export interface E2ERunnerEntrypoint {
+	validate(manifest: unknown): Promise<string | null>;
+	run(manifest: unknown, options: { live: { commit: string; stockTag: string }; tier: string; stepTimeoutMs?: number }, call: (op: string, args: Record<string, unknown>) => Promise<unknown>): Promise<unknown>;
+}
+
+/**
+ * Loads the end-to-end runner isolate for one stock source (`key` names it:
+ * the stock commit, or the bundled source for tags without a suite). It is
+ * built only from stock files and has no env and no network.
+ */
+export function loadE2ERunner(env: Env, key: string, stockFiles: Record<string, string>): E2ERunnerEntrypoint {
+	const worker = env.LOADER.get(`stock-e2e-runner:${key}`, async () => {
+		const map = buildE2ERunnerModuleMap(stockFiles);
+		return {
+			compatibilityDate: RUNTIME_COMPATIBILITY_DATE,
+			mainModule: map.mainModule,
+			modules: map.modules as Record<string, never>,
+			env: {},
+			globalOutbound: null,
+		};
+	});
+	return worker.getEntrypoint("E2ERunner") as unknown as E2ERunnerEntrypoint;
 }
 
 /** Drops cached module maps (tests and admin use). */

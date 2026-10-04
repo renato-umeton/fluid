@@ -364,6 +364,20 @@ export async function resetBranch(ws: Workspace, branch: string, commit: string)
 	await git.checkout({ fs: ws.fs, dir: ws.dir, ref: branch, force: true });
 }
 
+/**
+ * Makes the working tree exactly the tree of `commit` (an ancestor in this
+ * working copy), plus `extra` files, and stages it. Committing the result on
+ * a branch reverts the branch to that tree with a new commit: history is kept
+ * and nothing is rewritten.
+ */
+export async function restoreTreeFrom(ws: Workspace, commit: string, extra: Record<string, FileContent> = {}): Promise<void> {
+	const target = await peelToCommit(ws, await resolveAnyRef(ws, commit));
+	const paths = await git.listFiles({ fs: ws.fs, dir: ws.dir, ref: target });
+	const files: Record<string, FileContent> = {};
+	for (const path of paths) files[path] = (await git.readBlob({ fs: ws.fs, dir: ws.dir, oid: target, filepath: path })).blob;
+	await replaceTree(ws, { ...files, ...extra });
+}
+
 /** First parent of a commit (the branch a merge was made on), or null for a root commit. */
 export async function firstParent(ws: Workspace, oid: string): Promise<string | null> {
 	const { commit } = await git.readCommit({ fs: ws.fs, dir: ws.dir, oid });

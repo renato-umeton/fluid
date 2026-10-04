@@ -10,6 +10,39 @@ export interface Session {
 	issuedAt: number;
 	/** User ids of the other personas this browser used (persona id -> user id), so switching back keeps that fork. */
 	known?: Record<string, string>;
+	/**
+	 * Set only on the short-lived test session a yellow run's browser checks
+	 * use: the synthetic user may read and ask this one fork (its answers go to
+	 * the synthetic user's own ledger) and change nothing.
+	 */
+	e2e?: TestClaim;
+}
+
+export interface TestClaim {
+	repo: string;
+	runId: string;
+	/** Expiry, ms since the epoch. */
+	exp: number;
+}
+
+/** Longest a test session may live. */
+export const TEST_SESSION_MAX_MS = 15 * 60 * 1000;
+
+/** The run-scoped synthetic user for a yellow run (its own ledger, never the fork owner's). */
+export function testUserId(runId: string): string {
+	return `e2e-${runId.replace(/[^A-Za-z0-9]/g, "").slice(-24)}`;
+}
+
+/** A test session for one yellow run's browser checks, valid for at most TEST_SESSION_MAX_MS. */
+export function testSession(input: { repo: string; runId: string; persona: string; now: number; ttlMs?: number }): Session {
+	const ttl = Math.min(input.ttlMs ?? TEST_SESSION_MAX_MS, TEST_SESSION_MAX_MS);
+	return { userId: testUserId(input.runId), persona: input.persona, issuedAt: input.now, e2e: { repo: input.repo, runId: input.runId, exp: input.now + ttl } };
+}
+
+function isTestClaim(value: unknown, now: number): boolean {
+	if (value === undefined) return true;
+	const c = value as Partial<TestClaim> | null;
+	return typeof c === "object" && c !== null && typeof c.repo === "string" && typeof c.runId === "string" && typeof c.exp === "number" && c.exp > now && c.exp - now <= TEST_SESSION_MAX_MS;
 }
 
 const MAX_KNOWN_PERSONAS = 10;
@@ -80,6 +113,7 @@ export async function verifySession(value: string | null | undefined, secret: st
 		return null;
 	}
 	if (typeof session.userId !== "string" || typeof session.persona !== "string" || typeof session.issuedAt !== "number" || !isKnownMap(session.known)) return null;
+	if (!isTestClaim(session.e2e, now)) return null;
 	if (now - session.issuedAt > SESSION_MAX_AGE_SECONDS * 1000) return null;
 	return session;
 }

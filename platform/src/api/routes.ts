@@ -1,12 +1,12 @@
 // Platform HTTP API (docs/IMPLEMENTATION_PLAN.md, "Platform HTTP API").
 // Write routes need the demo session cookie; admin routes need x-fluid-admin.
 import { currentStockTag, getForkInfo, findPersona, fleetStub, ForkNotFoundError, personas, provisionFork, readIntents, type ForkInfo } from "../forks/provision.ts";
-import { hasClinicalDose, markSafety, SAFETY_SIGNALS } from "./safety.ts";
+import { serveAsk } from "./ask.ts";
 import { clientKey } from "../lib/client.ts";
 import { scrubText } from "../git/tokens.ts";
 import { forkRepoName, isValidRepoName, newIntentId, newSandboxUserId, STOCK_REPO, userIdFromForkRepo } from "../lib/names.ts";
 import { readCookie, safeEqual, SESSION_COOKIE, sessionCookieHeader, signSession, switchPersona, verifySession, type Session } from "../lib/session.ts";
-import { askFork, type PlatformExports } from "../runtime/loader.ts";
+import type { PlatformExports } from "../runtime/loader.ts";
 import { bundledStockRelease, compareSemverDesc, listStockTags, publishStockRelease, readReleaseMetadata, readStockFiles, stockTagCommit, unrecordedStockTags } from "../stock/publish.ts";
 import type { ReleaseMetadata } from "../stock/releases.ts";
 import { runGate } from "../gate/run.ts";
@@ -104,6 +104,15 @@ async function requireSession(rc: RouteContext): Promise<Session> {
 	return session;
 }
 
+/** The fork a session owns: its own user-<id>, or the one fork a yellow run's test session is scoped to. */
+function ownRepo(session: Session): string {
+	return session.e2e?.repo ?? forkRepoName(session.userId);
+}
+
+function refuseTestSession(session: Session | null, what: string): void {
+	if (session?.e2e) throw new HttpError(403, `a test session cannot ${what}`);
+}
+
 function isAdmin(rc: RouteContext): boolean {
 	const header = rc.request.headers.get("x-fluid-admin");
 	return Boolean(rc.env.ADMIN_TOKEN && header && safeEqual(header, rc.env.ADMIN_TOKEN));
@@ -194,6 +203,7 @@ route("POST", "/api/session", async (rc) => {
 	if (!persona) throw new HttpError(400, `unknown persona ${JSON.stringify(personaId)}`);
 	const existing = await sessionOf(rc);
 	if (existing && existing.persona === persona.id) return json({ userId: existing.userId, persona: existing.persona });
+	refuseTestSession(existing, "switch persona");
 	// Switching back to a persona this browser used before keeps its user id and fork (no new quota).
 	const { session, reused } = switchPersona(existing, persona.id, Date.now(), newSandboxUserId);
 	if (!reused) await takeClientQuota(rc, "session", LIMITS.sessionsPerClientPerHour, 3600);
@@ -205,7 +215,7 @@ route("GET", "/api/personas", async () => json(personas()));
 
 route("GET", "/api/me", async (rc) => {
 	const session = await requireSession(rc);
-	const known = await fleetStub(rc.env).forksOfUser(session.userId);
+	const known = session.e2e ? [await fleetStub(rc.env).get(session.e2e.repo)].filter((f) => f !== null) : await fleetStub(rc.env).forksOfUser(session.userId);
 	if (known.length > 0) await takeReadQuota(rc);
 	const fork = known.length > 0 ? await forkInfoOrNull(rc.env, known[0]!.repo) : null;
 	return json({ userId: session.userId, persona: session.persona, fork });
@@ -213,6 +223,7 @@ route("GET", "/api/me", async (rc) => {
 
 route("POST", "/api/forks", async (rc) => {
 	const session = await requireSession(rc);
+	refuseTestSession(session, "create a fork");
 	const body = await readJson(rc.request);
 	const preferences = parsePreferences(body.preferences);
 	const persona = findPersona(session.persona);
@@ -258,7 +269,7 @@ route("GET", "/api/forks/:repo/ui", async (rc, { repo }) => {
 // Chart data for the session's own fork: its run-time ledger, build-time intents, and gate history.
 route("GET", "/api/me/charts", async (rc) => {
 	const session = await requireSession(rc);
-	const repo = forkRepoName(session.userId);
+	const repo = ownRepo(session);
 	if (!(await fleetStub(rc.env).get(repo))) throw new HttpError(404, "you have no fork yet");
 	await takeReadQuota(rc);
 	const [ledger, intents, gates] = await Promise.all([
@@ -275,8 +286,8 @@ route("GET", "/api/me/charts", async (rc) => {
 route("POST", "/api/ask", async (rc) => {
 	const session = await requireSession(rc);
 	const body = await readJson(rc.request);
-	const repo = repoParam(typeof body.repo === "string" ? body.repo : forkRepoName(session.userId));
-	if (!isAdmin(rc) && repo !== forkRepoName(session.userId) && repo !== STOCK_REPO) throw new HttpError(403, "you can ask your own fork or stock");
+	const repo = repoParam(typeof body.repo === "string" ? body.repo : ownRepo(session));
+	if (!isAdmin(rc) && repo !== ownRepo(session) && repo !== STOCK_REPO) throw new HttpError(403, "you can ask your own fork or stock");
 	const question = requireString(body, "question", 2000);
 	const context = body.context ?? {};
 	if (typeof context !== "object" || context === null || Array.isArray(context)) throw new HttpError(400, "context must be an object");
@@ -290,28 +301,8 @@ route("POST", "/api/ask", async (rc) => {
 	if (body.explicitMode) request.explicitMode = body.explicitMode;
 	if (body.attestation !== undefined) request.attestation = body.attestation;
 	if (Array.isArray(body.history)) request.history = (body.history as unknown[]).slice(-10);
-	const deps = { env: rc.env, exports: exportsOf(rc.ctx) };
-	const useModel = body.useModel === true;
-	const fleet = fleetStub(rc.env);
-	// Safety fallback (spec 7): after a safety release's grace period, a fork still pinned below it is
-	// answered by stock at that release (production only: main). The card carries a visible signal.
-	const fallback = repo !== STOCK_REPO && ref === "main" ? await fleet.safetyFallback(repo) : null;
-	let result = await askFork(deps, fallback ? { repo: STOCK_REPO, ref: fallback.tag, request, useModel } : { repo, ref, request, useModel });
-	let card = fallback
-		? markSafety(result.card, SAFETY_SIGNALS.stockFallback, `Safety fallback: the grace period of stock ${fallback.tag} ended ${fallback.graceUntil.slice(0, 10)} and this fork is still pinned to ${fallback.from}, so stock ${fallback.tag} answered. Apply the open repair or upgrade to use your customizations again.`)
-		: result.card;
-	let served = fallback ? { repo: STOCK_REPO, ref: fallback.tag, fallback } : { repo, ref, fallback: null };
-	// Backstop: no answer with a computed clinical dose is ever served, whatever the fork's code does.
-	if (hasClinicalDose(card)) {
-		if (served.repo === STOCK_REPO) throw new Error("stock answered a clinical card with a computed dose");
-		const pinned = (await fleet.get(repo))?.pinnedTag ?? (await currentStockTag(rc.env));
-		console.error(`safety guard: ${repo}@${result.sha.slice(0, 7)} answered a clinical card with a computed dose; serving stock ${pinned}`);
-		result = await askFork(deps, { repo: STOCK_REPO, ref: pinned, request, useModel });
-		card = markSafety(result.card, SAFETY_SIGNALS.clinicalDose, `Safety guard: this fork's answer computed a clinical dose, which the floor forbids, so stock ${pinned} answered instead.`);
-		served = { repo: STOCK_REPO, ref: pinned, fallback: null };
-	}
-	await ledgerStub(rc.env, session.userId).append(session.userId, repo, card.ledger as unknown as RunTimeRecord);
-	return json({ ...card, fork: { repo, ref: result.ref, commit: result.sha, ...(served.repo !== repo ? { servedBy: { repo: served.repo, ref: served.ref } } : {}), ...(served.fallback ? { safetyFallback: served.fallback } : {}) } });
+	const card = await serveAsk({ env: rc.env, exports: exportsOf(rc.ctx) }, { repo, ref, request, useModel: body.useModel === true, userId: session.userId, fallback: ref === "main" });
+	return json(card);
 });
 
 route("POST", "/api/override", async (rc) => {
@@ -337,6 +328,7 @@ route("GET", "/api/ledger/:userId", async (rc, { userId }) => {
 
 route("POST", "/api/ledger/commit", async (rc) => {
 	const session = await requireSession(rc);
+	refuseTestSession(session, "commit a ledger");
 	await takeQuota(rc.env, `user:${session.userId}`, "ledger-commit", LIMITS.ledgerCommitsPerUserPerHour, 3600);
 	return json(await ledgerStub(rc.env, session.userId).commitPending());
 });
@@ -397,6 +389,7 @@ const TAG_PATTERN = /^v\d+\.\d+\.\d+$/;
 async function requireForkAccess(rc: RouteContext, repo: string): Promise<Session | null> {
 	if (isAdmin(rc)) return sessionOf(rc);
 	const session = await requireSession(rc);
+	refuseTestSession(session, "change a fork");
 	if (repo !== forkRepoName(session.userId)) throw new HttpError(403, "you can change only your own fork");
 	return session;
 }

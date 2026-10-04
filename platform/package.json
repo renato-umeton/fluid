@@ -25,6 +25,7 @@
 		"vitest": "^4.1.11"
 	},
 	"dependencies": {
+		"@cloudflare/puppeteer": "^1.4.0",
 		"isomorphic-git": "^1.43.0",
 		"sucrase": "^3.35.0"
 	}

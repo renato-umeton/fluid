@@ -12,7 +12,10 @@ export const RUNTIME_DIRS = ["app/", "intent/", "policies/", "connectors/"] as c
 export const RUNNER_PATH = "tests/runner.ts";
 /** Stock modules the runner imports. The gate always takes these from stock, never from the fork. */
 export const RUNNER_STOCK_DEPS = ["app/toml.ts", "app/types.ts"] as const;
+/** The stock end-to-end scenario runner. It imports the probe runner for its assertion semantics. */
+export const E2E_RUNNER_PATH = "tests/e2e/runner.ts";
 export const ENTRY_MODULE = "fluid-entry.js";
+export const E2E_RUNNER_ENTRY_MODULE = "fluid-e2e-runner.js";
 export const RUNNER_ENTRY_MODULE = "fluid-runner.js";
 export const APP_MODULE = "app/index.js";
 
@@ -88,6 +91,66 @@ export function buildRunnerModuleMap(stockFiles: Record<string, string>): Module
 	}
 	modules[RUNNER_ENTRY_MODULE] = { js: runnerEntrySource() };
 	return { mainModule: RUNNER_ENTRY_MODULE, modules };
+}
+
+/**
+ * Module map for the yellow soak's runner isolate: stock's end-to-end runner,
+ * the probe runner it reuses, and the stock modules they import, all from the
+ * same stock source. No fork file is ever part of it; the runner reaches the
+ * fork and the platform only through one host callback.
+ */
+export function buildE2ERunnerModuleMap(stockFiles: Record<string, string>): ModuleMap {
+	const modules: Record<string, LoaderModule> = {};
+	for (const path of [E2E_RUNNER_PATH, RUNNER_PATH, ...RUNNER_STOCK_DEPS]) {
+		const text = stockFiles[path];
+		if (text === undefined) throw new Error(`stock is missing ${path}; cannot build the end-to-end runner`);
+		try {
+			modules[moduleName(path)] = { js: transformTs(text, path) };
+		} catch (error) {
+			throw new Error(`stock ${path} does not build: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+	modules[E2E_RUNNER_ENTRY_MODULE] = { js: e2eRunnerEntrySource() };
+	return { mainModule: E2E_RUNNER_ENTRY_MODULE, modules };
+}
+
+export function e2eRunnerEntrySource(): string {
+	return `import { WorkerEntrypoint } from "cloudflare:workers";
+import { runScenarios, validateE2EManifest } from "./${moduleName(E2E_RUNNER_PATH)}";
+
+function hostOf(call) {
+  return {
+    ask: (request) => call("ask", { request }),
+    override: (answerId, mode) => call("override", { answerId, mode }),
+    ledger: (answerId) => call("ledger", { answerId }),
+    intents: () => call("intents", {}),
+    config: (file) => call("config", { file }),
+    connectors: () => call("connectors", {}),
+  };
+}
+
+export class E2ERunner extends WorkerEntrypoint {
+  async validate(manifest) {
+    try {
+      validateE2EManifest(manifest);
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async run(manifest, options, call) {
+    const opts = options || {};
+    return runScenarios({ manifest, host: hostOf(call), live: opts.live, tier: opts.tier, stepTimeoutMs: opts.stepTimeoutMs });
+  }
+}
+
+export default {
+  async fetch() {
+    return new Response("Fluid end-to-end runner. Use the E2ERunner entrypoint.", { status: 404 });
+  },
+};
+`;
 }
 
 export function runnerEntrySource(): string {

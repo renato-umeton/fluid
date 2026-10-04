@@ -32,6 +32,7 @@ const STOCK_INCLUDE = [
 	"tests/functional/",
 	"tests/user/",
 	"tests/runner.ts",
+	"tests/e2e/",
 	".intent/",
 	"fluid.toml",
 	"README.md",
