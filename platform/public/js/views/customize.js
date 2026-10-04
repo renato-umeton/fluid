@@ -2,6 +2,7 @@
 import { api } from "../api.js";
 import { h, mount, json, statusTag } from "../dom.js";
 import { renderTimeline, renderDiff, renderGate, renderIntent, repairApply } from "./shared.js";
+import { renderHealth } from "../health.js";
 
 export const title = "Customize";
 export const sub = "Ask for a change in plain words. An agent writes it on a work branch with an intent record, proposes tests, and the gate decides whether it merges.";
@@ -35,6 +36,7 @@ export function render(root, app) {
     h("section", { class: "panel" }, h("div", { class: "panel-head" }, h("h2", {}, "Diff summary"), h("span", { id: "run-branch", class: "small muted" })), h("div", { class: "panel-body", id: "run-diff" })),
     h("section", { class: "panel" }, h("div", { class: "panel-head" }, h("div", {}, h("h2", {}, "Suggested tests"), h("p", {}, "Tier 3 tests proposed from the diff and the intent record."))), h("div", { class: "panel-body stack", id: "run-suggestions" })),
     h("section", { class: "panel wide" }, h("div", { class: "panel-head" }, h("h2", {}, "Gate result")), h("div", { class: "panel-body", id: "run-gate" })),
+    h("section", { class: "panel wide" }, h("div", { class: "panel-head" }, h("div", {}, h("h2", {}, "Yellow phase"), h("p", {}, "After the gate merges, the change is live on main in yellow. The end-to-end suite runs against the live fork 3 times; a failure rolls main back."))), h("div", { class: "panel-body", id: "run-yellow" })),
     h("section", { class: "panel wide" }, h("div", { class: "panel-head" }, h("h2", {}, "Intent record for this change")), h("div", { class: "panel-body", id: "run-intent" })),
   ));
   const saved = runs.get(app.persona.id);
@@ -47,8 +49,9 @@ export function leave() {
   timer = null;
 }
 
+/** A run is done when it reached a final status and any yellow phase it started has settled. */
 function isFinal(run) {
-  return run && ["passed", "failed"].includes(run.status);
+  return run && ["passed", "failed"].includes(run.status) && run.yellow?.health !== "yellow";
 }
 
 async function start(request) {
@@ -77,6 +80,11 @@ async function poll() {
   }
   if (current.app.persona.id !== persona || !current.root.isConnected) return;
   paint(entry.run);
+  // The change is live: refresh the fork once so the top bar shows the yellow badge.
+  if (entry.run.yellow?.runId && entry.yellowSeen !== entry.run.yellow.runId) {
+    entry.yellowSeen = entry.run.yellow.runId;
+    current.app.refreshFork().catch(() => {});
+  }
   if (isFinal(entry.run)) {
     current.app.refreshFork().catch(() => {});
     return;
@@ -92,6 +100,7 @@ function paint(run) {
     mount($("#run-suggestions"), h("p", { class: "empty" }, "Suggestions appear after the change is pushed."));
     mount($("#run-gate"), renderGate(null));
     mount($("#run-intent"), h("p", { class: "empty" }, "Every change gets one."));
+    mount($("#run-yellow"), h("p", { class: "empty" }, "Starts when the gate merges the change to main."));
     mount($("#run-status"));
     return;
   }
@@ -104,6 +113,32 @@ function paint(run) {
   mount($("#run-suggestions"), run.suggestions?.length ? run.suggestions.map((s) => suggestion(run, s)) : h("p", { class: "empty" }, "Suggestions appear after the change is pushed."));
   mount($("#run-gate"), renderGate(run.gate), run.repair?.branch ? repairBox(run) : null);
   mount($("#run-intent"), run.intent ? renderIntent(run.intent) : h("p", { class: "empty" }, "Written by the agent before it commits."));
+  paintYellow($("#run-yellow"), run);
+}
+
+const yellowRuns = new Map(); // yellow run id -> last fetched run
+const yellowFetched = new Map(); // yellow run id -> time of the last fetch
+const YELLOW_POLL_MS = 2500;
+async function paintYellow(el, run) {
+  const y = run.yellow;
+  if (!y?.runId) {
+    mount(el, h("p", { class: "empty" }, run.status === "failed" ? "The change did not reach main, so there is no yellow phase." : "Starts when the gate merges the change to main."));
+    return;
+  }
+  const health = { health: y.health === "cancelled" ? "yellow" : y.health, commit: y.commit, pass: y.pass ?? 0, of: y.of ?? 3, runId: y.health === "yellow" ? y.runId : null, failure: y.failure ?? null, browser: y.browser ?? null, lastGreenCommit: null, since: run.updatedAt };
+  mount(el, renderHealth(health, yellowRuns.get(y.runId) ?? null));
+  const cached = yellowRuns.get(y.runId);
+  const settled = cached && ["passed", "failed", "cancelled"].includes(cached.status);
+  if (cached && (settled || (y.health === "yellow" && Date.now() - (yellowFetched.get(y.runId) ?? 0) < YELLOW_POLL_MS))) return;
+  yellowFetched.set(y.runId, Date.now());
+  try {
+    const yellow = await api.run(y.runId);
+    yellowRuns.set(y.runId, yellow);
+    if (el.isConnected) mount(el, renderHealth({ ...health, lastGreenCommit: y.health === "green" ? y.commit : yellow.rolledBackTo ?? null }, yellow),
+      y.repairRunId && run.repair?.branch ? h("p", { class: "small muted" }, `Repair ${run.repair.branch} is linked to this change's intent record.`) : null);
+  } catch {
+    // The yellow run record appears a moment after the gate merges.
+  }
 }
 
 function repairBox(run) {
@@ -131,9 +166,10 @@ function suggestion(run, s) {
     h("p", { class: "small muted" }, s.rationale),
     h("p", { class: "xsmall" }, h("code", {}, s.file), s.intentId ? ` verifies ${s.intentId}` : ""),
     probeSummary(s.probe),
+    scenarioSummary(s.scenario),
     decided ? null : h("div", { class: "row" },
       h("button", { type: "button", class: "btn btn-primary", onclick: () => decide(run, s, "accept") }, "Accept"),
-      h("button", { type: "button", class: "btn", onclick: () => { editWrap.hidden = false; editor.focus(); } }, "Edit"),
+      s.scenario ? null : h("button", { type: "button", class: "btn", onclick: () => { editWrap.hidden = false; editor.focus(); } }, "Edit"),
       h("button", { type: "button", class: "btn btn-danger", onclick: () => decide(run, s, "reject") }, "Reject")),
     decided ? null : editWrap);
 }
@@ -152,6 +188,19 @@ function probeSummary(probe) {
     probe.request ? h("p", { class: "small" }, h("span", { class: "muted" }, "Asks "), `"${probe.request.question}"`, ctx ? h("span", { class: "muted" }, ` with ${ctx}`) : null) : null,
     h("ul", { class: "framing" }, (probe.assert || []).map((a) => h("li", {}, h("code", {}, describeAssert(a))))),
     h("details", { class: "ctx-json" }, h("summary", {}, "Probe JSON"), h("pre", {}, json(probe))));
+}
+
+/** An end-to-end scenario suggestion: its steps in order, for tests/user/e2e.json. */
+function scenarioSummary(scenario) {
+  if (!scenario) return null;
+  const describe = (st) => st.kind === "ask" ? `ask "${st.request?.question}"${st.request?.explicitMode ? ` in ${st.request.explicitMode} mode` : ""}`
+    : st.kind === "override" ? `override ${st.answer} to ${st.mode}${st.reask ? ` and ask again` : ""}`
+    : st.kind === "ledger" ? `read the ledger record of ${st.answer}`
+    : st.kind === "config" ? `check ${st.file}` : st.kind;
+  return h("div", { class: "stack", style: { gap: "6px" } },
+    h("p", { class: "xsmall muted" }, "End-to-end scenario: runs in the yellow soak against the live fork after this change lands."),
+    h("ol", { class: "framing" }, scenario.steps.map((st) => h("li", {}, `${describe(st)}; then ${(st.assert || []).map(describeAssert).join(", ") || "record it"}`))),
+    h("details", { class: "ctx-json" }, h("summary", {}, "Scenario JSON"), h("pre", {}, json(scenario))));
 }
 
 async function decide(run, s, decision, edited) {

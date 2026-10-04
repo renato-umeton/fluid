@@ -3,19 +3,24 @@ import { api, adminKey, setAdminKey } from "../api.js";
 import { h, mount, fmtTime, statusTag } from "../dom.js";
 import { renderTimeline, renderDiff, renderGate, renderIntent, repairApply } from "./shared.js";
 import { forkSummaryText } from "../fleet-summary.js";
+import { displayStatus, healthBadge, healthText } from "../health.js";
 
 export const title = "Fleet";
-export const sub = "The mothership view. A stock release fans out one upgrade run per fork; each fork moves only when all three test tiers pass on the new stock.";
+export const sub = "The mothership view. A stock release fans out one upgrade run per fork; each fork moves only when all three test tiers pass on the new stock, then soaks in yellow until the end-to-end suite passes three times.";
 
 const STATUSES = [
   ["pinned", "Pinned"],
   ["upgrading", "Upgrading"],
   ["gating", "Gating"],
   ["passed", "Passed"],
+  ["yellow", "Yellow (soaking)"],
+  ["rolled_back", "Rolled back"],
   ["failed", "Failed"],
   ["repair_open", "Repair open"],
 ];
-const ATTENTION = new Set(["failed", "repair_open"]);
+const ATTENTION = new Set(["failed", "repair_open", "rolled_back"]);
+/** What a square shows: the fork's status, with yellow and rolled back over idle statuses. */
+const shown = (f) => displayStatus(f.status, f.health);
 
 let current = null;
 let unsubscribe = null;
@@ -131,8 +136,9 @@ function buildGrid() {
 function paintCell(f) {
   const cell = cells.get(f.repo);
   if (!cell) return;
-  cell.className = `cell s-${f.status}${model.filter && model.filter !== f.status ? " dim" : ""}`;
-  cell.title = `${f.repo}: ${f.status.replace("_", " ")}, pinned to ${f.pinnedTag}`;
+  const status = shown(f);
+  cell.className = `cell s-${status}${model.filter && model.filter !== status ? " dim" : ""}`;
+  cell.title = `${f.repo}: ${status.replace("_", " ")}, pinned to ${f.pinnedTag}${f.health?.health === "yellow" ? `, ${healthText(f.health).toLowerCase()}` : ""}`;
   cell.setAttribute("aria-label", cell.title);
   cell.setAttribute("aria-pressed", String(model.selected === f.repo));
 }
@@ -157,7 +163,7 @@ function paintStream() {
 
 function counts() {
   const c = Object.fromEntries(STATUSES.map(([k]) => [k, 0]));
-  for (const f of model.forks.values()) c[f.status] = (c[f.status] || 0) + 1;
+  for (const f of model.forks.values()) c[shown(f)] = (c[shown(f)] || 0) + 1;
   return c;
 }
 
@@ -172,10 +178,10 @@ function paintCounts() {
 }
 
 function paintAttention() {
-  const list = [...model.forks.values()].filter((f) => ATTENTION.has(f.status));
+  const list = [...model.forks.values()].filter((f) => ATTENTION.has(shown(f)));
   mount(current.root.querySelector("#attention"), list.length
     ? list.map((f) => h("li", {}, h("button", { type: "button", onclick: () => select(f.repo) },
-        h("i", { class: `swatch s-${f.status}`, "aria-hidden": "true" }), h("code", { class: "grow" }, f.repo), statusTag(f.status))))
+        h("i", { class: `swatch s-${shown(f)}`, "aria-hidden": "true" }), h("code", { class: "grow" }, f.repo), shown(f) === "rolled_back" ? healthBadge(f.health) : statusTag(f.status))))
     : h("li", { class: "small muted" }, "No forks need attention."));
 }
 
@@ -201,7 +207,7 @@ function onEvent(ev) {
   } else if (ev.repo) {
     const f = { ...(model.forks.get(ev.repo) || {}), ...ev, status: normStatus(ev.status) };
     model.forks.set(ev.repo, f);
-    model.log.unshift(`${fmtTime(ev.at || new Date().toISOString())} ${ev.repo} ${f.status.replace("_", " ")}`);
+    model.log.unshift(`${fmtTime(ev.at || new Date().toISOString())} ${ev.repo} ${shown(f).replace("_", " ")}${f.health?.health === "yellow" ? ` (${healthText(f.health).toLowerCase()})` : ""}`);
     if (model.log.length > 200) model.log.length = 200;
     if (!current?.root.isConnected) return;
     if (!cells.has(ev.repo)) buildGrid(); else paintCell(f);
@@ -229,6 +235,7 @@ async function renderDrill(repo) {
     h("dt", {}, "Persona"), h("dd", {}, f.persona || "n/a"),
     h("dt", {}, "Pinned stock"), h("dd", {}, h("code", {}, f.pinnedTag)),
     h("dt", {}, "Status"), h("dd", {}, statusTag(f.status)),
+    h("dt", {}, "Health"), h("dd", {}, healthBadge(f.health)),
     f.lastRun?.branch ? [h("dt", {}, "Branch"), h("dd", {}, h("code", {}, f.lastRun.branch))] : null);
   mount(el, h("div", { class: "drill" }, head, h("p", { class: "small muted" }, "Loading...")));
   let run = null;

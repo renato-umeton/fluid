@@ -9,10 +9,13 @@ import * as harvest from "./js/views/harvest.js";
 import * as about from "./js/views/about.js";
 import * as tab from "./js/views/tab.js";
 import { applyUiPreferences, describePreferences } from "./js/ui-prefs.js";
+import { healthBadge } from "./js/health.js";
 
 const VIEWS = { workspace, fork: forkView, customize, fleet, harvest, about, tab };
 const STOCK_MIN_TAU = 0.85;
 const PERSONA_KEY = "fluid.persona";
+const HEALTH_POLL_MS = 3000;
+let healthTimer = null;
 
 const app = {
   personas: [],
@@ -139,11 +142,35 @@ function renderForkPill() {
   const f = app.fork;
   if (!f) return;
   mount(document.getElementById("fork-pill"),
-    h("span", { class: "dot", "aria-hidden": "true" }),
+    healthBadge(f.health, { onclick: () => app.go("fork") }),
     h("span", {}, "Fork ", h("strong", {}, f.repo)),
     h("span", {}, "on stock ", h("strong", {}, f.stockTag)),
     h("span", {}, "τ ", h("strong", {}, app.effectiveTau().toFixed(2))),
     f.head ? h("span", { class: "hide-sm" }, "at ", h("strong", {}, short(f.head))) : null);
+  watchHealth();
+}
+
+/** While the fork is yellow, refresh its health so the badge follows the soak to green or a rollback. */
+function watchHealth() {
+  clearTimeout(healthTimer);
+  if (app.fork?.health?.health !== "yellow") return;
+  const repo = app.fork.repo;
+  healthTimer = setTimeout(async () => {
+    try {
+      const { health } = await api.health(repo);
+      if (app.fork?.repo !== repo) return;
+      const changed = JSON.stringify(health) !== JSON.stringify(app.fork.health);
+      app.fork = { ...app.fork, health };
+      if (changed && health.health !== "yellow") {
+        await app.refreshFork().catch(() => renderForkPill());
+        return;
+      }
+      renderForkPill();
+    } catch (err) {
+      console.warn(`Fluid: health refresh failed (${err.message})`);
+      healthTimer = setTimeout(watchHealth, HEALTH_POLL_MS * 3);
+    }
+  }, HEALTH_POLL_MS);
 }
 
 function route() {

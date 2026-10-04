@@ -2,23 +2,54 @@
 import { api } from "../api.js";
 import { h, mount, short, fmtConf, fmtTime, modeBadge, statusTag, MODE_LABEL } from "../dom.js";
 import { renderIntent } from "./shared.js";
+import { renderHealth } from "../health.js";
+
+const HEALTH_POLL_MS = 3000;
+let healthTimer = null;
 
 export const title = "My fork";
 export const sub = "Your personal repository, forked from a stock release. The gate reads stock tests at the pinned tag, so nothing here can weaken the floor.";
 
+export function leave() {
+  clearTimeout(healthTimer);
+  healthTimer = null;
+}
+
 export async function render(root, app, params) {
+  leave();
   mount(root, h("p", { class: "muted" }, "Loading your fork..."));
   const [fork, intents, ledger, gates] = await Promise.all([
     app.refreshFork(), api.intents(app.fork.repo), api.ledger(app.userId), api.gates(app.fork.repo).catch(() => []),
   ]);
   const highlight = params.get("answer");
+  const healthBody = h("div", { class: "panel-body", id: "health-body" }, h("p", { class: "small muted" }, "Loading health..."));
   mount(root, h("div", { class: "fork-grid" },
+    h("section", { class: "panel wide", "aria-labelledby": "health-heading" },
+      h("div", { class: "panel-head" }, h("div", {}, h("h2", { id: "health-heading" }, "Health: yellow to green"),
+        h("p", {}, "Every change that passes the gate goes live on main in yellow. The stock end-to-end suite (plus your own scenarios) then runs against the live fork; 3 passes in a row turn it green, and a failure rolls main back to the last green commit."))),
+      healthBody),
     factsPanel(app, fork),
     branchesPanel(fork, gates),
     ledgerPanel(ledger, highlight),
     intentsPanel(intents),
   ));
   if (highlight) root.querySelector("tr.hl")?.scrollIntoView({ block: "center" });
+  await paintHealth(healthBody, app, fork.repo);
+}
+
+/** Health panel: the latest yellow run's scenarios and failing step, refreshed while the fork is yellow. */
+async function paintHealth(el, app, repo) {
+  if (!el.isConnected || app.fork?.repo !== repo) return;
+  try {
+    const { health, history } = await api.health(repo);
+    const runId = health.runId ?? history.find((e) => e.runId && e.event !== "superseded" && e.event !== "cancelled")?.runId ?? null;
+    const run = runId ? await api.run(runId).catch(() => null) : null;
+    if (!el.isConnected) return;
+    mount(el, renderHealth(health, run, history));
+    if (health.health === "yellow" && health.runId) healthTimer = setTimeout(() => paintHealth(el, app, repo), HEALTH_POLL_MS);
+  } catch (err) {
+    mount(el, h("p", { class: "small muted" }, `Health is unavailable: ${err.message}`));
+  }
 }
 
 function factsPanel(app, fork) {

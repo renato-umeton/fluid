@@ -67,6 +67,8 @@ export const api = {
   fork: (repo) => call("GET", `/api/forks/${enc(repo)}`),
   /** The fork's validated ui/preferences.json (font, density, accent, extra tabs). */
   forkUi: (repo) => call("GET", `/api/forks/${enc(repo)}/ui`),
+  /** Yellow to green health of the fork's main and its history. */
+  health: (repo) => call("GET", `/api/forks/${enc(repo)}/health`),
   /** Chart data over the session's own fork: ledger, intents, gates. */
   charts: () => call("GET", "/api/me/charts"),
   ask: (body) => call("POST", "/api/ask", body),

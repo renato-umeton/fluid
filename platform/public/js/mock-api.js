@@ -36,6 +36,7 @@ const db = {
   subscribers: new Set(),
   records: {},
   ui: {},
+  history: {},
 };
 const sessionSuffix = hex(4);
 let runCounter = 0;
@@ -89,6 +90,7 @@ const routes = [
   ["POST", /^\/api\/forks$/, () => provisionFork()],
   ["GET", /^\/api\/forks\/([^/]+)$/, (m) => forkInfo(m[1])],
   ["GET", /^\/api\/forks\/([^/]+)\/ui$/, (m) => forkUi(m[1])],
+  ["GET", /^\/api\/forks\/([^/]+)\/health$/, (m) => forkHealth(m[1])],
   ["GET", /^\/api\/me\/charts$/, () => chartData()],
   ["POST", /^\/api\/ask$/, (m, body) => ask(body)],
   ["POST", /^\/api\/override$/, (m, body) => override(body)],
@@ -209,6 +211,7 @@ function provisionFork() {
     preferences: { auto_upgrade: false, harvest_opt_in: true },
     branches: [{ name: "main", commit: head, role: "production", gate: "passed" }],
     lastGate: db.gates[repo][0],
+    health: greenHealth(head),
   };
   return db.forks[repo];
 }
@@ -220,7 +223,7 @@ function forkInfo(repo) {
   if (fleetFork) {
     return {
       repo, remote: `${REMOTE_HOST}/${repo}.git`, stockTag: fleetFork.pinnedTag, tau: fleetFork.tau, stockMinTau: STOCK_MIN_TAU,
-      head: fleetFork.head, branches: fleetFork.branches, lastGate: null, preferences: { auto_upgrade: fleetFork.autoUpgrade, harvest_opt_in: true },
+      head: fleetFork.head, branches: fleetFork.branches, lastGate: null, preferences: { auto_upgrade: fleetFork.autoUpgrade, harvest_opt_in: true }, health: fleetFork.health,
     };
   }
   throw new HttpError(404, `Fork ${repo} not found`);
@@ -506,6 +509,7 @@ function redcapScript(run) {
         fork.branches[0].commit = fork.head;
         db.intents[fork.repo].unshift({ ...run.intent, commit: fork.head.slice(0, 7), at: now() });
         v.detail = `main is now ${fork.head.slice(0, 7)}; this fork's Worker serves the change`;
+        startMockYellow(fork, run);
       },
     },
   ];
@@ -563,6 +567,7 @@ function tauScript(target) {
           fork.branches[0].commit = fork.head;
           db.intents[fork.repo].unshift({ ...run.intent, commit: fork.head.slice(0, 7), at: now() });
           v.detail = `main is now ${fork.head.slice(0, 7)} with tau ${target}`;
+          startMockYellow(fork, run);
           return "done";
         },
       },
@@ -598,6 +603,7 @@ function genericScript(run) {
         fork.branches[0].commit = fork.head;
         db.intents[fork.repo].unshift({ ...run.intent, commit: fork.head.slice(0, 7), at: now() });
         v.detail = `main is now ${fork.head.slice(0, 7)}`;
+        startMockYellow(fork, run);
       },
     },
   ];
@@ -673,6 +679,7 @@ function uiScript(mapping) {
           fork.branches[0].commit = fork.head;
           db.intents[fork.repo].unshift({ ...run.intent, commit: fork.head.slice(0, 7), at: now() });
           v.detail = `main is now ${fork.head.slice(0, 7)}; the UI applies the new preferences`;
+          startMockYellow(fork, run);
         },
       },
     ];
@@ -774,7 +781,7 @@ function fleetFork(repo, personaId, rand, isDemo) {
   }
   const head = hex(40);
   return {
-    repo, persona: personaId, pinnedTag: STOCK_TAG, status: "pinned", lastRun: null, head,
+    repo, persona: personaId, pinnedTag: STOCK_TAG, status: "pinned", lastRun: null, head, health: greenHealth(null),
     tau: rand() < 0.15 ? 0.9 : STOCK_MIN_TAU, autoUpgrade: rand() < 0.55, customizations,
     branches: [{ name: "main", commit: head, role: "production", gate: "passed" }],
   };
@@ -790,14 +797,14 @@ function fleetView() {
   return {
     stockTags: db.fleet.stockTags,
     releasing: db.fleet.releasing,
-    forks: db.fleet.forks.map(({ repo, persona, pinnedTag, status, lastRun }) => ({ repo, persona, pinnedTag, status, lastRun })),
+    forks: db.fleet.forks.map(({ repo, persona, pinnedTag, status, lastRun, health }) => ({ repo, persona, pinnedTag, status, lastRun, health })),
   };
 }
 
 function setStatus(fork, status, lastRun) {
   fork.status = status;
   if (lastRun !== undefined) fork.lastRun = lastRun;
-  emit({ repo: fork.repo, persona: fork.persona, status, pinnedTag: fork.pinnedTag, lastRun: fork.lastRun, at: now() });
+  emit({ repo: fork.repo, persona: fork.persona, status, pinnedTag: fork.pinnedTag, lastRun: fork.lastRun, health: fork.health, at: now() });
 }
 
 function release(body) {
@@ -822,7 +829,10 @@ function release(body) {
     setTimeout(() => {
       if (!conflict) {
         if (fork.autoUpgrade) fork.pinnedTag = tag;
+        // An applied upgrade is live on main in yellow until three end-to-end passes turn it green.
+        if (fork.autoUpgrade) fork.health = { ...yellowHealth(hex(40), fork.health), source: "upgrade" };
         setStatus(fork, "passed", { ...upgradeRun, applied: fork.autoUpgrade });
+        if (fork.autoUpgrade) soakFleetFork(fork, rand);
         if (--remaining === 0) db.fleet.releasing = null;
         return;
       }
@@ -866,6 +876,104 @@ function createRepairRun(fork, conflict, tag, safety, stuck) {
   fork.branches.push({ name: `upgrade/${tag}`, commit: gate.commit, role: "upgrade", gate: "failed" });
   if (!stuck) fork.branches.push({ name: branch, commit: hex(40), role: "repair", gate: "passed" });
   return db.runs[id];
+}
+
+// ---------- yellow to green ----------
+
+const SOAK_PASSES = 3;
+const MOCK_SOAK_MS = 2600;
+const STOCK_SCENARIOS = [
+  ["e2e-clinical-contract", "At the bedside with an identified chart, the answer is clinical: no dose, the clinical framing, a cited policy, the override control, and the synthetic notice.", 1],
+  ["e2e-research-cross-check", "Writing a manuscript, research mode computes a hypothetical number cross-checked across at least two independent registry publishers.", 1],
+  ["e2e-administrative-policy", "A formulary question in budget context answers in administrative mode and cites a committee policy with its version and owner.", 1],
+  ["e2e-multi-intent-view", "An unrecognized screen with low confidence shows the labeled multi-intent view with one answer per plausible intent.", 1],
+  ["e2e-attestation-flow", "With an identified chart, a research request is held until the user attests; the attested answer and its ledger record carry the attestation.", 3],
+  ["e2e-override-writes-ledger", "The user overrides a clinical answer to research: the override is written to the ledger record.", 3],
+  ["e2e-no-dose-across-conversation", "A research conversation continues at the bedside: every clinical turn stays dose-free.", 3],
+  ["e2e-ledger-provenance", "Every answer writes a run-time record that names the live fork commit and the pinned stock tag.", 2],
+  ["e2e-intent-records", "The fork's build-time intent ledger is readable.", 1],
+  ["e2e-fork-config-valid", "fluid.toml pins the live stock tag; ui/preferences.json matches the platform schema.", 2],
+  ["e2e-redcap-enrollment", "With a REDCap connector, research reports enrollment and the bedside answer stays clinical.", 2],
+];
+
+function greenHealth(commit) {
+  return { health: "green", commit, lastGreenCommit: commit, runId: null, pass: 0, of: SOAK_PASSES, since: now(), source: null, failure: null, browser: null, rolledBackFrom: null };
+}
+
+function yellowHealth(commit, previous) {
+  return { health: "yellow", commit, lastGreenCommit: previous?.health === "green" ? (previous.commit ?? previous.lastGreenCommit) : previous?.lastGreenCommit ?? null, runId: `run_yel-${hex(8)}`, pass: 0, of: SOAK_PASSES, since: now(), source: "customize", failure: null, browser: null, rolledBackFrom: null };
+}
+
+function addHistory(repo, event, commit, runId, detail) {
+  (db.history[repo] ??= []).unshift({ at: now(), event, commit, runId, detail });
+}
+
+function forkHealth(repo) {
+  const fork = db.forks[repo] ?? db.fleet?.forks.find((f) => f.repo === repo);
+  if (!fork) throw new HttpError(404, `Fork ${repo} not found`);
+  return { repo, health: fork.health ?? greenHealth(fork.head), history: db.history[repo] ?? [] };
+}
+
+function mockPass(pass, hasRedcap) {
+  const scenarios = STOCK_SCENARIOS.map(([id, description, steps]) => (id === "e2e-redcap-enrollment" && !hasRedcap
+    ? { id, description, passed: true, skipped: "the fork has no redcap connector", durationMs: 0, steps: [] }
+    : { id, description, passed: true, durationMs: 40 + steps * 30, steps: Array.from({ length: steps }, (_, i) => ({ id: `step${i + 1}`, kind: "ask", passed: true, latencyMs: 20 + Math.floor(Math.random() * 60), failures: [] })) }));
+  const skipped = scenarios.filter((x) => x.skipped).length;
+  return { pass, passed: true, at: now(), durationMs: 900 + Math.floor(Math.random() * 400), runner: "stock", stockTag: STOCK_TAG, tiers: [{ tier: "stock", passed: true, total: scenarios.length, failed: 0, skipped, scenarios }], failures: [] };
+}
+
+/** Simulates the yellow soak after a mock customization lands on main: three passes, browser checks once, then green. */
+function startMockYellow(fork, parentRun) {
+  const health = yellowHealth(fork.head, fork.health);
+  fork.health = health;
+  const hasRedcap = /redcap/i.test(parentRun?._ctx?.text ?? "");
+  const yrun = { id: health.runId, kind: "yellow", repo: fork.repo, status: "running", commit: fork.head, pass: 0, of: SOAK_PASSES, health: "yellow", passes: [], browser: null, steps: [{ name: `Live on main in yellow at ${fork.head.slice(0, 7)}`, status: "done", detail: "Landed by customize; the end-to-end suite runs 3 times against the live fork, with the browser checks once" }], createdAt: now(), updatedAt: now() };
+  db.runs[yrun.id] = yrun;
+  addHistory(fork.repo, "yellow", fork.head, yrun.id, `Live on main in yellow after the gate (customize); last green ${String(health.lastGreenCommit ?? "unknown").slice(0, 7)}`);
+  const mirror = () => {
+    if (!parentRun) return;
+    parentRun.yellowRunId = yrun.id;
+    parentRun.yellow = { runId: yrun.id, commit: fork.head, health: fork.health.health, pass: fork.health.pass, of: SOAK_PASSES, browser: yrun.browser ? { status: yrun.browser.status, detail: yrun.browser.detail } : null };
+  };
+  mirror();
+  for (let pass = 1; pass <= SOAK_PASSES; pass++) {
+    setTimeout(() => {
+      if (fork.health.runId !== yrun.id) return;
+      yrun.passes.push(mockPass(pass, hasRedcap));
+      yrun.steps.push({ name: `Soak pass ${pass} of ${SOAK_PASSES}`, status: "done", detail: `All scenarios passed (stock ${STOCK_TAG} suite)` });
+      if (pass === 1) {
+        yrun.browser = { status: "passed", detail: "4 checks passed", checks: [
+          { name: "The app loads for the fork's user", passed: true, detail: `workspace loaded with ${fork.repo} in the top bar` },
+          { name: "Bedside question shows a clinical card with no dose and an override control", passed: true, detail: "clinical card, no dose, override control present" },
+          { name: "The fork's UI preferences render", passed: true, detail: "as configured" },
+          { name: "No console errors", passed: true, detail: "none" },
+        ], consoleErrors: [], durationMs: 6400 };
+        yrun.steps.push({ name: "Browser checks (once per yellow period)", status: "done", detail: "passed: 4 checks passed" });
+        fork.health.browser = { status: "passed", detail: "4 checks passed" };
+      }
+      yrun.pass = pass;
+      fork.health.pass = pass;
+      addHistory(fork.repo, pass === SOAK_PASSES ? "green" : "pass", fork.head, yrun.id, pass === SOAK_PASSES ? `${SOAK_PASSES} consecutive passes; ${fork.head.slice(0, 7)} is the last green commit` : `Soak pass ${pass} of ${SOAK_PASSES} passed`);
+      if (pass === SOAK_PASSES) {
+        fork.health = { ...fork.health, health: "green", lastGreenCommit: fork.head, runId: null, since: now() };
+        yrun.status = "passed";
+        yrun.health = "green";
+        yrun.steps.push({ name: "Green", status: "done", detail: `${SOAK_PASSES} consecutive passes` });
+      }
+      yrun.updatedAt = now();
+      mirror();
+    }, pass * MOCK_SOAK_MS);
+  }
+}
+
+/** A fleet fork that took an upgrade soaks briefly in yellow, then turns green. */
+function soakFleetFork(fork, rand) {
+  const runId = fork.health.runId;
+  setTimeout(() => {
+    if (fork.health.runId !== runId) return;
+    fork.health = { ...fork.health, health: "green", pass: SOAK_PASSES, lastGreenCommit: fork.health.commit, runId: null, since: now() };
+    setStatus(fork, fork.status);
+  }, 4000 + rand() * 6000);
 }
 
 // ---------- harvest ----------
