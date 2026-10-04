@@ -1,4 +1,4 @@
-// Demo sessions: an HttpOnly cookie carrying { userId, persona, issuedAt }
+// Demo sessions: an HttpOnly cookie carrying { userId, persona, issuedAt, known }
 // signed with HMAC-SHA256 under SESSION_SECRET. No server-side session store.
 
 export const SESSION_COOKIE = "fluid_session";
@@ -8,6 +8,31 @@ export interface Session {
 	userId: string;
 	persona: string;
 	issuedAt: number;
+	/** User ids of the other personas this browser used (persona id -> user id), so switching back keeps that fork. */
+	known?: Record<string, string>;
+}
+
+const MAX_KNOWN_PERSONAS = 10;
+
+/**
+ * The session after switching to a persona. A persona used before in this
+ * browser gets its earlier user id back (and with it its fork); a new one gets
+ * a new user id.
+ */
+export function switchPersona(existing: Session | null, persona: string, now: number, newUserId: () => string): { session: Session; reused: boolean } {
+	const known: Record<string, string> = { ...(existing?.known ?? {}) };
+	if (existing) known[existing.persona] = existing.userId;
+	const prior = known[persona];
+	delete known[persona];
+	const kept = Object.fromEntries(Object.entries(known).slice(-MAX_KNOWN_PERSONAS));
+	return { session: { userId: prior ?? newUserId(), persona, issuedAt: now, known: kept }, reused: prior !== undefined };
+}
+
+function isKnownMap(value: unknown): boolean {
+	if (value === undefined) return true;
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const entries = Object.entries(value);
+	return entries.length <= MAX_KNOWN_PERSONAS && entries.every(([, v]) => typeof v === "string");
 }
 
 const encoder = new TextEncoder();
@@ -54,7 +79,7 @@ export async function verifySession(value: string | null | undefined, secret: st
 	} catch {
 		return null;
 	}
-	if (typeof session.userId !== "string" || typeof session.persona !== "string" || typeof session.issuedAt !== "number") return null;
+	if (typeof session.userId !== "string" || typeof session.persona !== "string" || typeof session.issuedAt !== "number" || !isKnownMap(session.known)) return null;
 	if (now - session.issuedAt > SESSION_MAX_AGE_SECONDS * 1000) return null;
 	return session;
 }

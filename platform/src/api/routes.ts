@@ -5,7 +5,7 @@ import { hasClinicalDose, markSafety, SAFETY_SIGNALS } from "./safety.ts";
 import { clientKey } from "../lib/client.ts";
 import { scrubText } from "../git/tokens.ts";
 import { forkRepoName, isValidRepoName, newIntentId, newSandboxUserId, STOCK_REPO, userIdFromForkRepo } from "../lib/names.ts";
-import { readCookie, safeEqual, SESSION_COOKIE, sessionCookieHeader, signSession, verifySession, type Session } from "../lib/session.ts";
+import { readCookie, safeEqual, SESSION_COOKIE, sessionCookieHeader, signSession, switchPersona, verifySession, type Session } from "../lib/session.ts";
 import { askFork, type PlatformExports } from "../runtime/loader.ts";
 import { bundledStockRelease, compareSemverDesc, listStockTags, publishStockRelease, readReleaseMetadata, readStockFiles, stockTagCommit, unrecordedStockTags } from "../stock/publish.ts";
 import type { ReleaseMetadata } from "../stock/releases.ts";
@@ -191,8 +191,9 @@ route("POST", "/api/session", async (rc) => {
 	if (!persona) throw new HttpError(400, `unknown persona ${JSON.stringify(personaId)}`);
 	const existing = await sessionOf(rc);
 	if (existing && existing.persona === persona.id) return json({ userId: existing.userId, persona: existing.persona });
-	await takeClientQuota(rc, "session", LIMITS.sessionsPerClientPerHour, 3600);
-	const session: Session = { userId: newSandboxUserId(), persona: persona.id, issuedAt: Date.now() };
+	// Switching back to a persona this browser used before keeps its user id and fork (no new quota).
+	const { session, reused } = switchPersona(existing, persona.id, Date.now(), newSandboxUserId);
+	if (!reused) await takeClientQuota(rc, "session", LIMITS.sessionsPerClientPerHour, 3600);
 	const cookie = sessionCookieHeader(await signSession(session, rc.env.SESSION_SECRET), rc.url.protocol === "https:");
 	return json({ userId: session.userId, persona: session.persona }, 200, { "set-cookie": cookie });
 });

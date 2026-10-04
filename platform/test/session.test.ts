@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SESSION_MAX_AGE_SECONDS, readCookie, safeEqual, sessionCookieHeader, signSession, verifySession } from "../src/lib/session.ts";
+import { SESSION_MAX_AGE_SECONDS, readCookie, safeEqual, sessionCookieHeader, signSession, switchPersona, verifySession } from "../src/lib/session.ts";
 import { forkRepoName, isValidRepoName, ledgerRepoName, newIntentId, newSandboxUserId, normalizeUserId, userIdFromForkRepo } from "../src/lib/names.ts";
 
 const SECRET = "test-secret-0123456789abcdef";
@@ -76,5 +76,33 @@ describe("names", () => {
 
 	it("formats intent ids like the stock records", () => {
 		expect(newIntentId(new Date("2026-10-03T12:00:00Z"), "0002")).toBe("int_2026_10_03_0002");
+	});
+});
+
+describe("switching personas", () => {
+	const ids = ["s-1111111111", "s-2222222222", "s-3333333333"];
+	const nextId = () => ids.shift()!;
+
+	it("gives a new persona a new user id and remembers the previous one", () => {
+		const first = switchPersona(null, "hospitalist-researcher", 1, () => "s-aaaaaaaaaa");
+		const second = switchPersona(first.session, "research-coordinator", 2, () => "s-bbbbbbbbbb");
+		expect(second).toMatchObject({ reused: false, session: { userId: "s-bbbbbbbbbb", persona: "research-coordinator", known: { "hospitalist-researcher": "s-aaaaaaaaaa" } } });
+	});
+
+	it("switching back to a persona reuses its user id, so it keeps its fork", () => {
+		const a = switchPersona(null, "hospitalist-researcher", 1, nextId).session;
+		const b = switchPersona(a, "research-coordinator", 2, nextId).session;
+		const back = switchPersona(b, "hospitalist-researcher", 3, () => "s-unused0000");
+		expect(back).toMatchObject({ reused: true, session: { userId: a.userId, persona: "hospitalist-researcher", known: { "research-coordinator": b.userId } } });
+	});
+
+	it("keeps the remembered personas through signing", async () => {
+		const s = { ...session, known: { "research-coordinator": "s-9999999999" } };
+		expect(await verifySession(await signSession(s, SECRET), SECRET, session.issuedAt)).toEqual(s);
+	});
+
+	it("rejects a malformed remembered persona map", async () => {
+		const value = await signSession({ ...session, known: { x: 5 } } as never, SECRET);
+		expect(await verifySession(value, SECRET, session.issuedAt)).toBeNull();
 	});
 });
