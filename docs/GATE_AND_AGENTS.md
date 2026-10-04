@@ -231,4 +231,10 @@ Of the 31 forks, 30 passed, 6 of them after the merge agent resolved a conflict.
 | Admin test change, yellow to rolled back (revert commit pushed, repair started) | 18.4 s | 10.1 s |
 | Repair apply, gate (with the merge of main) and soak to green | 58.0 s | 54.8 s |
 
-On production the browser tier passed all four checks; locally it reports `unavailable` because the remote browser cannot reach `localhost`. A dry run of one pass (`POST /api/admin/e2e`) on seeded forks pinned to v1.5.0 (basic platform scenarios) took 2 to 4 seconds.
+On production the browser tier passed all four checks; locally it reports `unavailable` because the remote browser cannot reach `localhost`.
+
+### Load rehearsal and baseline, measured on 2026-10-04
+
+After the Stage 6 review fixes, `scripts/e2e-stage3.mjs --seed 200 --tag v1.10.0` against `cf dev` (re-running the v1.10.0 fan-out, so no new stock tag): 200 upgrade runs, up to 124 forks upgrading or gating at once and 88 soaking in yellow at once. The upgrades settled in 129 s and the last soak 30 s later. All 90 upgrades that landed (auto upgrade) turned green; none was rolled back and none was left yellow. 196 forks passed the gate (34 after the merge agent resolved a conflict), and exactly the 4 compact-research seeds stayed pinned with repair branches whose check passes at the new tag. The whole scenario took 659 s.
+
+The production baseline (`scripts/baseline.mjs`, pages of 10, 4 at a time) ran one dry pass on all 201 forks in 120 s: all 201 passed (200 seeds on v1.5.0 and one fork on v1.9.0, both with the basic platform scenarios), none was flagged, and no fork's health or `main` changed. A dry pass took 1.5 s at the median and 2.6 s at most. After deploy 5fe35d0c, `scripts/e2e-yellow.mjs` passed on production on stock v1.11.0: soak to green in 41 s, rollback 16 s after landing, repair apply to green in 46 s, browser tier 4 of 4. A dry run of one pass (`POST /api/admin/e2e`) on seeded forks pinned to v1.5.0 (basic platform scenarios) took 2 to 4 seconds.
