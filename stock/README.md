@@ -13,8 +13,9 @@ policies/            mode contracts, clinical/research/administrative policies, 
 connectors/          mock FHIR, call schedule, calendar, documents, formulary (read env.data)
 tests/invariants/    tier 1 probes (every sample must pass)
 tests/functional/    tier 2 probes (majority of samples)
-tests/user/          empty in stock; tier 3 lives in forks
+tests/user/          empty in stock; tier 3 (manifest.json) and user e2e scenarios (e2e.json) live in forks
 tests/runner.ts      pure probe runner, reused by the platform gate
+tests/e2e/           end-to-end regression suite (manifest.json) and its pure scenario runner (runner.ts)
 tests/unit/          Vitest unit tests (development only)
 .intent/             build-time intent records
 fluid.toml           pinned stock tag, tau, preferences (harvest_opt_in defaults to false)
@@ -76,6 +77,40 @@ a fork raises tau.
 
 The gate must read `tests/` (manifests and `runner.ts`) from stock at the
 fork's pinned tag and ignore any copies inside the fork.
+
+## End-to-end scenarios
+
+`tests/e2e/manifest.json` is the stock end-to-end suite. After a change lands
+on a fork's `main`, the platform runs it against the live fork (the yellow
+state) three times in a row before the fork turns green; a failure rolls
+`main` back to the last green commit. Like tiers 1 and 2 it is read from stock
+at the fork's pinned tag, never from the fork. A fork may add its own
+scenarios in `tests/user/e2e.json`; those run as an extra tier and cannot reuse
+a stock scenario id.
+
+A scenario is an ordered list of steps. Step kinds:
+
+| kind       | does                                                              | assertion target              |
+| ---------- | ----------------------------------------------------------------- | ----------------------------- |
+| `ask`      | asks the live fork (`request`, optional `withHistory`, `focusMode`) | the answer card               |
+| `override` | records the user's mode override on `answer`; `reask` asks the named ask step again in that mode | `{ record, card? }` |
+| `ledger`   | reads the run-time record of `answer`                             | the record, or null           |
+| `intents`  | reads the fork's build-time intent records                        | `{ count, records }`          |
+| `config`   | reads and validates a fork file (`fluid.toml`, `ui/preferences.json`) | `{ present, valid, errors?, parsed? }` |
+
+Assertions use the probe runner's ops. An expected value of `"$live.commit"`
+or `"$live.stockTag"` names the live fork; `"$<step>.<path>"` names a value
+from an earlier step's target. `requires: { "connector": "redcap" }` on a
+scenario or step skips it when the fork has no `connectors/redcap.ts`. Each
+step has a latency budget (`latencyBudgetMs` on the step, scenario, or
+manifest; default 10000 ms) and a time limit. A scenario stops at its first
+failing step.
+
+`runScenarios({ manifest, host, live, tier?, stepTimeoutMs? })` runs a
+manifest against a host that implements `ask`, `override`, `ledger`,
+`intents`, `config`, and `connectors` (see `tests/e2e/runner.ts`). The
+platform implements the host with its own ask path and a synthetic test user
+scoped to the run, so scenarios never write to a real user's ledger.
 
 ## Modules
 

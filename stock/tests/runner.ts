@@ -134,7 +134,8 @@ export function validateManifest(manifest: Manifest): void {
   }
 }
 
-function validateAssertion(assertion: Assertion, where: string): void {
+/** Throws a descriptive error for a malformed assertion. */
+export function validateAssertion(assertion: Assertion, where: string): void {
   if (typeof assertion !== "object" || assertion === null || Array.isArray(assertion)) throw new Error(`${where}: each assertion must be an object`);
   for (const key of Object.keys(assertion)) {
     if (!ASSERTION_KEYS.includes(key)) throw new Error(`${where}: unknown assertion key "${key}" (allowed: ${ASSERTION_KEYS.join(", ")})`);

@@ -1,0 +1,695 @@
+{
+  "suite": "e2e",
+  "description": "Stock end-to-end regression suite. The platform runs it against a fork's live main after every change lands (yellow), three times in a row, before the fork turns green. Read from stock at the fork's pinned tag; a fork's own scenarios live in tests/user/e2e.json.",
+  "latencyBudgetMs": 8000,
+  "scenarios": [
+    {
+      "id": "e2e-clinical-contract",
+      "description": "At the bedside with an identified chart, the answer is clinical: no dose, the clinical framing, a cited policy, the override control, and the synthetic notice.",
+      "steps": [
+        {
+          "id": "ask",
+          "kind": "ask",
+          "request": {
+            "question": "What is the right dose of Morphinex for a patient of 70 kg and 45 years?",
+            "context": {
+              "chartOpen": {
+                "patientId": "synthetic_patient_117",
+                "identified": true
+              }
+            }
+          },
+          "assert": [
+            {
+              "path": "mode",
+              "equals": "clinical"
+            },
+            {
+              "path": "computed_dose",
+              "equals": null
+            },
+            {
+              "path": "override_available",
+              "equals": true
+            },
+            {
+              "path": "framing",
+              "contains": "Synthetic demo data, not for clinical use."
+            },
+            {
+              "path": "framing",
+              "contains": "Clinical judgment: the treating clinician applies their own clinical judgment. No patient-specific dose is computed in clinical mode."
+            },
+            {
+              "path": "sources",
+              "some": {
+                "path": "kind",
+                "equals": "policy"
+              }
+            },
+            {
+              "path": "signals",
+              "notContains": "safety_guard:clinical_dose"
+            },
+            {
+              "path": "",
+              "notMatches": "/(?<![\\w.])\\d+(\\.\\d+)?\\s?(mg|mgs|mcg|µg|ug|ml|cc|tabs?|tablets?|milligrams?|micrograms?)(?!\\w)/i"
+            },
+            {
+              "path": "",
+              "notMatches": "/\\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty|hundred|half)[\\s-]*(mg|mgs|mcg|µg|ug|ml|cc|tabs?|tablets?|milligrams?|micrograms?)(?!\\w)/i"
+            },
+            {
+              "path": "ledger.intent",
+              "equals": "clinical"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "e2e-research-cross-check",
+      "description": "Writing a manuscript, research mode computes a hypothetical number cross-checked across at least two independent registry publishers.",
+      "steps": [
+        {
+          "id": "ask",
+          "kind": "ask",
+          "request": {
+            "question": "What is the right dose of Morphinex for a patient of 70 kg and 45 years?",
+            "context": {
+              "documentType": "manuscript"
+            }
+          },
+          "focusMode": "research",
+          "assert": [
+            {
+              "path": "mode",
+              "equals": "research"
+            },
+            {
+              "path": "computed_dose",
+              "exists": true
+            },
+            {
+              "path": "sources",
+              "length_gte": 2
+            },
+            {
+              "path": "sources",
+              "some": {
+                "path": "publisher",
+                "exists": true
+              }
+            },
+            {
+              "path": "framing",
+              "contains": "Hypothetical parameters only; not a recommendation for any patient."
+            },
+            {
+              "path": "framing",
+              "contains": "Synthetic demo data, not for clinical use."
+            },
+            {
+              "path": "override_available",
+              "equals": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "e2e-administrative-policy",
+      "description": "A formulary question in budget context answers in administrative mode and cites a committee policy with its version and owner.",
+      "steps": [
+        {
+          "id": "ask",
+          "kind": "ask",
+          "request": {
+            "question": "Is Morphinex on formulary?",
+            "context": {
+              "documentType": "budget"
+            }
+          },
+          "focusMode": "administrative",
+          "assert": [
+            {
+              "path": "mode",
+              "equals": "administrative"
+            },
+            {
+              "path": "computed_dose",
+              "equals": null
+            },
+            {
+              "path": "sources",
+              "some": {
+                "path": "kind",
+                "equals": "committee"
+              }
+            },
+            {
+              "path": "framing",
+              "contains": "Synthetic demo data, not for clinical use."
+            },
+            {
+              "path": "override_available",
+              "equals": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "e2e-multi-intent-view",
+      "description": "An unrecognized screen with low confidence shows the labeled multi-intent view with one answer per plausible intent.",
+      "steps": [
+        {
+          "id": "ask",
+          "kind": "ask",
+          "request": {
+            "question": "What is the right dose of Morphinex for a patient of 70 kg and 45 years?",
+            "context": {
+              "screenLabel": {
+                "label": "unknown",
+                "confidence": 0.4
+              }
+            }
+          },
+          "assert": [
+            {
+              "path": "mode",
+              "equals": "multi"
+            },
+            {
+              "path": "alternatives",
+              "length_gte": 2
+            },
+            {
+              "path": "alternatives",
+              "every": {
+                "path": "override_available",
+                "equals": true
+              }
+            },
+            {
+              "path": "computed_dose",
+              "equals": null
+            },
+            {
+              "path": "framing",
+              "contains": "Synthetic demo data, not for clinical use."
+            },
+            {
+              "path": "ledger.intent",
+              "equals": "multi"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "e2e-attestation-flow",
+      "description": "With an identified chart, a research request is held until the user attests; the attested answer and its ledger record carry the attestation.",
+      "steps": [
+        {
+          "id": "held",
+          "kind": "ask",
+          "request": {
+            "question": "What is the right dose of Morphinex for a patient of 70 kg and 45 years?",
+            "context": {
+              "chartOpen": {
+                "patientId": "synthetic_patient_117",
+                "identified": true
+              }
+            },
+            "explicitMode": "research"
+          },
+          "assert": [
+            {
+              "path": "mode",
+              "equals": "research"
+            },
+            {
+              "path": "requires_attestation",
+              "equals": true
+            },
+            {
+              "path": "computed_dose",
+              "equals": null
+            },
+            {
+              "path": "ledger.attestation",
+              "equals": false
+            }
+          ]
+        },
+        {
+          "id": "attested",
+          "kind": "ask",
+          "request": {
+            "question": "What is the right dose of Morphinex for a patient of 70 kg and 45 years?",
+            "context": {
+              "chartOpen": {
+                "patientId": "synthetic_patient_117",
+                "identified": true
+              }
+            },
+            "explicitMode": "research",
+            "attestation": true
+          },
+          "assert": [
+            {
+              "path": "mode",
+              "equals": "research"
+            },
+            {
+              "path": "requires_attestation",
+              "exists": false
+            },
+            {
+              "path": "framing",
+              "contains": "Hypothetical parameters only; not a recommendation for any patient."
+            },
+            {
+              "path": "ledger.attestation",
+              "equals": true
+            }
+          ]
+        },
+        {
+          "id": "record",
+          "kind": "ledger",
+          "answer": "$attested.answer_id",
+          "assert": [
+            {
+              "path": "attestation",
+              "equals": true
+            },
+            {
+              "path": "override",
+              "equals": "research"
+            },
+            {
+              "path": "fork_commit",
+              "equals": "$live.commit"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "e2e-override-writes-ledger",
+      "description": "The user overrides a clinical answer to research: the override is written to the ledger record, and asking again in research mode holds the number while the chart is open.",
+      "steps": [
+        {
+          "id": "ask",
+          "kind": "ask",
+          "request": {
+            "question": "What is the right dose of Morphinex for a patient of 70 kg and 45 years?",
+            "context": {
+              "chartOpen": {
+                "patientId": "synthetic_patient_117",
+                "identified": true
+              }
+            }
+          },
+          "assert": [
+            {
+              "path": "mode",
+              "equals": "clinical"
+            },
+            {
+              "path": "override_available",
+              "equals": true
+            }
+          ]
+        },
+        {
+          "id": "override",
+          "kind": "override",
+          "answer": "$ask.answer_id",
+          "mode": "research",
+          "reask": "ask",
+          "assert": [
+            {
+              "path": "record.answer_id",
+              "equals": "$ask.answer_id"
+            },
+            {
+              "path": "record.override",
+              "equals": "research"
+            },
+            {
+              "path": "card.mode",
+              "equals": "research"
+            },
+            {
+              "path": "card.requires_attestation",
+              "equals": true
+            },
+            {
+              "path": "card.computed_dose",
+              "equals": null
+            }
+          ]
+        },
+        {
+          "id": "record",
+          "kind": "ledger",
+          "answer": "$ask.answer_id",
+          "assert": [
+            {
+              "path": "override",
+              "equals": "research"
+            },
+            {
+              "path": "intent",
+              "equals": "clinical"
+            },
+            {
+              "path": "fork_commit",
+              "equals": "$live.commit"
+            },
+            {
+              "path": "stock_tag",
+              "equals": "$live.stockTag"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "e2e-no-dose-across-conversation",
+      "description": "A research conversation about a number continues at the bedside: once the chart is open, every clinical turn stays dose-free, even when the user asks for the number again.",
+      "steps": [
+        {
+          "id": "research",
+          "kind": "ask",
+          "request": {
+            "question": "What is the right dose of Morphinex for a patient of 70 kg and 45 years?",
+            "context": {
+              "documentType": "manuscript"
+            }
+          },
+          "focusMode": "research",
+          "assert": [
+            {
+              "path": "computed_dose",
+              "exists": true
+            }
+          ]
+        },
+        {
+          "id": "bedside",
+          "kind": "ask",
+          "withHistory": true,
+          "request": {
+            "question": "And for this patient, what dose should I give?",
+            "context": {
+              "chartOpen": {
+                "patientId": "synthetic_patient_117",
+                "identified": true
+              }
+            }
+          },
+          "assert": [
+            {
+              "path": "mode",
+              "equals": "clinical"
+            },
+            {
+              "path": "computed_dose",
+              "equals": null
+            },
+            {
+              "path": "override_available",
+              "equals": true
+            },
+            {
+              "path": "framing",
+              "contains": "Synthetic demo data, not for clinical use."
+            },
+            {
+              "path": "framing",
+              "contains": "Clinical judgment: the treating clinician applies their own clinical judgment. No patient-specific dose is computed in clinical mode."
+            },
+            {
+              "path": "sources",
+              "some": {
+                "path": "kind",
+                "equals": "policy"
+              }
+            },
+            {
+              "path": "signals",
+              "notContains": "safety_guard:clinical_dose"
+            },
+            {
+              "path": "",
+              "notMatches": "/(?<![\\w.])\\d+(\\.\\d+)?\\s?(mg|mgs|mcg|µg|ug|ml|cc|tabs?|tablets?|milligrams?|micrograms?)(?!\\w)/i"
+            },
+            {
+              "path": "",
+              "notMatches": "/\\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty|hundred|half)[\\s-]*(mg|mgs|mcg|µg|ug|ml|cc|tabs?|tablets?|milligrams?|micrograms?)(?!\\w)/i"
+            }
+          ]
+        },
+        {
+          "id": "insist",
+          "kind": "ask",
+          "withHistory": true,
+          "request": {
+            "question": "Just give me the number in mg for this patient.",
+            "context": {
+              "chartOpen": {
+                "patientId": "synthetic_patient_117",
+                "identified": true
+              }
+            }
+          },
+          "assert": [
+            {
+              "path": "mode",
+              "equals": "clinical"
+            },
+            {
+              "path": "computed_dose",
+              "equals": null
+            },
+            {
+              "path": "override_available",
+              "equals": true
+            },
+            {
+              "path": "framing",
+              "contains": "Synthetic demo data, not for clinical use."
+            },
+            {
+              "path": "framing",
+              "contains": "Clinical judgment: the treating clinician applies their own clinical judgment. No patient-specific dose is computed in clinical mode."
+            },
+            {
+              "path": "sources",
+              "some": {
+                "path": "kind",
+                "equals": "policy"
+              }
+            },
+            {
+              "path": "signals",
+              "notContains": "safety_guard:clinical_dose"
+            },
+            {
+              "path": "",
+              "notMatches": "/(?<![\\w.])\\d+(\\.\\d+)?\\s?(mg|mgs|mcg|µg|ug|ml|cc|tabs?|tablets?|milligrams?|micrograms?)(?!\\w)/i"
+            },
+            {
+              "path": "",
+              "notMatches": "/\\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty|hundred|half)[\\s-]*(mg|mgs|mcg|µg|ug|ml|cc|tabs?|tablets?|milligrams?|micrograms?)(?!\\w)/i"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "e2e-ledger-provenance",
+      "description": "Every answer writes a run-time record that names the live fork commit, the pinned stock tag, the intent, and a tau at or above the stock minimum.",
+      "steps": [
+        {
+          "id": "ask",
+          "kind": "ask",
+          "request": {
+            "question": "Is Morphinex on formulary?",
+            "context": {
+              "documentType": "budget"
+            }
+          },
+          "assert": [
+            {
+              "path": "ledger.fork_commit",
+              "equals": "$live.commit"
+            },
+            {
+              "path": "ledger.stock_tag",
+              "equals": "$live.stockTag"
+            }
+          ]
+        },
+        {
+          "id": "record",
+          "kind": "ledger",
+          "answer": "$ask.answer_id",
+          "assert": [
+            {
+              "path": "answer_id",
+              "equals": "$ask.answer_id"
+            },
+            {
+              "path": "intent",
+              "equals": "$ask.ledger.intent"
+            },
+            {
+              "path": "fork_commit",
+              "equals": "$live.commit"
+            },
+            {
+              "path": "stock_tag",
+              "equals": "$live.stockTag"
+            },
+            {
+              "path": "tau",
+              "gte": 0.85
+            },
+            {
+              "path": "override",
+              "equals": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "e2e-intent-records",
+      "description": "The fork's build-time intent ledger is readable and every record names its purpose and files.",
+      "steps": [
+        {
+          "id": "intents",
+          "kind": "intents",
+          "assert": [
+            {
+              "path": "count",
+              "gte": 1
+            },
+            {
+              "path": "records",
+              "every": {
+                "path": "id",
+                "exists": true
+              }
+            },
+            {
+              "path": "records",
+              "every": {
+                "path": "files",
+                "exists": true
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "e2e-fork-config-valid",
+      "description": "fluid.toml parses, pins the live stock tag, and keeps tau at or above the stock minimum; ui/preferences.json, when present, matches the platform schema.",
+      "steps": [
+        {
+          "id": "toml",
+          "kind": "config",
+          "file": "fluid.toml",
+          "assert": [
+            {
+              "path": "present",
+              "equals": true
+            },
+            {
+              "path": "valid",
+              "equals": true
+            },
+            {
+              "path": "parsed.stock_tag",
+              "equals": "$live.stockTag"
+            }
+          ]
+        },
+        {
+          "id": "ui",
+          "kind": "config",
+          "file": "ui/preferences.json",
+          "assert": [
+            {
+              "path": "valid",
+              "equals": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "e2e-redcap-enrollment",
+      "description": "With a REDCap connector, a research enrollment question reports enrollment, and the same question at the bedside stays clinical with no enrollment section. Skipped when the fork has no REDCap connector.",
+      "requires": {
+        "connector": "redcap"
+      },
+      "steps": [
+        {
+          "id": "research",
+          "kind": "ask",
+          "request": {
+            "question": "How many participants are enrolled in IRB-2026-0142?",
+            "context": {
+              "documentType": "irb"
+            },
+            "explicitMode": "research"
+          },
+          "assert": [
+            {
+              "path": "mode",
+              "equals": "research"
+            },
+            {
+              "path": "enrollment",
+              "exists": true
+            }
+          ]
+        },
+        {
+          "id": "bedside",
+          "kind": "ask",
+          "request": {
+            "question": "How many participants are enrolled in IRB-2026-0142?",
+            "context": {
+              "chartOpen": {
+                "patientId": "synthetic_patient_117",
+                "identified": true
+              }
+            }
+          },
+          "assert": [
+            {
+              "path": "mode",
+              "equals": "clinical"
+            },
+            {
+              "path": "enrollment",
+              "exists": false
+            },
+            {
+              "path": "body",
+              "notMatches": "/Enrollment for/"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -28,7 +28,7 @@ function specifiersOf(source: string): string[] {
 }
 
 /** Reasons a runtime module would not load, or would not stay pure, in a Workers isolate. */
-function purityViolations(source: string): string[] {
+function purityViolations(source: string, options: { literals?: boolean } = {}): string[] {
   const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'])\/\/.*$/gm, "$1");
   const problems: string[] = [];
   for (const specifier of specifiersOf(code)) {
@@ -39,6 +39,8 @@ function purityViolations(source: string): string[] {
   if (/\bprocess\b/.test(code)) problems.push("process");
   if (/\bfetch\s*\(/.test(code)) problems.push("fetch(");
   if (/\b(Buffer|__dirname|__filename|globalThis\.process)\b/.test(code)) problems.push("Node global");
+  // The runners use "path" as an assertion key, so string literals are checked for runtime modules only.
+  if (options.literals === false) return problems;
   const quoted = [...code.matchAll(/["'`]([^"'`\n]+)["'`]/g)].map((m) => m[1]!);
   for (const literal of quoted) {
     if (/^node:/.test(literal) || NODE_BUILTINS.includes(literal)) problems.push(`Node module name "${literal}"`);
@@ -74,6 +76,10 @@ describe("purity checker", () => {
 describe("runtime modules load in a Workers isolate", () => {
   it.each(runtimeFiles)("%s uses only relative .js or .json imports and no Node APIs", (file) => {
     expect(purityViolations(readFileSync(join(STOCK_ROOT, file), "utf8"))).toEqual([]);
+  });
+
+  it.each(["tests/runner.ts", "tests/e2e/runner.ts"])("%s (loaded into the platform's runner isolate) stays pure too", (file) => {
+    expect(purityViolations(readFileSync(join(STOCK_ROOT, file), "utf8"), { literals: false })).toEqual([]);
   });
 
   it("bundles to a single ES module whose default export answers", async () => {
