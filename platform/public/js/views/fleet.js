@@ -2,6 +2,7 @@
 import { api, adminKey, setAdminKey } from "../api.js";
 import { h, mount, fmtTime, statusTag } from "../dom.js";
 import { renderTimeline, renderDiff, renderGate, renderIntent, repairApply } from "./shared.js";
+import { forkSummaryText } from "../fleet-summary.js";
 
 export const title = "Fleet";
 export const sub = "The mothership view. A stock release fans out one upgrade run per fork; each fork moves only when all three test tiers pass on the new stock.";
@@ -251,20 +252,11 @@ async function renderDrill(repo) {
     run?.kind === "repair" && run.branch ? repairApply(repo, run.branch, { gatePassed: run.repairGate?.passed ?? null }) : null,
     run?.steps ? h("div", {}, h("h3", { class: "small", style: { marginBottom: "8px" } }, "Run steps"), renderTimeline(run.steps)) : null,
     run?.diff?.length ? h("div", {}, h("h3", { class: "small" }, "Proposed fix"), renderDiff(run.diff)) : null,
-    run?.gate ? h("div", {}, h("h3", { class: "small", style: { marginBottom: "8px" } }, "Gate on the upgrade branch"), renderGate(run.gate)) : null,
+    run?.gate ? h("div", {}, h("h3", { class: "small", style: { marginBottom: "8px" } }, String(f.lastRun?.failedBranch ?? "").startsWith("work/") ? "Gate on the failed work branch" : "Gate on the upgrade branch"), renderGate(run.gate)) : null,
     h("div", { class: "stack" }, h("h3", { class: "small" }, "Intent records in this fork"),
       intents.length ? intents.map((r) => renderIntent(r, { related: related.has(r.id) })) : h("p", { class: "small muted" }, "No records."))));
 }
 
 function summary(f, run) {
-  const tag = f.lastRun?.tag || model.stockTags[model.stockTags.length - 1];
-  const text = {
-    pinned: `On ${f.pinnedTag}. No upgrade running.`,
-    upgrading: `Upgrade agent is merging stock ${tag} into upgrade/${tag}.`,
-    gating: `The gate is running all three tiers on upgrade/${tag}, with tiers 1 and 2 read at ${tag}.`,
-    passed: f.lastRun?.applied === false ? `Upgrade to ${tag} passed all three tiers. Waiting for the user's one-tap approval (auto_upgrade is off).` : `Upgrade to ${tag} passed all three tiers and was applied.`,
-    failed: run ? `Upgrade to ${tag} failed the gate. The fork stays pinned to ${f.pinnedTag}.` : `Upgrade to ${tag} failed the gate. The repair agent is reading the fork's intent records.`,
-    repair_open: `Upgrade to ${tag} failed the gate. A repair branch is open for review; the fork stays pinned to ${f.pinnedTag}.`,
-  }[f.status];
-  return h("p", { class: "small" }, text || f.status);
+  return h("p", { class: "small" }, forkSummaryText(f, model.stockTags[model.stockTags.length - 1], Boolean(run)));
 }
