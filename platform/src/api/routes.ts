@@ -27,7 +27,7 @@ import { shortRef } from "../runtime/refs.ts";
 import { headOf, openRepo, readTextFile } from "../runtime/repo-files.ts";
 import { parseUiPreferences, UI_PREFERENCES_PATH } from "../ui/preferences.ts";
 import { aggregateCharts, CHART_LIMITS } from "../ui/charts.ts";
-import { DEMO_OVERLAY, demoReleaseFiles } from "../stock/releases.ts";
+import { DEMO_OVERLAY, demoReleaseFiles, keepFloorTightening } from "../stock/releases.ts";
 import { appExports, ensureRun, repoRemote, startGateInstance, startYellowRun } from "../workflows/common.ts";
 import { upgradeTargets } from "../workflows/upgrade.ts";
 import { decodeParam, HttpError, json, readJson, requireJsonPost, requireString } from "./http.ts";
@@ -370,10 +370,13 @@ route("POST", "/api/admin/stock/publish", async (rc) => {
 	const body = await readJson(rc.request);
 	const bundled = bundledStockRelease();
 	const tag = typeof body.tag === "string" ? body.tag : bundled.tag;
-	const result = await publishStockRelease(rc.env, { ...bundled, tag, notes: typeof body.notes === "string" ? body.notes : undefined, safety: body.safety === true });
+	// A new tag keeps any floor the latest release tightened (the demo release invariants).
+	const latest = (await listStockTags(rc.env))[0] ?? null;
+	const floor = latest && latest !== tag ? keepFloorTightening(bundled.files, await readStockFiles(rc.env, latest).then((f) => f["tests/invariants/manifest.json"] ?? null)) : { files: bundled.files, kept: [] };
+	const result = await publishStockRelease(rc.env, { ...bundled, files: floor.files, tag, notes: typeof body.notes === "string" ? body.notes : undefined, safety: body.safety === true });
 	await recordRelease(rc.env, result.tag, result.release, result.commit);
 	const synced = await syncStockReleases(rc.env);
-	return json({ ...result, synced }, result.alreadyPublished ? 200 : 201);
+	return json({ ...result, synced, keptInvariants: result.alreadyPublished ? [] : floor.kept }, result.alreadyPublished ? 200 : 201);
 });
 
 route("POST", "/api/admin/forks/:repo/delete", async (rc, { repo }) => {

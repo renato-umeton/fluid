@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import stockSource from "../src/generated/stock-source.json";
-import { cleanNotes, DEMO_OVERLAY, demoReleaseFiles, hasDemoTightening, pinnedTagOf, releaseMetadata, releaseMetadataPath, SAFETY_GRACE_DAYS } from "../src/stock/releases.ts";
+import { cleanNotes, DEMO_OVERLAY, demoReleaseFiles, hasDemoTightening, keepFloorTightening, pinnedTagOf, releaseMetadata, releaseMetadataPath, SAFETY_GRACE_DAYS } from "../src/stock/releases.ts";
 import { parseToml } from "../src/lib/toml.ts";
 
 const files = stockSource.files as Record<string, string>;
@@ -85,5 +85,21 @@ describe("pinnedTagOf", () => {
 	it("reads stock_tag", () => {
 		expect(pinnedTagOf('stock_tag = "v1.1.0"\n')).toBe("v1.1.0");
 		expect(pinnedTagOf(null)).toBeNull();
+	});
+});
+
+describe("keepFloorTightening", () => {
+	const tightened = demoReleaseFiles(files).files["tests/invariants/manifest.json"]!;
+
+	it("adds the demo release probes to a new tag when the latest tag has them", () => {
+		const out = keepFloorTightening(files, tightened);
+		expect(out.kept.length).toBeGreaterThan(0);
+		expect(hasDemoTightening(out.files["tests/invariants/manifest.json"])).toBe(true);
+		expect(out.files["tests/e2e/manifest.json"]).toBe(files["tests/e2e/manifest.json"]);
+	});
+
+	it("changes nothing when the latest tag was not tightened", () => {
+		expect(keepFloorTightening(files, files["tests/invariants/manifest.json"]!)).toEqual({ files, kept: [] });
+		expect(keepFloorTightening(files, null)).toEqual({ files, kept: [] });
 	});
 });

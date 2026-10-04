@@ -113,6 +113,22 @@ export function demoReleaseFiles(files: Record<string, string>, tag?: string): {
 	return { files: out, changed };
 }
 
+/**
+ * A new stock tag never drops invariants the latest release added: when the
+ * latest tag's invariants carry the demo release probes, the bundled
+ * invariants get them too before publishing.
+ */
+export function keepFloorTightening(files: Record<string, string>, latestInvariants: string | null): { files: Record<string, string>; kept: string[] } {
+	if (!hasDemoTightening(latestInvariants)) return { files, kept: [] };
+	const text = files[INVARIANTS_PATH];
+	if (text === undefined) throw new Error(`stock has no ${INVARIANTS_PATH}`);
+	const manifest = JSON.parse(text) as { probes: OverlayProbe[] };
+	const present = new Set(manifest.probes.map((p) => p.id));
+	const added = DEMO_OVERLAY.probes.filter((p) => !present.has(p.id));
+	if (added.length === 0) return { files, kept: [] };
+	return { files: { ...files, [INVARIANTS_PATH]: `${JSON.stringify({ ...manifest, probes: [...manifest.probes, ...added] }, null, 2)}\n` }, kept: added.map((p) => p.id) };
+}
+
 /** Tag pinned in a fluid.toml, or null. */
 export function pinnedTagOf(fluidToml: string | null | undefined): string | null {
 	if (!fluidToml) return null;
