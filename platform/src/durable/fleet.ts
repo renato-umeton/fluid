@@ -3,6 +3,7 @@
 // changes are broadcast to Server-Sent Events subscribers (the fleet view).
 import { DurableObject } from "cloudflare:workers";
 import type { Json } from "../lib/json.ts";
+import { cancelRun, initialHealth, recordBrowser, recordFailure, recordPass, startYellow, type BrowserSummary, type HealthEvent, type HealthFailure, type HealthState, type Transition } from "../yellow/state.ts";
 
 /**
  * Fork statuses as the fleet view shows them. "pinned": on its pinned tag with
@@ -64,12 +65,15 @@ export interface FleetFork {
 	seeded: boolean;
 	createdAt: string;
 	updatedAt: string;
+	/** Yellow to green lifecycle of main (a fork with no history is green). */
+	health: HealthState;
 }
 
 export interface FleetSnapshot {
 	stockTags: string[];
 	releases: ReleaseRecord[];
 	counts: Record<string, number>;
+	healthCounts: Record<string, number>;
 	forks: (Omit<FleetFork, "userId" | "createdAt"> & { graceUntil: string | null })[];
 }
 
@@ -80,6 +84,7 @@ export type FleetEvent =
 	| ({ type: "release"; at: string } & ReleaseRecord);
 
 const GATES_PER_REPO = 20;
+const HEALTH_HISTORY_PER_REPO = 50;
 
 const encoder = new TextEncoder();
 const HEARTBEAT_MS = 25_000;
@@ -114,6 +119,9 @@ export class Fleet extends DurableObject<Env> {
 		sql.exec("CREATE INDEX IF NOT EXISTS forks_user ON forks (user_id)");
 		const columns = sql.exec("PRAGMA table_info(forks)").toArray().map((r) => r.name as string);
 		if (!columns.includes("pending_upgrade")) sql.exec("ALTER TABLE forks ADD COLUMN pending_upgrade TEXT");
+		if (!columns.includes("health")) sql.exec("ALTER TABLE forks ADD COLUMN health TEXT");
+		sql.exec("CREATE TABLE IF NOT EXISTS health_history (seq INTEGER PRIMARY KEY AUTOINCREMENT, repo TEXT NOT NULL, event TEXT NOT NULL)");
+		sql.exec("CREATE INDEX IF NOT EXISTS health_history_repo ON health_history (repo, seq)");
 		sql.exec("CREATE TABLE IF NOT EXISTS stock_tags (tag TEXT PRIMARY KEY, published_at TEXT NOT NULL)");
 		sql.exec("CREATE TABLE IF NOT EXISTS releases (tag TEXT PRIMARY KEY, record TEXT NOT NULL)");
 		sql.exec("CREATE TABLE IF NOT EXISTS gates (seq INTEGER PRIMARY KEY AUTOINCREMENT, repo TEXT NOT NULL, at TEXT NOT NULL, result TEXT NOT NULL)");
@@ -196,7 +204,60 @@ export class Fleet extends DurableObject<Env> {
 		return fork;
 	}
 
+	// ---------- yellow to green ----------
+
+	health(repo: string): HealthState | null {
+		return this.get(repo)?.health ?? null;
+	}
+
+	/** A gated change landed on main: the fork goes yellow (a newer change supersedes a soaking run). */
+	yellowStart(repo: string, input: { commit: string; runId: string; previous: string | null; source: string }): HealthState | null {
+		return this.transition(repo, (state, at) => startYellow(state, { ...input, at }));
+	}
+
+	yellowPass(repo: string, input: { runId: string; pass: number }): { state: HealthState; stale: boolean } | null {
+		return this.transitionReport(repo, (state, at) => recordPass(state, { ...input, at }));
+	}
+
+	yellowBrowser(repo: string, input: { runId: string; browser: BrowserSummary }): { state: HealthState; stale: boolean } | null {
+		return this.transitionReport(repo, (state, at) => recordBrowser(state, { ...input, at }));
+	}
+
+	yellowFailure(repo: string, input: { runId: string; failure: HealthFailure; revertCommit: string | null }): { state: HealthState; stale: boolean } | null {
+		return this.transitionReport(repo, (state, at) => recordFailure(state, { ...input, at }));
+	}
+
+	yellowCancel(repo: string, input: { runId: string; reason: string }): { state: HealthState; stale: boolean } | null {
+		return this.transitionReport(repo, (state, at) => cancelRun(state, { ...input, at }));
+	}
+
+	/** Health events for a fork, newest first. */
+	healthHistory(repo: string, limit = HEALTH_HISTORY_PER_REPO): HealthEvent[] {
+		return this.ctx.storage.sql.exec("SELECT event FROM health_history WHERE repo = ? ORDER BY seq DESC LIMIT ?", repo, limit).toArray().map((r) => JSON.parse(r.event as string) as HealthEvent);
+	}
+
+	private transition(repo: string, fn: (state: HealthState, at: string) => Transition): HealthState | null {
+		return this.transitionReport(repo, fn)?.state ?? null;
+	}
+
+	/** Applies one state machine transition, appends its events to the history, and broadcasts the fork. */
+	private transitionReport(repo: string, fn: (state: HealthState, at: string) => Transition): { state: HealthState; stale: boolean } | null {
+		const current = this.get(repo);
+		if (!current) return null;
+		const at = new Date().toISOString();
+		const result = fn(current.health, at);
+		const sql = this.ctx.storage.sql;
+		for (const event of result.events) sql.exec("INSERT INTO health_history (repo, event) VALUES (?, ?)", repo, JSON.stringify(event));
+		if (result.events.length) sql.exec("DELETE FROM health_history WHERE repo = ? AND seq NOT IN (SELECT seq FROM health_history WHERE repo = ? ORDER BY seq DESC LIMIT ?)", repo, repo, HEALTH_HISTORY_PER_REPO);
+		if (result.state !== current.health) {
+			sql.exec("UPDATE forks SET health = ?, updated_at = ? WHERE repo = ?", JSON.stringify(result.state), at, repo);
+			this.broadcast({ type: "fork", fork: this.get(repo)! });
+		}
+		return { state: result.state, stale: result.stale === true };
+	}
+
 	remove(repo: string): boolean {
+		this.ctx.storage.sql.exec("DELETE FROM health_history WHERE repo = ?", repo);
 		this.ctx.storage.sql.exec("DELETE FROM gates WHERE repo = ?", repo);
 		const removed = this.ctx.storage.sql.exec("DELETE FROM forks WHERE repo = ? RETURNING repo", repo).toArray().length > 0;
 		if (removed) this.broadcast({ type: "removed", repo });
@@ -278,11 +339,15 @@ export class Fleet extends DurableObject<Env> {
 	snapshot(): FleetSnapshot {
 		const releases = this.releases();
 		const graceOf = (tag: string | undefined) => releases.find((r) => r.tag === tag)?.graceUntil ?? null;
+		const forks = this.list();
+		const healthCounts: Record<string, number> = { green: 0, yellow: 0, rolled_back: 0 };
+		for (const fork of forks) healthCounts[fork.health.health] = (healthCounts[fork.health.health] ?? 0) + 1;
 		return {
 			stockTags: this.stockTags(),
 			releases,
 			counts: this.counts(),
-			forks: this.list().map(({ repo, persona, pinnedTag, status, lastRun, pendingUpgrade, updatedAt, seeded }) => ({
+			healthCounts,
+			forks: forks.map(({ repo, persona, pinnedTag, status, lastRun, pendingUpgrade, updatedAt, seeded, health }) => ({
 				repo,
 				persona,
 				pinnedTag,
@@ -291,6 +356,7 @@ export class Fleet extends DurableObject<Env> {
 				pendingUpgrade,
 				updatedAt,
 				seeded,
+				health,
 				// A pinned fork that failed a safety release shows when its stock-mode fallback starts (spec 7).
 				graceUntil: status === "repair_open" || status === "failed" ? graceOf(lastRun?.tag as string | undefined) : null,
 			})),
@@ -387,5 +453,6 @@ function toFork(row: Record<string, unknown>): FleetFork {
 		seeded: row.seeded === 1,
 		createdAt: row.created_at as string,
 		updatedAt: row.updated_at as string,
+		health: row.health ? (JSON.parse(row.health as string) as HealthState) : initialHealth(row.created_at as string),
 	};
 }

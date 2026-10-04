@@ -8,6 +8,8 @@ import type { PlannedChange } from "./recipes.ts";
 import { parseUiPreferences, UI_PREFERENCES_PATH } from "../ui/preferences.ts";
 
 export const USER_MANIFEST = "tests/user/manifest.json";
+/** The fork's own end-to-end scenarios, run in the yellow soak as the user tier. */
+export const USER_E2E = "tests/user/e2e.json";
 const OPS = ["equals", "notEquals", "gte", "lte", "exists", "some", "every", "contains", "notContains", "length_gte", "notMatches"];
 const ASSERTION_KEYS = ["path", "allowEmpty", ...OPS];
 const MODES = ["clinical", "research", "administrative"];
@@ -31,9 +33,20 @@ export interface Suggestion {
 	file: string;
 	rationale: string;
 	intentId: string;
-	kind: "behavior" | "near-invariant";
-	probe: Probe;
+	kind: "behavior" | "near-invariant" | "e2e";
+	/** Tier 3 probe (behavior and near-invariant suggestions). */
+	probe?: Probe;
+	/** End-to-end scenario for tests/user/e2e.json (e2e suggestions). */
+	scenario?: E2EScenario;
 	decision: null | "accept" | "reject" | "edit";
+}
+
+/** A user end-to-end scenario in the stock scenario format (stock tests/e2e/runner.ts). */
+export interface E2EScenario {
+	id: string;
+	description?: string;
+	requires?: { connector?: string };
+	steps: Record<string, unknown>[];
 }
 
 export interface SuggestInput {
@@ -117,6 +130,101 @@ function uiSuggestions(input: SuggestInput): Suggestion[] {
 		decision: null,
 		probe: { id, description: `${UI_PREFERENCES_PATH} keeps the requested UI preferences (verifies ${input.intentId}).`, kind: "config", file: UI_PREFERENCES_PATH, assert },
 	}];
+}
+
+const CHART = { chartOpen: { patientId: "synthetic_patient_117", identified: true } };
+
+/**
+ * End-to-end scenarios for a customization, proposed next to its tier 3
+ * tests and reviewed the same way. They go to tests/user/e2e.json and run in
+ * the yellow soak against the live fork, after the change lands on main.
+ */
+export function suggestScenarios(input: SuggestInput & { tau?: number | null }): Suggestion[] {
+	const out: Suggestion[] = [];
+	const add = (name: string, title: string, rationale: string, scenario: Omit<E2EScenario, "id">) => {
+		const id = testId(input.intentId, `e2e-${name}`);
+		out.push({ id, title, file: USER_E2E, rationale, intentId: input.intentId, kind: "e2e", decision: null, scenario: { id, ...scenario } });
+	};
+	if (input.change.recipe === "redcap") {
+		const protocol = (input.protocols?.length ? input.protocols : ["IRB-2026-0142"])[0]!;
+		const question = `How many participants are enrolled in ${protocol}?`;
+		add("redcap-no-leak", `Enrollment stays in research mode, even after an override to clinical`, `Checks ${input.intentId} end to end on the live fork: a research question about ${protocol} reports enrollment from REDCap, and when the user overrides that answer to clinical, the clinical answer carries no enrollment number and the override reaches the ledger.`, {
+			description: `Research mode reports REDCap enrollment for ${protocol}; overriding to clinical leaks no enrollment into clinical framing (verifies ${input.intentId}).`,
+			requires: { connector: "redcap" },
+			steps: [
+				{ id: "research", kind: "ask", request: { question, context: { documentType: "irb" }, explicitMode: "research" }, assert: [{ path: "mode", equals: "research" }, { path: "enrollment.0.protocolId", equals: protocol }, { path: "body", contains: `Enrollment for ${protocol}` }] },
+				{ id: "to-clinical", kind: "override", answer: "$research.answer_id", mode: "clinical", reask: "research", assert: [{ path: "record.override", equals: "clinical" }, { path: "card.mode", equals: "clinical" }, { path: "card.enrollment", exists: false }, { path: "card.body", notMatches: "/Enrollment for|enrolled of|REDCap/i" }, { path: "card.framing", every: { notMatches: "/enrol/i" } }] },
+				{ id: "record", kind: "ledger", answer: "$research.answer_id", assert: [{ path: "override", equals: "clinical" }, { path: "fork_commit", equals: "$live.commit" }] },
+			],
+		});
+	}
+	const prefsText = input.change.files[UI_PREFERENCES_PATH];
+	if (prefsText !== undefined) {
+		const parsed = parseUiPreferences(prefsText);
+		if (parsed.ok && parsed.present) {
+			const assert: Record<string, unknown>[] = [{ path: "valid", equals: true }];
+			for (const key of ["font", "density", "accent"] as const) if (parsed.preferences[key] !== undefined) assert.push({ path: `parsed.${key}`, equals: parsed.preferences[key] });
+			for (const tab of parsed.preferences.tabs ?? []) assert.push({ path: "parsed.tabs", some: { path: "title", equals: tab.title } });
+			add("ui-preferences-live", "The live fork keeps the requested look and still answers with the card contract", `Checks ${input.intentId} on the live fork: ${UI_PREFERENCES_PATH} on main is valid and keeps the requested preferences, and answers still carry the override control (the browser tier also checks that the preferences render).`, {
+				description: `${UI_PREFERENCES_PATH} on the live main keeps the requested preferences; answers keep the card contract (verifies ${input.intentId}).`,
+				steps: [
+					{ id: "prefs", kind: "config", file: UI_PREFERENCES_PATH, assert },
+					{ id: "ask", kind: "ask", request: { question: "Is Morphinex on formulary?", context: { documentType: "budget" } }, assert: [{ path: "override_available", equals: true }, { path: "ledger.fork_commit", equals: "$live.commit" }] },
+				],
+			});
+		}
+	}
+	if (input.change.recipe === "tau" && typeof input.tau === "number" && input.tau >= 0.85) {
+		add("tau-recorded", `Answers and ledger records use tau ${input.tau}`, `Checks ${input.intentId} on the live fork: answers report the new threshold and their ledger records carry it.`, {
+			description: `The live fork answers at tau ${input.tau} and records it in the ledger (verifies ${input.intentId}).`,
+			steps: [
+				{ id: "ask", kind: "ask", request: { question: "Is Morphinex on formulary?", context: { documentType: "budget" } }, assert: [{ path: "tau", equals: input.tau }] },
+				{ id: "record", kind: "ledger", answer: "$ask.answer_id", assert: [{ path: "tau", equals: input.tau }] },
+				{ id: "bedside", kind: "ask", request: { question: "What is the right dose of Morphinex for a patient of 70 kg and 45 years?", context: CHART }, assert: [{ path: "mode", equals: "clinical" }, { path: "computed_dose", equals: null }] },
+			],
+		});
+	}
+	if (input.change.recipe === "model") {
+		const mode = input.change.modes_affected.find((m) => MODES.includes(m)) ?? "administrative";
+		const question = mode === "research" ? "What is the right dose of Morphinex for a patient of 70 kg and 45 years?" : mode === "clinical" ? "What does the policy say about Morphinex?" : "Is Morphinex on formulary?";
+		add("override-flow", `An override on a ${mode} answer still reaches the ledger`, `A flow check for ${input.intentId} on the live fork: answer in ${mode} mode, override it, and read the ledger record back.`, {
+			description: `A ${mode} answer can be overridden and the override reaches the ledger (verifies ${input.intentId}).`,
+			steps: [
+				{ id: "ask", kind: "ask", request: { question, context: {}, explicitMode: mode }, assert: [{ path: "mode", equals: mode }, { path: "override_available", equals: true }] },
+				{ id: "override", kind: "override", answer: "$ask.answer_id", mode: mode === "clinical" ? "administrative" : "clinical", assert: [{ path: "record.answer_id", equals: "$ask.answer_id" }] },
+				{ id: "record", kind: "ledger", answer: "$ask.answer_id", assert: [{ path: "override", exists: true }, { path: "fork_commit", equals: "$live.commit" }] },
+			],
+		});
+	}
+	return out;
+}
+
+/**
+ * Adds accepted scenarios to the fork's tests/user/e2e.json (creating it if
+ * needed), with the same ownership rule as tier 3: a scenario with the same
+ * id is replaced only when it belongs to the same intent.
+ */
+export function mergeUserE2E(existing: string | null, scenarios: (E2EScenario & { intentId?: string })[]): string {
+	let manifest: { suite: string; description?: string; scenarios: (E2EScenario & { intentId?: string })[] } = {
+		suite: "e2e",
+		description: "This fork's own end-to-end scenarios. They run in the yellow soak after the stock suite; a scenario with \"disabled\": true is skipped and logged.",
+		scenarios: [],
+	};
+	if (existing) {
+		try {
+			const parsed = JSON.parse(existing);
+			if (parsed && Array.isArray(parsed.scenarios)) manifest = { ...manifest, ...parsed, suite: "e2e" };
+		} catch {
+			// An unreadable file is replaced; the old text stays in git history.
+		}
+	}
+	for (const scenario of scenarios) {
+		const current = manifest.scenarios.find((s) => s.id === scenario.id);
+		if (current && current.intentId !== scenario.intentId) throw new Error(`end-to-end scenario ${scenario.id} belongs to ${current.intentId ?? "the user"}; refusing to overwrite it`);
+	}
+	const ids = new Set(scenarios.map((s) => s.id));
+	manifest.scenarios = [...manifest.scenarios.filter((s) => !ids.has(s.id)), ...scenarios];
+	return `${JSON.stringify(manifest, null, 2)}\n`;
 }
 
 /** Which invariant areas a change touches. */

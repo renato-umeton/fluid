@@ -20,7 +20,7 @@ import { AGENT_MODEL, callModel } from "../runtime/llm.ts";
 import { pinnedTagOf } from "../stock/releases.ts";
 import { quotaStub } from "../stubs.ts";
 import { logTiers, persistGate, repairRunId } from "./gate.ts";
-import { appExports, ensureRun, errorText, GATE_STEP, GIT_STEP, repoRemote, runLog, setFleet, startInstance, startOrRetryInstance, guarded, steps, type ReleaseParams, type UpgradeParams } from "./common.ts";
+import { appExports, ensureRun, errorText, GATE_STEP, GIT_STEP, repoRemote, runLog, setFleet, startInstance, startOrRetryInstance, startYellowRun, guarded, steps, type ReleaseParams, type UpgradeParams } from "./common.ts";
 
 /** Upgrades created per batch, and the pause between batches. */
 export const FAN_OUT = { batchSize: 20, pause: "1 second" };
@@ -199,8 +199,11 @@ export class UpgradeWorkflow extends WorkflowEntrypoint<Env, UpgradeParams> {
 				commit = applied.regate;
 				continue;
 			}
+			const yellowRunId = applied.landed
+				? await step.do(`go yellow${suffix}`, async () => (await startYellowRun(this.env, exports, { repo: p.repo, commit: at, previous: applied.previous ?? null, source: "upgrade", parentRunId: p.runId })).runId)
+				: null;
 			await step.do(`finish pass${suffix}`, async () => {
-				await log.status("passed", { applied: applied.applied, commit: at });
+				await log.status("passed", { applied: applied.applied, commit: at, yellowRunId });
 				await setFleet(this.env, p.repo, {
 					status: "passed",
 					...(applied.applied ? { pinnedTag: p.tag, pendingUpgrade: null } : { pendingUpgrade: { tag: p.tag, commit: at, runId: p.runId } }),
@@ -235,17 +238,18 @@ export class UpgradeWorkflow extends WorkflowEntrypoint<Env, UpgradeParams> {
 	}
 
 	/** Fast-forwards main to the gated upgrade commit, or merges a moved main into the upgrade branch for another gate. */
-	private async advanceMain(repo: string, branch: string, commit: string, tag: string, runId: string): Promise<{ applied: boolean; regate: string | null }> {
+	private async advanceMain(repo: string, branch: string, commit: string, tag: string, runId: string): Promise<{ applied: boolean; regate: string | null; previous?: string | null; landed?: boolean }> {
 		const log = runLog(this.env, runId);
 		await log.step("Merge to main", "running");
 		const remote = await repoRemote(this.env, repo, "write");
 		const ws = await cloneRepo({ ...remote, ref: "main", singleBranch: true });
 		await fetchBranch(ws, remote, branch);
+		const previous = await headCommit(ws, "main");
 		const ff = await fastForward(ws, "main", commit);
 		if (ff.outcome !== "diverged") {
 			if (ff.outcome === "fast-forward") await pushBranch(ws, remote, "main");
 			await log.step("Merge to main", "done", `main fast-forwarded to ${commit.slice(0, 7)} on ${tag}`);
-			return { applied: true, regate: null };
+			return { applied: true, regate: null, previous, landed: ff.outcome === "fast-forward" };
 		}
 		await checkoutBranch(ws, branch);
 		const outcome = await mergeInto(ws, { ours: branch, theirs: "main", message: `Merge main into ${branch}\n\nmain moved to ${ff.oid.slice(0, 7)} during the upgrade to ${tag}; the merge is gated before main moves.` });

@@ -15,6 +15,8 @@ export default defineConfig({
 			ARTIFACTS: bindings.artifacts({ namespace: "fluid", dev: { remote: true } }),
 			AI: bindings.ai({ dev: { remote: true } }),
 			LOADER: bindings.workerLoader(),
+			// Browser Rendering for the yellow soak's browser checks (a remote browser; local dev cannot reach localhost).
+			BROWSER: bindings.browser({ dev: { remote: true } }),
 			USER_LEDGER: bindings.durableObject({ worker: "fluid", exportName: "UserLedger" }),
 			FLEET: bindings.durableObject({ worker: "fluid", exportName: "Fleet" }),
 			RUNS: bindings.durableObject({ worker: "fluid", exportName: "Runs" }),
@@ -35,6 +37,7 @@ export default defineConfig({
 			SeedFleetWorkflow: exports.workflow({ name: "fluid-seed-fleet" }),
 			SeedForkWorkflow: exports.workflow({ name: "fluid-seed-fork" }),
 			HarvestWorkflow: exports.workflow({ name: "fluid-harvest" }),
+			YellowWorkflow: exports.workflow({ name: "fluid-yellow" }),
 		},
 		// Artifacts repo.pushed events (account-level subscription, see scripts/setup-events.mjs).
 		// Messages that still fail after maxRetries go to fluid-events-dlq instead of being dropped.

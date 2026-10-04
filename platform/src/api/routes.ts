@@ -10,6 +10,8 @@ import type { PlatformExports } from "../runtime/loader.ts";
 import { bundledStockRelease, compareSemverDesc, listStockTags, publishStockRelease, readReleaseMetadata, readStockFiles, stockTagCommit, unrecordedStockTags } from "../stock/publish.ts";
 import type { ReleaseMetadata } from "../stock/releases.ts";
 import { runGate } from "../gate/run.ts";
+import { runE2E } from "../yellow/run.ts";
+import { isAdminTestRequest } from "../agents/test-recipe.ts";
 import type { GateResult } from "../gate/tiers.ts";
 import type { RunTimeRecord } from "../durable/user-ledger.ts";
 import type { RunSummary } from "../durable/fleet.ts";
@@ -19,14 +21,14 @@ import { validateProbe, type Suggestion } from "../agents/suggester.ts";
 import { newRunId } from "../durable/runs.ts";
 import { gateInstanceId, gateModeFor } from "../events/filter.ts";
 import { isSeededRepo, SEED_DEFAULT, SEED_MAX } from "../fleet/seed-catalog.ts";
-import { cloneRepo, fastForward, fetchBranch, pushBranch } from "../git/ops.ts";
+import { cloneRepo, fastForward, fetchBranch, headCommit, pushBranch } from "../git/ops.ts";
 import type { Json } from "../lib/json.ts";
 import { shortRef } from "../runtime/refs.ts";
 import { headOf, openRepo, readTextFile } from "../runtime/repo-files.ts";
 import { parseUiPreferences, UI_PREFERENCES_PATH } from "../ui/preferences.ts";
 import { aggregateCharts, CHART_LIMITS } from "../ui/charts.ts";
 import { DEMO_OVERLAY, demoReleaseFiles } from "../stock/releases.ts";
-import { appExports, ensureRun, repoRemote, startGateInstance } from "../workflows/common.ts";
+import { appExports, ensureRun, repoRemote, startGateInstance, startYellowRun } from "../workflows/common.ts";
 import { upgradeTargets } from "../workflows/upgrade.ts";
 import { decodeParam, HttpError, json, readJson, requireJsonPost, requireString } from "./http.ts";
 import { askRef, parsePreferences } from "./validate.ts";
@@ -218,7 +220,7 @@ route("GET", "/api/me", async (rc) => {
 	const known = session.e2e ? [await fleetStub(rc.env).get(session.e2e.repo)].filter((f) => f !== null) : await fleetStub(rc.env).forksOfUser(session.userId);
 	if (known.length > 0) await takeReadQuota(rc);
 	const fork = known.length > 0 ? await forkInfoOrNull(rc.env, known[0]!.repo) : null;
-	return json({ userId: session.userId, persona: session.persona, fork });
+	return json({ userId: session.userId, persona: session.persona, fork: fork ? { ...fork, health: known[0]!.health } : null, ...(session.e2e ? { test: { runId: session.e2e.runId } } : {}) });
 });
 
 route("POST", "/api/forks", async (rc) => {
@@ -245,7 +247,17 @@ route("GET", "/api/forks/:repo", async (rc, { repo }) => {
 	await requirePublicRepo(rc.env, name);
 	const info = await forkInfoOrNull(rc.env, name);
 	if (!info) throw new HttpError(404, "fork not found");
-	return json(info);
+	const health = name === STOCK_REPO ? null : ((await fleetStub(rc.env).get(name))?.health ?? null);
+	return json({ ...info, ...(health ? { health } : {}) });
+});
+
+// Yellow to green state of a fork's main and its history (newest first).
+route("GET", "/api/forks/:repo/health", async (rc, { repo }) => {
+	const name = repoParam(repo!);
+	const fleet = fleetStub(rc.env);
+	const entry = await fleet.get(name);
+	if (!entry) throw new HttpError(404, "fork not found");
+	return json({ repo: name, health: entry.health, history: await fleet.healthHistory(name, 30) });
 });
 
 // Fork-owned UI preferences (ui/preferences.json on main), validated against the platform schema.
@@ -373,6 +385,36 @@ route("POST", "/api/admin/forks/:repo/delete", async (rc, { repo }) => {
 	return json({ repo: name, deleted, removedFromFleet: removed });
 });
 
+// One run of the end-to-end tiers against a fork commit, with no state change (a dry run of a yellow soak pass).
+route("POST", "/api/admin/e2e", async (rc) => {
+	requireAdmin(rc);
+	const body = await readJson(rc.request);
+	const repo = repoParam(requireString(body, "repo", 100));
+	let commit: string | null;
+	{
+		using handle = await openRepo(rc.env.ARTIFACTS, repo);
+		commit = await headOf(handle, shortRef(typeof body.ref === "string" ? body.ref : "main"));
+	}
+	if (!commit) throw new HttpError(404, "ref not found");
+	return json(await runE2E({ env: rc.env, exports: exportsOf(rc.ctx) }, { repo, commit, runId: `run_e2e_dry_${commit.slice(0, 8)}_${Date.now().toString(36)}` }));
+});
+
+// Starts a yellow soak on a fork's current main (re-verifies a fork; with no earlier green commit a failure cannot roll back).
+route("POST", "/api/admin/yellow/:repo", async (rc, { repo }) => {
+	requireAdmin(rc);
+	const name = repoParam(repo!);
+	const entry = await fleetStub(rc.env).get(name);
+	if (!entry) throw new HttpError(404, "fork not found");
+	let head: string | null;
+	{
+		using handle = await openRepo(rc.env.ARTIFACTS, name);
+		head = await headOf(handle, "main");
+	}
+	if (!head) throw new HttpError(404, "fork has no main branch");
+	const started = await startYellowRun(rc.env, appExports(rc.ctx), { repo: name, commit: head, previous: entry.health.lastGreenCommit ?? head, source: "admin" });
+	return json({ repo: name, commit: head, runId: started.runId, created: started.created }, started.created ? 202 : 200);
+});
+
 route("POST", "/api/admin/suite", async (rc) => {
 	requireAdmin(rc);
 	const body = await readJson(rc.request);
@@ -399,12 +441,13 @@ route("POST", "/api/customize", async (rc) => {
 	const repo = repoParam(requireString(body, "repo", 100));
 	const session = await requireForkAccess(rc, repo);
 	const request = requireString(body, "request", 1000);
+	if (isAdminTestRequest(request) && !isAdmin(rc)) throw new HttpError(403, "test recipes are admin-only");
 	const entry = await fleetStub(rc.env).get(repo);
 	if (!entry) throw new HttpError(404, `fork ${repo} is not in the fleet`);
 	await takeQuota(rc.env, `user:${session?.userId ?? "admin"}`, "customize", LIMITS.customizationsPerUserPerHour, 3600);
 	const runId = newRunId("customize");
 	await runsStub(rc.env, runId).create({ id: runId, kind: "customize", repo, status: "running", fields: { request: cleanText(request, 1000) } });
-	await appExports(rc.ctx).CustomizeWorkflow.create({ id: runId, params: { runId, repo, request, userId: session?.userId ?? userIdFromForkRepo(repo) ?? "admin", persona: entry.persona } });
+	await appExports(rc.ctx).CustomizeWorkflow.create({ id: runId, params: { runId, repo, request, userId: session?.userId ?? userIdFromForkRepo(repo) ?? "admin", persona: entry.persona, admin: isAdmin(rc) } });
 	return json({ runId }, 202);
 });
 
@@ -430,6 +473,7 @@ route("POST", "/api/suggestions/:runId/decide", async (rc, { runId }) => {
 		const assert = (body.edited as { assert?: unknown } | undefined)?.assert;
 		const original = ((run.suggestions ?? []) as unknown as Suggestion[]).find((x) => x.id === testId);
 		if (!original) throw new HttpError(404, `no suggestion ${testId}`);
+		if (!original.probe) throw new HttpError(400, "end-to-end scenario suggestions are accepted or rejected; edit tests/user/e2e.json in your fork to change one");
 		if (!Array.isArray(assert) || assert.length > 10) throw new HttpError(400, "edited.assert must be an array of at most 10 assertions");
 		const problem = validateProbe({ ...original.probe, assert: assert as Record<string, unknown>[] });
 		if (problem) throw new HttpError(400, `edited test is invalid: ${problem}`);
@@ -481,13 +525,16 @@ route("POST", "/api/forks/:repo/upgrade", async (rc, { repo }) => {
 	const remote = await repoRemote(rc.env, name, "write");
 	const ws = await cloneRepo({ ...remote, ref: "main", singleBranch: true });
 	await fetchBranch(ws, remote, `upgrade/${pending.tag}`);
+	const previous = await headCommit(ws, "main");
 	const ff = await fastForward(ws, "main", pending.commit);
 	if (ff.outcome === "diverged") throw new HttpError(409, `main moved since upgrade/${pending.tag} was gated at ${pending.commit.slice(0, 7)}; a new upgrade run is needed`);
 	if (ff.outcome === "fast-forward") await pushBranch(ws, remote, "main");
+	// The approved upgrade is live: it soaks in yellow like every other change that lands on main.
+	const yellow = ff.outcome === "fast-forward" ? await startYellowRun(rc.env, appExports(rc.ctx), { repo: name, commit: pending.commit, previous, source: "one-tap", parentRunId: pending.runId }) : null;
 	const lastRun: RunSummary = entry.lastRun?.runId === pending.runId ? { ...entry.lastRun, applied: true, at: new Date().toISOString() } : { runId: pending.runId, kind: "upgrade", tag: pending.tag, status: "passed", applied: true, commit: pending.commit, at: new Date().toISOString() };
 	const updated = await fleet.update(name, { status: "passed", pinnedTag: pending.tag, pendingUpgrade: null, lastRun });
 	forkInfoCache.delete(name);
-	return json({ repo: name, tag: pending.tag, commit: pending.commit, fork: updated });
+	return json({ repo: name, tag: pending.tag, commit: pending.commit, fork: updated, yellowRunId: yellow?.runId ?? null });
 });
 
 // Apply a repair branch: gate repair/<sha> in merge mode; main fast-forwards to it only if it passes.

@@ -46,7 +46,8 @@ export interface TierSummary {
 }
 
 export interface GateFailure {
-	tier: TierName;
+	/** "e2e" and "browser" come from the yellow soak, which hands its failures to the repair agent in this shape. */
+	tier: TierName | "e2e" | "browser";
 	probe: string;
 	description?: string;
 	sample: number;

@@ -8,8 +8,10 @@ import { diffEntries } from "../agents/diff.ts";
 import { checkImports } from "../agents/imports.ts";
 import { uiChange } from "../agents/ui-recipe.ts";
 import { buildIntent, cleanText, intentJson, intentPath, slugify } from "../agents/intent.ts";
+import { breakLedgerCommitChange, matchAdminTestRecipe } from "../agents/test-recipe.ts";
 import { matchRecipe, protocolsFor, redcapChange, replanOnMovedMain, tauChange, type PlannedChange } from "../agents/recipes.ts";
-import { fallbackSuggestion, mergeUserManifest, suggestionsFromModel, suggestTests, SUGGESTION_SCHEMA, USER_MANIFEST, type Probe, type Suggestion } from "../agents/suggester.ts";
+import { fallbackSuggestion, mergeUserE2E, mergeUserManifest, suggestionsFromModel, suggestScenarios, suggestTests, SUGGESTION_SCHEMA, USER_E2E, USER_MANIFEST, type Probe, type Suggestion } from "../agents/suggester.ts";
+import { parseToml } from "../lib/toml.ts";
 import { fnv1a, gateInstanceId } from "../events/filter.ts";
 import synthetic from "../generated/synthetic.json";
 import { checkoutBranch, cloneRepo, commitChanges, fetchBranch, headCommit, listRemoteRefs, parseTrailers, pushBranch, readCommitMessage, readWorkspaceFile, writeFiles } from "../git/ops.ts";
@@ -97,10 +99,12 @@ export class CustomizeWorkflow extends WorkflowEntrypoint<Env, CustomizeParams> 
 		// Plan, check, and load the change. A model-written change gets the exact error back and
 		// up to MAX_REPAIRS more tries; a recipe runs once. Nothing is committed until this passes.
 		const planned = await step.do("plan and validate the change", { retries: { limit: 1, delay: "2 seconds" }, timeout: PLAN_TIMEOUT }, async () => {
-			const recipe = matchRecipe(request);
-			const usesModel = !recipe;
+			// The admin-only test recipe (yellow soak demonstration) applies only to runs started with the admin token.
+			const adminTest = p.admin ? matchAdminTestRecipe(request) : null;
+			const recipe = adminTest ? null : matchRecipe(request);
+			const usesModel = !recipe && !adminTest;
 			let planOpen = true;
-			await log.step("Plan the change", "running", recipe ? `Matched the ${recipe.kind} recipe` : `Planning with ${AGENT_MODEL}`);
+			await log.step("Plan the change", "running", adminTest ? "Matched the admin-only test recipe (breaks ledger provenance on purpose)" : recipe ? `Matched the ${recipe.kind} recipe` : `Planning with ${AGENT_MODEL}`);
 			const result = await planWithRepairs(
 				{
 					plan: async (feedback, attempt) => {
@@ -110,13 +114,14 @@ export class CustomizeWorkflow extends WorkflowEntrypoint<Env, CustomizeParams> 
 						}
 						let change: PlannedChange;
 						try {
-							if (recipe?.kind === "redcap") change = redcapChange({ indexSource: fork.files["app/index.ts"] ?? "", protocols: protocolsFor((synthetic as { personas: unknown }).personas, p.persona) });
+							if (adminTest) change = breakLedgerCommitChange(fork.files["app/index.ts"] ?? "");
+							else if (recipe?.kind === "redcap") change = redcapChange({ indexSource: fork.files["app/index.ts"] ?? "", protocols: protocolsFor((synthetic as { personas: unknown }).personas, p.persona) });
 							else if (recipe?.kind === "tau") change = tauChange(fork.files["fluid.toml"] ?? "", recipe);
 							else if (recipe?.kind === "ui") change = uiChange(fork.files[UI_PREFERENCES_PATH] ?? null, request);
 							else change = await this.modelPlan(request, fork.files, feedback);
 						} catch (error) {
 							// A recipe that cannot apply (already applied, file changed shape) is the request's problem, not the platform's.
-							if (recipe && !(error instanceof CandidateError)) throw new CandidateError(errorText(error));
+							if ((recipe || adminTest) && !(error instanceof CandidateError)) throw new CandidateError(errorText(error));
 							throw error;
 						}
 						planOpen = false;
@@ -168,7 +173,9 @@ export class CustomizeWorkflow extends WorkflowEntrypoint<Env, CustomizeParams> 
 			} catch {
 				invariants = null;
 			}
-			let list: Suggestion[] = suggestTests({ change, intentId: recorded.intentId, invariants, protocols: protocolsFor((synthetic as { personas: unknown }).personas, p.persona), previousToml: fork.files["fluid.toml"] ?? null });
+			const suggestInput = { change, intentId: recorded.intentId, invariants, protocols: protocolsFor((synthetic as { personas: unknown }).personas, p.persona), previousToml: fork.files["fluid.toml"] ?? null };
+			let list: Suggestion[] = suggestTests(suggestInput);
+			const tau = change.files["fluid.toml"] ? tauOf(change.files["fluid.toml"]) : null;
 			if (change.recipe === "model") {
 				try {
 					const out = await callModel(this.env.AI, suggesterPrompt(request, change, recorded.intentId), SUGGESTION_SCHEMA, { model: AGENT_MODEL, maxTokens: 3000 });
@@ -178,6 +185,8 @@ export class CustomizeWorkflow extends WorkflowEntrypoint<Env, CustomizeParams> 
 				}
 				if (!list.some((s) => s.kind === "behavior")) list.unshift(fallbackSuggestion(recorded.intentId, change.modes_affected));
 			}
+			// End-to-end scenarios for tests/user/e2e.json, reviewed like tier 3 and run in the yellow soak.
+			list = [...list, ...suggestScenarios({ ...suggestInput, tau })];
 			await log.status("waiting", { suggestions: list });
 			await log.step("Suggest tier 3 tests", "waiting", `${list.length} proposed from the diff and intent ${recorded.intentId}. Accept, edit, or reject each one to start the gate.`);
 			return list;
@@ -197,7 +206,8 @@ export class CustomizeWorkflow extends WorkflowEntrypoint<Env, CustomizeParams> 
 		const pushed = await step.do("commit and push", GIT_STEP, async () => {
 			const run = await runsStub(this.env, p.runId).get();
 			const decided = ((run?.suggestions ?? []) as unknown as (Suggestion & { edited?: { assert?: unknown[] } })[]).filter((s) => s.decision === "accept" || s.decision === "edit");
-			const probes = decided.map((s) => ({ ...s.probe, ...(s.decision === "edit" && Array.isArray(s.edited?.assert) ? { assert: s.edited!.assert as Record<string, unknown>[] } : {}), intentId: recorded.intentId }));
+			const probes = decided.filter((s) => s.probe).map((s) => ({ ...s.probe!, ...(s.decision === "edit" && Array.isArray(s.edited?.assert) ? { assert: s.edited!.assert as Record<string, unknown>[] } : {}), intentId: recorded.intentId }));
+			const scenarios = decided.filter((s) => s.scenario).map((s) => ({ ...s.scenario!, intentId: recorded.intentId }));
 			const rejected = (run?.suggestions?.length ?? 0) - decided.length;
 			await log.status("running");
 			await log.step("Suggest tier 3 tests", "done", `${decided.length} accepted, ${rejected} rejected`);
@@ -226,7 +236,7 @@ export class CustomizeWorkflow extends WorkflowEntrypoint<Env, CustomizeParams> 
 			if (rebased.replanned.length) await log.step("Commit and push to a work branch", "running", `main moved since the plan; reapplied the ${change.recipe} recipe to ${rebased.replanned.join(", ")}`);
 
 			await checkoutBranch(ws, recorded.branch, { create: true, from: "main" });
-			const testsAdded = probes.map((pr) => `${USER_MANIFEST}#${pr.id}`);
+			const testsAdded = [...probes.map((pr) => `${USER_MANIFEST}#${pr.id}`), ...scenarios.map((sc) => `${USER_E2E}#${sc.id}`)];
 			const intent = { ...recorded.intent, tests_added: testsAdded };
 			await writeFiles(ws, { ...rebased.files, [intentPath(recorded.intentId)]: intentJson(intent) });
 			await commitChanges(ws, { message: `${change.summary}\n\nRequested: ${cleanText(request, 200)}`, intentId: recorded.intentId, author: { name: `user:${p.userId}`, email: `${p.userId}@users.fluid.invalid` } });
@@ -237,6 +247,12 @@ export class CustomizeWorkflow extends WorkflowEntrypoint<Env, CustomizeParams> 
 				await writeFiles(ws, { [USER_MANIFEST]: manifest });
 				await commitChanges(ws, { message: `Add tier 3 tests for ${recorded.intentId}\n\nAccepted from the test suggester: ${probes.map((pr) => pr.id).join(", ")}.`, intentId: recorded.intentId, author: { name: `user:${p.userId}`, email: `${p.userId}@users.fluid.invalid` } });
 				diffAdd = [{ path: USER_MANIFEST, status: before === null ? "added" : "modified", additions: probes.length, deletions: 0, summary: `Tier 3 tests: ${probes.map((pr) => pr.id).join(", ")}` }];
+			}
+			if (scenarios.length > 0) {
+				const before = await readWorkspaceFile(ws, USER_E2E);
+				await writeFiles(ws, { [USER_E2E]: mergeUserE2E(before, scenarios) });
+				await commitChanges(ws, { message: `Add end-to-end scenarios for ${recorded.intentId}\n\nAccepted from the test suggester; they run in the yellow soak after this change lands: ${scenarios.map((sc) => sc.id).join(", ")}.`, intentId: recorded.intentId, author: { name: `user:${p.userId}`, email: `${p.userId}@users.fluid.invalid` } });
+				diffAdd.push({ path: USER_E2E, status: before === null ? "added" : "modified", additions: scenarios.length, deletions: 0, summary: `End-to-end scenarios: ${scenarios.map((sc) => sc.id).join(", ")}` });
 			}
 			const commit = await headCommit(ws);
 			// Recorded before the push: the push event may start the gate before this workflow does.
@@ -388,4 +404,13 @@ ${show}`;
 function suggesterPrompt(request: string, change: PlannedChange, intentId: string): string {
 	const diff = Object.entries(change.files).map(([p, c]) => `### ${p}\n${c.slice(0, 4000)}`).join("\n\n");
 	return `Propose up to three tests for this customization of a clinical assistant fork. Each test asks the assistant one question (with a context object such as {"documentType":"manuscript"} or {}) and asserts on the JSON answer card: paths like "mode", "body", "sources", "computed_dose"; ops equals, notEquals, contains, notContains, exists, gte, lte, length_gte. Use focusMode ("clinical", "research", "administrative") to assert on the card in that mode. The tests verify intent ${intentId}: "${change.purpose}".\n\nUser request: ${request}\n\n${diff}`;
+}
+
+function tauOf(fluidToml: string): number | null {
+	try {
+		const tau = (parseToml(fluidToml).thresholds as Record<string, unknown> | undefined)?.tau;
+		return typeof tau === "number" ? tau : null;
+	} catch {
+		return null;
+	}
 }

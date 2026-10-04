@@ -16,7 +16,7 @@ export interface PlannedChange {
 	files: Record<string, string>;
 	/** Short note per file for the diff view. */
 	notes: Record<string, string>;
-	recipe: Recipe["kind"] | "model";
+	recipe: Recipe["kind"] | "model" | "admin-test";
 	/** For requests mapped onto a fixed vocabulary (UI preferences): what each part of the request became. */
 	mapped?: string[];
 }

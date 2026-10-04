@@ -80,3 +80,25 @@ describe("test sessions", () => {
 		expect(await verifySession(await signSession(forged, SECRET), SECRET, now)).toBeNull();
 	});
 });
+
+describe("yellow failure hand-off", async () => {
+	const { failureOf, repairGate, yellowRepairRunId } = await import("../src/workflows/yellow.ts");
+	const result = {
+		failures: [{ tier: "stock", scenario: "e2e-ledger-provenance", step: "ask", description: "provenance", path: "ledger.fork_commit", op: "equals", expected: "abc", actual: "build-cache" }],
+	};
+
+	it("names the failing scenario and step for the fleet state", () => {
+		expect(failureOf(result, null)).toEqual({ tier: "stock", scenario: "e2e-ledger-provenance", step: "ask", detail: 'ledger.fork_commit equals: expected "abc", got "build-cache"' });
+	});
+
+	it("falls back to the failing browser check", () => {
+		const browser = { status: "failed" as const, detail: "failing: No console errors", checks: [{ name: "No console errors", passed: false, detail: "1 error(s): boom" }], consoleErrors: ["boom"], durationMs: 1 };
+		expect(failureOf({ failures: [] }, browser)).toEqual({ tier: "browser", scenario: "No console errors", step: null, detail: "1 error(s): boom" });
+	});
+
+	it("hands the repair agent its failures in the gate result shape", () => {
+		const gate = repairGate({ repo: "user-u", commit: "y".repeat(40), stockTag: "v1.10.0", result: result as never, browser: null, runId: "run_yel" });
+		expect(gate).toMatchObject({ ref: "main", passed: false, runId: "run_yel", failures: [{ tier: "e2e", probe: "e2e-ledger-provenance", description: "stock end-to-end scenario, step ask: provenance", path: "ledger.fork_commit", op: "equals" }] });
+		expect(yellowRepairRunId("user-u", "y".repeat(40))).toMatch(/^run_repair_y_yyyyyyyyyyyy_/);
+	});
+});

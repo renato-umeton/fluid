@@ -67,7 +67,11 @@ export class RepairWorkflow extends WorkflowEntrypoint<Env, RepairParams> {
 
 		const plan = await step.do("plan the repair", async () => {
 			await log.step("Diagnose and propose a fix", "running");
-			const base = planRepair({ gate: context.gate, intents: context.intents, fluidToml: context.fluidToml, stockMinTau: STOCK_MIN_TAU, stockVersions: context.stockVersions });
+			const planned = planRepair({ gate: context.gate, intents: context.intents, fluidToml: context.fluidToml, stockMinTau: STOCK_MIN_TAU, stockVersions: context.stockVersions });
+			// A yellow rollback already returned main to the last green commit: the repair explains the failure and links the change's intent records.
+			const base = p.reason === "yellow"
+				? { ...planned, intentRefs: [...new Set([...(p.intentIds ?? []), ...planned.intentRefs])], explanation: `${short} passed the gate and went live in yellow, then the end-to-end suite failed against the live fork, so main was rolled back to the last green commit. ${planned.explanation}` }
+				: planned;
 			let modelNote: string | null = null;
 			if (base.rule === "none") {
 				try {

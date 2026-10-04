@@ -41,6 +41,8 @@ export interface CustomizeParams {
 	request: string;
 	userId: string;
 	persona: string | null;
+	/** Started with the admin token: admin-only test recipes may apply. */
+	admin?: boolean;
 }
 
 export interface RepairParams {
@@ -48,7 +50,9 @@ export interface RepairParams {
 	repo: string;
 	branch: string;
 	commit: string;
-	reason: "customize" | "upgrade" | "gate";
+	reason: "customize" | "upgrade" | "gate" | "yellow";
+	/** Build-time intent records of the change a yellow rollback undid (the repair relies on them). */
+	intentIds?: string[];
 	gateRunId: string;
 	tag?: string;
 	safety?: boolean;
@@ -88,6 +92,20 @@ export interface SeedForkParams {
 	stockTag?: string;
 }
 
+export type YellowSource = "customize" | "gate" | "repair-apply" | "upgrade" | "one-tap" | "admin";
+
+export interface YellowParams {
+	runId: string;
+	repo: string;
+	/** The commit that landed on main. */
+	commit: string;
+	/** main before the change (the last green commit of a fork with no history). */
+	previous: string | null;
+	source: YellowSource;
+	/** The run that landed the change (customize, gate, upgrade); it shows the yellow phase. */
+	parentRunId?: string;
+}
+
 export interface HarvestParams {
 	runId: string;
 }
@@ -101,6 +119,7 @@ export interface AppExports extends PlatformExports {
 	SeedFleetWorkflow: WorkflowBinding<SeedFleetParams>;
 	SeedForkWorkflow: WorkflowBinding<SeedForkParams>;
 	HarvestWorkflow: WorkflowBinding<HarvestParams>;
+	YellowWorkflow: WorkflowBinding<YellowParams>;
 }
 
 export function appExports(ctx: unknown): AppExports {
@@ -185,6 +204,30 @@ export async function notifyParent(env: Env, exports: AppExports, parentRunId: s
 	} catch (error) {
 		console.warn(`notify ${parentRunId} (${type}) failed: ${errorText(error)}`);
 	}
+}
+
+/** One yellow run per (repo, commit). */
+export function yellowInstanceId(repo: string, commit: string): string {
+	return `yel-${fnv1a(repo)}-${commit.slice(0, 12)}`;
+}
+
+/**
+ * A gated change landed on main: mark the fork yellow at once (so the badge
+ * shows before the workflow starts), create the run record, start the yellow
+ * workflow, and show the yellow phase on the run that landed the change.
+ */
+export async function startYellowRun(env: Env, exports: AppExports, input: { repo: string; commit: string; previous: string | null; source: YellowSource; parentRunId?: string | null }): Promise<{ runId: string; created: boolean }> {
+	const id = yellowInstanceId(input.repo, input.commit);
+	const runId = `run_${id}`;
+	await fleetStub(env).yellowStart(input.repo, { commit: input.commit, runId, previous: input.previous, source: input.source });
+	await ensureRun(env, { id: runId, kind: "yellow", repo: input.repo, fields: { commit: input.commit, previous: input.previous, source: input.source, parentRunId: input.parentRunId ?? null, pass: 0, of: 3, health: "yellow" } });
+	const started = await startInstance(exports.YellowWorkflow, id, { runId, repo: input.repo, commit: input.commit, previous: input.previous, source: input.source, ...(input.parentRunId ? { parentRunId: input.parentRunId } : {}) });
+	if (input.parentRunId) {
+		const parent = runLog(env, input.parentRunId);
+		await parent.update({ yellowRunId: runId, yellow: { runId, health: "yellow", commit: input.commit, pass: 0, of: 3 } }).catch(() => undefined);
+		await parent.step("Yellow: live on main, end-to-end soak", "running", `${input.commit.slice(0, 7)} is live with a yellow badge; the end-to-end suite runs 3 times (${runId})`).catch(() => undefined);
+	}
+	return { runId, created: started.created };
 }
 
 export function asJson<T>(value: T): Json {

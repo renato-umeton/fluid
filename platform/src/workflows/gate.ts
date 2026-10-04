@@ -11,7 +11,7 @@ import { checkoutBranch, cloneRepo, fastForward, fetchBranch, headCommit, mergeI
 import { runGate } from "../gate/run.ts";
 import { gateBrief, type GateResult } from "../gate/tiers.ts";
 import { fleetStub } from "../stubs.ts";
-import { appExports, asJson, ensureRun, GATE_STEP, gateLinkOf, GIT_STEP, guarded, linkGateParent, notifyParent, repoRemote, runLog, setFleet, startGateInstance, startInstance, steps, type GateParams } from "./common.ts";
+import { appExports, asJson, ensureRun, GATE_STEP, gateLinkOf, GIT_STEP, guarded, linkGateParent, notifyParent, repoRemote, runLog, setFleet, startGateInstance, startInstance, startYellowRun, steps, type GateParams } from "./common.ts";
 
 export function gateRunId(instanceId: string): string {
 	return `run_${instanceId}`;
@@ -102,8 +102,16 @@ export class GateWorkflow extends WorkflowEntrypoint<Env, GateParams> {
 				});
 				return { ...gateBrief(gate), merged: false, regateRunId: next };
 			}
+			const yellowRunId = merged.landed
+				? await step.do("go yellow", async () => {
+						const source = origin.source === "customize" ? "customize" : origin.source === "repair-apply" ? "repair-apply" : "gate";
+						const started = await startYellowRun(this.env, exports, { repo: p.repo, commit: p.commit, previous: merged.previous ?? null, source, parentRunId: origin.parentRunId ?? runId });
+						await log.step("Yellow: live on main, end-to-end soak", "info", `${p.commit.slice(0, 7)} is live with a yellow badge; ${started.runId} runs the end-to-end suite 3 times before the fork turns green`);
+						return started.runId;
+					})
+				: null;
 			await step.do("finish pass", async () => {
-				await log.status(merged.ok ? "passed" : "failed", { mergedCommit: merged.oid });
+				await log.status(merged.ok ? "passed" : "failed", { mergedCommit: merged.oid, yellowRunId });
 				const pin = merged.ok && gate.stockTag ? { pinnedTag: gate.stockTag } : {};
 				await setFleet(this.env, p.repo, { status: "pinned", ...pin, ...(merged.ok ? { pendingUpgrade: null } : {}), lastRun: { runId, kind: "gate", branch: p.branch, status: merged.ok ? "passed" : "failed", merged: merged.ok, ...gateBrief(gate) } });
 				if (origin.parentRunId) await notifyParent(this.env, exports, origin.parentRunId, "gate-finished", { gateRunId: runId, passed: true, merged: merged.ok, mergedCommit: merged.oid });
@@ -150,17 +158,18 @@ export class GateWorkflow extends WorkflowEntrypoint<Env, GateParams> {
 	 * commit is pushed to the branch (never to main), and that commit is gated
 	 * on its own at the pin its fluid.toml names.
 	 */
-	private async advanceMain(p: GateParams, runId: string, parentRunId: string | null, source: GateParams["source"]): Promise<{ ok: boolean; oid: string | null; regate: string | null }> {
+	private async advanceMain(p: GateParams, runId: string, parentRunId: string | null, source: GateParams["source"]): Promise<{ ok: boolean; oid: string | null; regate: string | null; previous?: string | null; landed?: boolean }> {
 		const log = runLog(this.env, runId);
 		await log.step("Merge to main", "running", `Fast-forward main to ${p.branch} at ${p.commit.slice(0, 7)}`);
 		const remote = await repoRemote(this.env, p.repo, "write");
 		const ws = await cloneRepo({ ...remote, ref: "main", singleBranch: true });
 		await fetchBranch(ws, remote, p.branch);
+		const previous = await headCommit(ws, "main");
 		const ff = await fastForward(ws, "main", p.commit);
 		if (ff.outcome === "fast-forward") {
 			await pushBranch(ws, remote, "main");
 			await log.step("Merge to main", "done", `main fast-forwarded to ${p.commit.slice(0, 7)}`);
-			return { ok: true, oid: p.commit, regate: null };
+			return { ok: true, oid: p.commit, regate: null, previous, landed: true };
 		}
 		if (ff.outcome === "already") {
 			await log.step("Merge to main", "done", `main already contains ${p.commit.slice(0, 7)}`);
