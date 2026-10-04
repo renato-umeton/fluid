@@ -3,8 +3,10 @@
 // to the model. Each recipe returns full file contents plus the intent
 // fields that explain the change.
 import { parseToml, setTomlValue } from "../lib/toml.ts";
+import { UI_PREFERENCES_PATH } from "../ui/preferences.ts";
+import { parseUiRequest, uiChange } from "./ui-recipe.ts";
 
-export type Recipe = { kind: "redcap" } | { kind: "tau"; value: number; direction: "lower" | "raise" | "set" };
+export type Recipe = { kind: "redcap" } | { kind: "tau"; value: number; direction: "lower" | "raise" | "set" } | { kind: "ui" };
 
 export interface PlannedChange {
 	summary: string;
@@ -15,6 +17,8 @@ export interface PlannedChange {
 	/** Short note per file for the diff view. */
 	notes: Record<string, string>;
 	recipe: Recipe["kind"] | "model";
+	/** For requests mapped onto a fixed vocabulary (UI preferences): what each part of the request became. */
+	mapped?: string[];
 }
 
 const TAU_WORDS = /\b(tau|τ|threshold|confidence)\b|τ/i;
@@ -29,6 +33,8 @@ export function matchRecipe(request: string): Recipe | null {
 		if (direction === "raise") return { kind: "tau", value: Number.NaN, direction };
 		if (direction === "lower") return { kind: "tau", value: Number.NaN, direction };
 	}
+	// Look and layout (fonts, density, accent colors, tabs with charts) is a declarative UI preference.
+	if (parseUiRequest(request)) return { kind: "ui" };
 	return null;
 }
 
@@ -213,6 +219,9 @@ export function replanOnMovedMain(input: {
 	}
 	if (input.change.recipe === "tau" && recipe?.kind === "tau") {
 		return { files: tauChange(input.current["fluid.toml"] ?? "", recipe).files, replanned: moved };
+	}
+	if (input.change.recipe === "ui" && recipe?.kind === "ui") {
+		return { files: uiChange(input.current[UI_PREFERENCES_PATH] ?? null, input.request).files, replanned: moved };
 	}
 	return { error: `main changed ${moved.join(", ")} after the change was planned; run the request again on the new main` };
 }

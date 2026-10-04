@@ -11,6 +11,8 @@ import { pinnedTagOf } from "../stock/releases.ts";
 import { loadStockSuite } from "../stock/suite.ts";
 import { fleetStub } from "../stubs.ts";
 import { checkPin, isForkCaused } from "./pins.ts";
+import { mergeUserResults, runUiConfigProbes, splitUserManifest, uiInvariant } from "./ui-check.ts";
+import { UI_PREFERENCES_PATH } from "../ui/preferences.ts";
 import {
 	capFailures,
 	emptyUserTier,
@@ -84,13 +86,15 @@ export async function runGate(deps: RuntimeDeps, input: GateInput): Promise<Gate
 
 	let fluidToml: string | null;
 	let userText: string | null;
+	let uiText: string | null;
 	let mainToml: string | null = null;
 	try {
 		using repo = await openRepo(deps.env.ARTIFACTS, input.repo);
 		commit = await resolveCommit(repo, input.commit ?? ref);
-		[fluidToml, userText, mainToml] = await Promise.all([
+		[fluidToml, userText, uiText, mainToml] = await Promise.all([
 			readTextFile(repo, commit, "fluid.toml"),
 			readTextFile(repo, commit, USER_MANIFEST_PATH),
+			readTextFile(repo, commit, UI_PREFERENCES_PATH),
 			input.mode === "merge" ? readMainToml(repo) : Promise.resolve(null),
 		]);
 	} catch (error) {
@@ -135,17 +139,19 @@ export async function runGate(deps: RuntimeDeps, input: GateInput): Promise<Gate
 		runner.run(manifest, { forkFiles, ...(input.samples ? { samples: input.samples } : {}), ...(tier ? { tier } : {}) }, ask) as Promise<RunnerManifestResult>;
 
 	const user = prepareUserManifest(userText);
+	// Config probes on ui/preferences.json are run by the platform (stock's runner reads config files as TOML).
+	const split = splitUserManifest(user.manifest);
 	// The stock suites and a validated tier 3 manifest only reject for infrastructure reasons: allSettled lets
 	// every tier finish, then a rejection is thrown for the step to retry.
 	const [invariant, functional, userResult] = await Promise.allSettled([
 		run(suite.manifests.invariant),
 		run(suite.manifests.functional),
-		user.manifest ? run(user.manifest, "user") : Promise.resolve(null),
+		split.runner ? run(split.runner, "user") : Promise.resolve(null),
 	]);
 	for (const settled of [invariant, functional, userResult]) if (settled.status === "rejected") throw settled.reason;
 	record("invariant", summarizeTier("invariant", (invariant as PromiseFulfilledResult<RunnerManifestResult>).value));
 	record("functional", summarizeTier("functional", (functional as PromiseFulfilledResult<RunnerManifestResult>).value));
-	const userValue = (userResult as PromiseFulfilledResult<RunnerManifestResult | null>).value;
+	const userValue = mergeUserResults((userResult as PromiseFulfilledResult<RunnerManifestResult | null>).value, runUiConfigProbes(split.platform, uiText, user.manifest?.samples));
 	if (user.error) {
 		record("user", erroredTier("user", "user-manifest-valid", "read", "a valid tests/user/manifest.json", user.error, USER_MANIFEST_PATH));
 	} else if (userValue === null) {
@@ -154,6 +160,7 @@ export async function runGate(deps: RuntimeDeps, input: GateInput): Promise<Gate
 		record("user", summarizeTier("user", userValue, { file: USER_MANIFEST_PATH, disabled: user.disabled }));
 		if (user.dropped) tiers.user!.note = `${user.dropped} probe(s) past the limit of ${USER_LIMITS.maxProbes} were not run`;
 	}
+	addUiInvariant(tiers, failures, uiInvariant(uiText));
 	if (pin && !pin.ok) addPinFailure(tiers, failures, pin.reason, pinned, pin.floor);
 	return finish(pinned, suite.sha);
 }
@@ -165,6 +172,16 @@ function addPinFailure(tiers: Record<TierName, TierSummary | null>, failures: Ga
 	const t = tiers.invariant;
 	const probe = { id: "pin-monotonic", passed: false, samples: 1, passedSamples: 0 };
 	tiers.invariant = t ? { ...t, passed: false, total: t.total + 1, failed: t.failed + 1, probes: [probe, ...t.probes] } : { tier: "invariant", passed: false, total: 1, failed: 1, probes: [probe] };
+}
+
+/** Platform invariant ui-preferences-valid joins tier 1 when the fork has ui/preferences.json. */
+function addUiInvariant(tiers: Record<TierName, TierSummary | null>, failures: GateFailure[], check: ReturnType<typeof uiInvariant>): void {
+	if (!check) return;
+	const t = tiers.invariant;
+	if (check.failure) failures.unshift(check.failure);
+	tiers.invariant = t
+		? { ...t, passed: t.passed && check.probe.passed, total: t.total + 1, failed: t.failed + (check.probe.passed ? 0 : 1), probes: [...t.probes, check.probe] }
+		: { tier: "invariant", passed: check.probe.passed, total: 1, failed: check.probe.passed ? 0 : 1, probes: [check.probe] };
 }
 
 async function readMainToml(repo: ArtifactsRepo): Promise<string | null> {

@@ -46,6 +46,15 @@
 
   --r-sm: 4px;
   --r-md: 8px;
+
+  /* Accent: the ink by default; a fork's ui/preferences.json may pick one from the palette below. */
+  --accent-l: var(--ink);
+  --accent-d: var(--ink);
+  --accent: var(--accent-l);
+  --accent-ink: var(--panel);
+  --link: var(--clinical);
+  --rail-accent: var(--rail-ink);
+  --pad: 16px;
   color-scheme: light;
 }
 
@@ -80,6 +89,7 @@
     --run: #67b3d6;
     --focus: #8fcbe6;
     --shadow: none;
+    --accent: var(--accent-d);
     color-scheme: dark;
   }
 }
@@ -113,6 +123,7 @@
   --run: #67b3d6;
   --focus: #8fcbe6;
   --shadow: none;
+  --accent: var(--accent-d);
   color-scheme: dark;
 }
 
@@ -133,7 +144,7 @@ h2 { font-size: var(--fs-lg); }
 h3 { font-size: var(--fs-md); }
 p { margin: 0; }
 code, .mono { font-family: var(--mono); font-size: 0.86em; }
-a { color: var(--clinical); }
+a { color: var(--link); }
 button, input, select, textarea { font: inherit; color: inherit; }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 3px; }
 .visually-hidden {
@@ -161,7 +172,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
   padding: 8px; border-radius: var(--r-sm); cursor: pointer; display: flex; gap: 10px; align-items: center;
 }
 .persona-btn:hover, .nav-btn:hover { background: var(--rail-hi); }
-.persona-btn[aria-pressed="true"], .nav-btn[aria-current="page"] { background: var(--rail-hi); box-shadow: inset 3px 0 0 var(--rail-ink); }
+.persona-btn[aria-pressed="true"], .nav-btn[aria-current="page"] { background: var(--rail-hi); box-shadow: inset 3px 0 0 var(--rail-accent); }
 .rail :focus-visible { outline-color: var(--rail-ink); }
 .avatar {
   width: 30px; height: 30px; border-radius: 50%; flex: none; display: grid; place-items: center;
@@ -202,9 +213,9 @@ button, input, select, textarea { font: inherit; color: inherit; }
 
 /* ---------- Generic pieces ---------- */
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--shadow); }
-.panel-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 14px 16px 10px; }
+.panel-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: calc(var(--pad) - 2px) var(--pad) calc(var(--pad) - 6px); }
 .panel-head p { color: var(--ink-2); font-size: var(--fs-sm); }
-.panel-body { padding: 0 16px 16px; }
+.panel-body { padding: 0 var(--pad) var(--pad); }
 .muted { color: var(--ink-2); }
 .small { font-size: var(--fs-sm); }
 .xsmall { font-size: var(--fs-xs); }
@@ -219,8 +230,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 }
 .btn:hover { background: var(--panel-2); }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn-primary { background: var(--ink); color: var(--panel); border-color: var(--ink); }
-.btn-primary:hover { background: var(--ink-2); }
+.btn-primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn-primary:hover { opacity: 0.88; }
 .btn-quiet { border-color: transparent; background: transparent; color: var(--clinical); padding: 4px 6px; }
 .btn-quiet:hover { background: var(--panel-2); }
 .btn-danger { color: var(--fail); }
@@ -542,7 +553,7 @@ dialog::backdrop { background: rgba(15, 25, 30, 0.45); }
   .persona-repo { display: none; }
   .nav-list { display: flex; overflow-x: auto; gap: 4px; }
   .nav-btn { white-space: nowrap; }
-  .nav-btn[aria-current="page"] { box-shadow: inset 0 -3px 0 var(--rail-ink); }
+  .nav-btn[aria-current="page"] { box-shadow: inset 0 -3px 0 var(--rail-accent); }
   .rail-foot { flex-direction: row; display: flex; flex-wrap: wrap; align-items: center; }
   .workspace, .fork-grid, .customize, .harvest, .proposals { grid-template-columns: 1fr; }
   .context-panel { position: static; max-height: none; }
@@ -563,4 +574,64 @@ dialog::backdrop { background: rgba(15, 25, 30, 0.45); }
 .safety-note {
   margin: 8px 0; padding: 8px 12px; border-left: 3px solid var(--warn);
   background: var(--warn-bg); color: var(--ink); font-size: var(--fs-sm);
+}
+
+/* ---------- Fork UI preferences (ui/preferences.json, validated by the platform) ---------- */
+/* Web-safe font stacks only; keep in step with FONT_STACKS in platform/src/ui/preferences.ts. */
+:root[data-font="system"] { --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+:root[data-font="palatino"] { --sans: "Palatino Linotype", "Book Antiqua", Palatino, serif; }
+:root[data-font="georgia"] { --sans: Georgia, "Times New Roman", Times, serif; }
+:root[data-font="humanist-sans"] { --sans: Optima, Candara, "Segoe UI", "Noto Sans", "Trebuchet MS", sans-serif; }
+:root[data-font="mono"] { --sans: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; }
+
+:root[data-density="compact"] { --fs-md: 0.875rem; --fs-sm: 0.78rem; --fs-lg: 1.05rem; --pad: 11px; }
+:root[data-density="compact"] .view { padding: 16px 20px 36px; }
+:root[data-density="compact"] .nav-btn, :root[data-density="compact"] .persona-btn { padding-top: 5px; padding-bottom: 5px; }
+
+/* Accent palette: a light-theme and a dark-theme shade per key (the dark blocks above pick --accent-d). */
+:root[data-accent="teal"] { --accent-l: #0f6e6e; --accent-d: #5cc5c0; }
+:root[data-accent="blue"] { --accent-l: #1f5fae; --accent-d: #84b4f0; }
+:root[data-accent="violet"] { --accent-l: #6a3fb0; --accent-d: #bba0f0; }
+:root[data-accent="amber"] { --accent-l: #8a5a00; --accent-d: #e6b450; }
+:root[data-accent="green"] { --accent-l: #2f6f3e; --accent-d: #7cc78f; }
+:root[data-accent="rose"] { --accent-l: #a3324f; --accent-d: #f08fa8; }
+:root[data-accent="slate"] { --accent-l: #3d4f5c; --accent-d: #b3c4ce; }
+:root[data-accent] { --link: var(--accent); --focus: var(--accent); --rail-accent: var(--accent-d); }
+
+.rail-prefs { font-size: var(--fs-xs); color: var(--rail-ink-2); padding: 4px 8px 0; }
+
+/* ---------- Fork tabs and charts (inline SVG, no libraries) ---------- */
+.tab-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; }
+.viz { margin: 0; display: grid; gap: 8px; }
+.viz svg { width: 100%; height: auto; display: block; overflow: visible; }
+.viz figcaption { font-size: var(--fs-sm); color: var(--ink-2); }
+.viz text { font-family: var(--sans); font-size: 11px; fill: var(--ink-2); }
+.viz .viz-value { fill: var(--ink); font-weight: 600; }
+.viz .viz-grid { stroke: var(--line); stroke-width: 1; }
+.viz .viz-axis { stroke: var(--line-strong); stroke-width: 1; }
+.viz .vm-clinical { fill: var(--clinical); }
+.viz .vm-research { fill: var(--research); }
+.viz .vm-administrative { fill: var(--administrative); }
+.viz .vm-multi { fill: var(--multi); }
+.viz .vm-pass { fill: var(--pass); }
+.viz .vm-fail { fill: var(--fail); }
+.viz .vm-track { fill: var(--panel-2); stroke: var(--line); }
+.viz .vm-accent { fill: var(--accent); }
+.viz .vm-line { stroke: var(--line-strong); stroke-width: 2; fill: none; }
+.viz .vm-dot { stroke: var(--panel); stroke-width: 2; }
+.viz rect[data-hit]:hover, .viz circle[data-hit]:hover { opacity: 0.8; }
+.viz-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: var(--fs-xs); color: var(--ink-2); list-style: none; margin: 0; padding: 0; }
+.viz-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+.viz-legend .lg-clinical { background: var(--clinical); }
+.viz-legend .lg-research { background: var(--research); }
+.viz-legend .lg-administrative { background: var(--administrative); }
+.viz-legend .lg-multi { background: var(--multi); }
+.viz-legend .lg-pass { background: var(--pass); }
+.viz-legend .lg-fail { background: var(--fail); }
+.viz-empty { font-size: var(--fs-sm); color: var(--ink-3); padding: 12px 0; }
+.viz details summary { font-size: var(--fs-xs); color: var(--ink-2); cursor: pointer; }
+.viz details table { margin-top: 6px; }
+.viz-stat { font-size: var(--fs-2xl); font-weight: 600; color: var(--ink); line-height: 1.1; }
+@media (forced-colors: active) {
+  .viz rect, .viz circle { forced-color-adjust: none; }
 }

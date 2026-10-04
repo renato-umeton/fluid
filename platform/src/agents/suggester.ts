@@ -5,6 +5,7 @@
 // copies of the nearest stock invariants so the user can see how close the
 // change runs to the floor.
 import type { PlannedChange } from "./recipes.ts";
+import { parseUiPreferences, UI_PREFERENCES_PATH } from "../ui/preferences.ts";
 
 export const USER_MANIFEST = "tests/user/manifest.json";
 const OPS = ["equals", "notEquals", "gte", "lte", "exists", "some", "every", "contains", "notContains", "length_gte", "notMatches"];
@@ -16,6 +17,8 @@ export interface Probe {
 	id: string;
 	description?: string;
 	kind?: "ask" | "config";
+	/** Fork file a config probe reads (fluid.toml when absent; the platform checks ui/preferences.json itself). */
+	file?: string;
 	request?: { question: string; context: Record<string, unknown>; explicitMode?: string; attestation?: boolean };
 	focusMode?: string;
 	samples?: number;
@@ -46,6 +49,7 @@ export interface SuggestInput {
 export function suggestTests(input: SuggestInput): Suggestion[] {
 	const out: Suggestion[] = [];
 	if (input.change.recipe === "redcap") out.push(...redcapSuggestions(input));
+	if (input.change.files[UI_PREFERENCES_PATH] !== undefined) out.push(...uiSuggestions(input));
 	out.push(...nearInvariantSuggestions(input));
 	return dedupe(out);
 }
@@ -91,6 +95,28 @@ function redcapSuggestions(input: SuggestInput): Suggestion[] {
 		},
 	});
 	return out;
+}
+
+/** A config probe on ui/preferences.json asserting the preferences the change writes. */
+function uiSuggestions(input: SuggestInput): Suggestion[] {
+	const parsed = parseUiPreferences(input.change.files[UI_PREFERENCES_PATH] ?? null);
+	if (!parsed.ok || !parsed.present) return [];
+	const p = parsed.preferences;
+	const assert: Record<string, unknown>[] = [];
+	for (const key of ["font", "density", "accent"] as const) if (p[key] !== undefined) assert.push({ path: key, equals: p[key] });
+	for (const tab of p.tabs ?? []) assert.push({ path: "tabs", some: { path: "title", equals: tab.title } });
+	if (assert.length === 0) return [];
+	const id = testId(input.intentId, "ui-preferences");
+	return [{
+		id,
+		title: "UI preferences stay as requested",
+		file: USER_MANIFEST,
+		rationale: `Checks the purpose of ${input.intentId}: ${UI_PREFERENCES_PATH} keeps the requested preferences. The platform validates the file and runs this config probe itself (stock's runner reads only TOML).`,
+		intentId: input.intentId,
+		kind: "behavior",
+		decision: null,
+		probe: { id, description: `${UI_PREFERENCES_PATH} keeps the requested UI preferences (verifies ${input.intentId}).`, kind: "config", file: UI_PREFERENCES_PATH, assert },
+	}];
 }
 
 /** Which invariant areas a change touches. */
