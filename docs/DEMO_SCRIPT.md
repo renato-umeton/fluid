@@ -219,7 +219,7 @@ Point out: the counters moving, the progress bar, and the stream lines arriving 
 > The user reviews the fix. Repairs never merge on their own.
 > Because this is a safety release, there is a grace period. After it ends, this capability runs in stock mode until the repair is merged. The customization stays safe on its branch.
 
-Pick a fork whose explanation reads well on camera during the dry run. The seeded forks that stay pinned carry a compact research customization. It passed at their pinned tag and fails only the invariant the demo release adds, `inv-research-cross-check-visible`.
+Pick a fork whose explanation reads well on camera during the dry run. The seeded forks that stay pinned carry a compact research customization. It passed at their pinned tag (v1.5.0) and fails only `inv-research-cross-check-visible`, the invariant the demo releases added after v1.5.0. Stock v1.10.0 already carries it (the publish keeps the latest release's tightened invariants), so the on-camera release no longer adds it in its own diff and its release intent lists no new tests; the seeds still fail it at the new tag because it is tighter than their pin.
 
 Point out: the **Repair agent:** explanation, the safety release box, **Run steps**, **Proposed fix**, the failing probe under **Gate on the upgrade branch**, and the highlighted intent record it relied on.
 
