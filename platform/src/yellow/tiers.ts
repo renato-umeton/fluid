@@ -124,7 +124,16 @@ export interface E2EStepResult {
 	passed: boolean;
 	latencyMs: number;
 	skipped?: string;
-	failures: { path: string; op: string; expected: unknown; actual: unknown }[];
+	failures: E2EStepFailure[];
+	warnings?: E2EStepFailure[];
+}
+
+export interface E2EStepFailure {
+	path: string;
+	op: string;
+	expected: unknown;
+	actual: unknown;
+	retryable?: boolean;
 }
 
 export interface E2EScenarioResult {
@@ -133,6 +142,7 @@ export interface E2EScenarioResult {
 	passed: boolean;
 	skipped?: string;
 	failedStep?: string;
+	retryable?: boolean;
 	durationMs: number;
 	steps: E2EStepResult[];
 }
@@ -159,6 +169,31 @@ export interface E2EFailure {
 	op: string;
 	expected: unknown;
 	actual: unknown;
+	/** The failure may come from the platform (see failureRetryable); the soak runs the pass again before it rolls back. */
+	retryable?: boolean;
+}
+
+/** Host errors whose message starts with this were caused by the fork (stock tests/e2e/runner.ts FORK_ERROR_PREFIX). */
+export const FORK_ERROR_PREFIX = "fork error: ";
+const HOST_OPS = new Set(["ask", "override", "ledger", "intents", "config"]);
+
+/**
+ * Whether a step failure may come from the platform rather than the fork.
+ * Runners from this release on mark it themselves; for older runners it is
+ * inferred the same way: a host error (unless the fork caused it), a step
+ * timeout, or a latency failure. An assertion on the fork's output never is.
+ */
+export function failureRetryable(f: E2EStepFailure): boolean {
+	if (f.retryable !== undefined) return f.retryable;
+	if (f.op === "timeout" || f.op === "latency") return true;
+	return HOST_OPS.has(f.op) && f.path === "" && f.expected === "no error" && !String(f.actual).startsWith(FORK_ERROR_PREFIX);
+}
+
+/** A failed run whose every failing step failed only for retryable reasons (and no manifest could not run). */
+export function runRetryable(tiers: E2ETierResult[]): boolean {
+	const failing = tiers.flatMap((t) => t.scenarios.filter((s) => !s.passed).map((s) => s.steps.find((st) => st.id === s.failedStep) ?? s.steps.at(-1)));
+	if (tiers.some((t) => t.error) || failing.length === 0) return false;
+	return failing.every((step) => step !== undefined && step.failures.length > 0 && step.failures.every(failureRetryable));
 }
 
 /** The failing scenario steps across tiers, first failure per scenario first. */
@@ -170,7 +205,7 @@ export function e2eFailures(tiers: E2ETierResult[]): E2EFailure[] {
 			if (scenario.passed) continue;
 			const step = scenario.steps.find((s) => s.id === scenario.failedStep) ?? scenario.steps.at(-1);
 			for (const f of (step?.failures ?? []).slice(0, 3)) {
-				out.push({ tier: tier.tier, scenario: scenario.id, step: step?.id ?? null, ...(scenario.description ? { description: scenario.description } : {}), path: f.path, op: f.op, expected: clip(f.expected), actual: clip(f.actual) });
+				out.push({ tier: tier.tier, scenario: scenario.id, step: step?.id ?? null, ...(scenario.description ? { description: scenario.description } : {}), path: f.path, op: f.op, expected: clip(f.expected), actual: clip(f.actual), ...(failureRetryable(f) ? { retryable: true } : {}) });
 			}
 		}
 	}

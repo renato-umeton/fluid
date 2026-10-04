@@ -19,13 +19,15 @@ import { resolveStockTag } from "../stock/suite.ts";
 import { STOCK_REPO } from "../lib/names.ts";
 import { ledgerStub } from "../stubs.ts";
 import { parseUiPreferences, UI_PREFERENCES_PATH } from "../ui/preferences.ts";
-import { e2eFailures, prepareE2ETiers, STOCK_E2E_PATH, stockManifestOf, USER_E2E_PATH, type E2EFailure, type E2ETierResult } from "./tiers.ts";
+import { e2eFailures, FORK_ERROR_PREFIX, prepareE2ETiers, runRetryable, STOCK_E2E_PATH, stockManifestOf, USER_E2E_PATH, type E2EFailure, type E2ETierName, type E2ETierResult } from "./tiers.ts";
 
 export interface E2ERunInput {
 	repo: string;
 	commit: string;
 	runId: string;
 	stepTimeoutMs?: number;
+	/** Set to run in a fresh runner isolate (the retry of a pass that failed for retryable reasons). */
+	fresh?: string;
 }
 
 export interface E2ERunResult {
@@ -38,6 +40,8 @@ export interface E2ERunResult {
 	passed: boolean;
 	tiers: E2ETierResult[];
 	failures: E2EFailure[];
+	/** The run failed only for reasons that may come from the platform (see runRetryable); the soak runs it again before deciding. */
+	retryable: boolean;
 	durationMs: number;
 	testUser: string;
 	error?: string;
@@ -100,12 +104,13 @@ export async function runE2E(deps: RuntimeDeps, input: E2ERunInput): Promise<E2E
 		const failures = e2eFailures(partial.tiers);
 		const passed = !partial.error && partial.tiers.length > 0 && partial.tiers.every((t) => t.passed);
 		if (partial.error) failures.unshift({ tier: "stock", scenario: "e2e-setup", step: null, path: "", op: "read", expected: "the fork pins a published stock tag", actual: partial.error });
-		return { repo: input.repo, commit: input.commit, stockTag, at: new Date().toISOString(), passed, durationMs: Date.now() - started, testUser, ...partial, failures };
+		const retryable = !passed && !partial.error && runRetryable(partial.tiers);
+		return { repo: input.repo, commit: input.commit, stockTag, at: new Date().toISOString(), passed, retryable, durationMs: Date.now() - started, testUser, ...partial, failures };
 	};
 	if (!stockTag) return finish({ tiers: [], runner: "bundled", error: "fluid.toml names no stock_tag" });
 	const stock = await loadStockE2E(deps.env, stockTag);
 	const prepared = prepareE2ETiers({ stock: stockManifestOf(stock.manifestText), userText });
-	const runner = loadE2ERunner(deps.env, stock.key, stock.files);
+	const runner = loadE2ERunner(deps.env, input.fresh ? `${stock.key}:${input.fresh}` : stock.key, stock.files);
 	const call = hostCallback(deps, { repo: input.repo, commit: input.commit, testUser });
 	const live = { commit: input.commit, stockTag };
 	const tiers: E2ETierResult[] = [];
@@ -116,8 +121,7 @@ export async function runE2E(deps: RuntimeDeps, input: E2ERunInput): Promise<E2E
 			tiers.push({ tier, passed: false, total: 0, failed: 1, skipped: 0, scenarios: [], error: problem });
 			continue;
 		}
-		const result = (await runner.run(manifest, { live, tier, ...(input.stepTimeoutMs ? { stepTimeoutMs: input.stepTimeoutMs } : {}) }, call)) as E2ETierResult;
-		tiers.push(result);
+		tiers.push(await runTierSafely(tier, async () => (await runner.run(manifest, { live, tier, ...(input.stepTimeoutMs ? { stepTimeoutMs: input.stepTimeoutMs } : {}) }, call)) as E2ETierResult));
 	}
 	const user = prepared.user;
 	if (user.error) tiers.push({ tier: "user", passed: false, total: 0, failed: 1, skipped: 0, scenarios: [], error: user.error });
@@ -133,37 +137,67 @@ export async function runE2E(deps: RuntimeDeps, input: E2ERunInput): Promise<E2E
 }
 
 /**
+ * Runs one tier. The user tier's scenarios come from the fork, so an
+ * exception while running them (a pattern that stalls the isolate, for
+ * example) fails the user tier. Stock and platform tier exceptions are
+ * infrastructure problems and are thrown for the step to retry.
+ */
+export async function runTierSafely(tier: E2ETierName, run: () => Promise<E2ETierResult>): Promise<E2ETierResult> {
+	if (tier !== "user") return run();
+	try {
+		return await run();
+	} catch (error) {
+		return { tier, passed: false, total: 0, failed: 1, skipped: 0, scenarios: [], error: `the user scenarios could not run: ${error instanceof Error ? error.message : String(error)}`.slice(0, 400) };
+	}
+}
+
+/** Errors the fork caused carry the runner's fork error prefix, so the runner does not mark them retryable. */
+export function hostError(error: unknown): unknown {
+	const name = (error as { name?: unknown } | null)?.name;
+	if (name === "ForkCodeError" || name === "ForkRuntimeError") return new Error(`${FORK_ERROR_PREFIX}${(error as Error).message}`);
+	return error;
+}
+
+/**
  * The host the runner isolate calls back into. Every operation acts on the
  * fork at the yellow commit and on the run's synthetic test user.
  */
 export function hostCallback(deps: RuntimeDeps, scope: { repo: string; commit: string; testUser: string }): (op: string, args: Record<string, unknown>) => Promise<unknown> {
 	return async (op, args) => {
-		switch (op) {
-			case "ask": {
-				const request = args.request as Record<string, unknown>;
-				const card = await serveAsk(deps, { repo: scope.repo, ref: scope.commit, request, useModel: false, userId: scope.testUser, fallback: false });
-				return JSON.parse(JSON.stringify(card));
-			}
-			case "override": {
-				const mode = String(args.mode);
-				if (!MODES.includes(mode)) throw new Error(`override mode must be one of ${MODES.join(", ")}`);
-				return (await ledgerStub(deps.env, scope.testUser).override(String(args.answerId), mode)) ?? null;
-			}
-			case "ledger":
-				return (await ledgerStub(deps.env, scope.testUser).get(String(args.answerId)))?.record ?? null;
-			case "intents":
-				return JSON.parse(JSON.stringify(await readIntents(deps.env, scope.repo, scope.commit)));
-			case "config":
-				return readConfig(deps.env, scope, String(args.file));
-			case "connectors": {
-				using repo = await openRepo(deps.env.ARTIFACTS, scope.repo);
-				const files = await listCommitFiles(repo, scope.commit, { file: (p) => /^connectors\/[^/]+\.ts$/.test(p), dir: (d) => d === "connectors" });
-				return files.map((f) => f.path.slice("connectors/".length, -3)).filter((name) => name !== "types");
-			}
-			default:
-				throw new Error(`unknown host operation ${op}`);
+		try {
+			return await hostOperation(deps, scope, op, args);
+		} catch (error) {
+			throw hostError(error);
 		}
 	};
+}
+
+async function hostOperation(deps: RuntimeDeps, scope: { repo: string; commit: string; testUser: string }, op: string, args: Record<string, unknown>): Promise<unknown> {
+	switch (op) {
+		case "ask": {
+			const request = args.request as Record<string, unknown>;
+			const card = await serveAsk(deps, { repo: scope.repo, ref: scope.commit, request, useModel: false, userId: scope.testUser, fallback: false });
+			return JSON.parse(JSON.stringify(card));
+		}
+		case "override": {
+			const mode = String(args.mode);
+			if (!MODES.includes(mode)) throw new Error(`override mode must be one of ${MODES.join(", ")}`);
+			return (await ledgerStub(deps.env, scope.testUser).override(String(args.answerId), mode)) ?? null;
+		}
+		case "ledger":
+			return (await ledgerStub(deps.env, scope.testUser).get(String(args.answerId)))?.record ?? null;
+		case "intents":
+			return JSON.parse(JSON.stringify(await readIntents(deps.env, scope.repo, scope.commit)));
+		case "config":
+			return readConfig(deps.env, scope, String(args.file));
+		case "connectors": {
+			using repo = await openRepo(deps.env.ARTIFACTS, scope.repo);
+			const files = await listCommitFiles(repo, scope.commit, { file: (p) => /^connectors\/[^/]+\.ts$/.test(p), dir: (d) => d === "connectors" });
+			return files.map((f) => f.path.slice("connectors/".length, -3)).filter((name) => name !== "types");
+		}
+		default:
+			throw new Error(`unknown host operation ${op}`);
+	}
 }
 
 export async function readConfig(env: Env, scope: { repo: string; commit: string }, file: string): Promise<{ present: boolean; valid: boolean; errors?: string[]; parsed?: unknown }> {

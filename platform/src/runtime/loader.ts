@@ -42,12 +42,30 @@ export const MAX_CARD_CHARS = 256 * 1024;
  * the platform and the gate only ever see plain JSON data: no RPC stubs,
  * getters, or toJSON methods that could answer differently on each read.
  */
+/** The fork's own code threw while answering, or answered with something that is not a card. */
+export class ForkRuntimeError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "ForkRuntimeError";
+	}
+}
+
 export async function askCard(fork: ForkEntrypoint, request: unknown, options?: AskOptions): Promise<AnswerCardLike> {
-	const text: unknown = await fork.ask(request, options);
-	if (typeof text !== "string") throw new Error("the fork answered with something other than a JSON card");
-	if (text.length > MAX_CARD_CHARS) throw new Error(`the fork's card is larger than ${MAX_CARD_CHARS} characters`);
-	const card = JSON.parse(text) as unknown;
-	if (typeof card !== "object" || card === null || Array.isArray(card)) throw new Error("the fork's card is not a JSON object");
+	let text: unknown;
+	try {
+		text = await fork.ask(request, options);
+	} catch (error) {
+		throw new ForkRuntimeError(error instanceof Error ? error.message : String(error));
+	}
+	if (typeof text !== "string") throw new ForkRuntimeError("the fork answered with something other than a JSON card");
+	if (text.length > MAX_CARD_CHARS) throw new ForkRuntimeError(`the fork's card is larger than ${MAX_CARD_CHARS} characters`);
+	let card: unknown;
+	try {
+		card = JSON.parse(text);
+	} catch (error) {
+		throw new ForkRuntimeError(`the fork's card is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+	}
+	if (typeof card !== "object" || card === null || Array.isArray(card)) throw new ForkRuntimeError("the fork's card is not a JSON object");
 	return card as AnswerCardLike;
 }
 

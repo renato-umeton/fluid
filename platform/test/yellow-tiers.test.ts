@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import stockSource from "../src/generated/stock-source.json";
 import { buildE2ERunnerModuleMap, E2E_RUNNER_ENTRY_MODULE } from "../src/runtime/modules.ts";
 import { configResult } from "../src/yellow/run.ts";
-import { e2eFailures, PLATFORM_SCENARIOS, prepareE2ETiers, stockManifestOf, tierLine, USER_E2E_LIMITS, type E2ETierResult } from "../src/yellow/tiers.ts";
+import { e2eFailures, failureRetryable, PLATFORM_SCENARIOS, prepareE2ETiers, runRetryable, stockManifestOf, tierLine, USER_E2E_LIMITS, type E2ETierResult } from "../src/yellow/tiers.ts";
 import { materialize } from "./helpers/materialize.ts";
 import app from "../../stock/app/index.ts";
 import synthetic from "../src/generated/synthetic.json";
@@ -114,5 +114,39 @@ describe("e2e failures", () => {
 
 	it("report a user manifest that could not run", () => {
 		expect(e2eFailures([{ tier: "user", passed: false, total: 0, failed: 1, skipped: 0, scenarios: [], error: "bad" }])[0]).toMatchObject({ scenario: "user-e2e-manifest-valid", actual: "bad" });
+	});
+});
+
+describe("retryable failures", () => {
+	const failingTier = (failures: Record<string, unknown>[], kind = "ask"): E2ETierResult => ({
+		tier: "stock", passed: false, total: 1, failed: 1, skipped: 0,
+		scenarios: [{ id: "s", passed: false, failedStep: "a", durationMs: 1, steps: [{ id: "a", kind, passed: false, latencyMs: 1, failures: failures as never }] }],
+	});
+
+	it("keeps the runner's own retryable mark", () => {
+		expect(runRetryable([failingTier([{ path: "", op: "ask", expected: "no error", actual: "x", retryable: true }])])).toBe(true);
+		expect(e2eFailures([failingTier([{ path: "", op: "ask", expected: "no error", actual: "x", retryable: true }])])[0]!.retryable).toBe(true);
+	});
+
+	it("infers it for runners published before the mark: host errors, timeouts, and latency are retryable", () => {
+		expect(failureRetryable({ path: "", op: "ask", expected: "no error", actual: "Network connection lost" })).toBe(true);
+		expect(failureRetryable({ path: "", op: "timeout", expected: "answer within 15000 ms", actual: "no answer" })).toBe(true);
+		expect(failureRetryable({ path: "latencyMs", op: "latency", expected: "at most 8000 ms", actual: 9100 })).toBe(true);
+	});
+
+	it("never retries an assertion on the fork's output or an error the fork caused", () => {
+		expect(failureRetryable({ path: "ledger.fork_commit", op: "equals", expected: "abc", actual: "build-cache" })).toBe(false);
+		expect(failureRetryable({ path: "", op: "ask", expected: "no error", actual: "fork error: TypeError: x is undefined" })).toBe(false);
+		expect(failureRetryable({ path: "", op: "ask", expected: "no error", actual: "boom", retryable: false })).toBe(false);
+	});
+
+	it("a run is retryable only when every failing step failed for a retryable reason", () => {
+		const infra = failingTier([{ path: "", op: "ask", expected: "no error", actual: "Network connection lost" }]);
+		const fork = failingTier([{ path: "mode", op: "equals", expected: "clinical", actual: "research" }]);
+		expect(runRetryable([infra])).toBe(true);
+		expect(runRetryable([infra, fork])).toBe(false);
+		expect(runRetryable([failingTier([{ path: "", op: "ask", expected: "no error", actual: "x" }, { path: "mode", op: "equals", expected: "a", actual: "b" }])])).toBe(false);
+		expect(runRetryable([{ tier: "user", passed: false, total: 0, failed: 1, skipped: 0, scenarios: [], error: "bad manifest" }])).toBe(false);
+		expect(runRetryable([{ ...infra, passed: true, failed: 0, scenarios: [] }])).toBe(false);
 	});
 });
