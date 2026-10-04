@@ -20,6 +20,17 @@ export function decideRollback(input: { mainHead: string | null; yellowCommit: s
 	return { action: "revert", to: input.lastGreenCommit };
 }
 
+/**
+ * True when `top` (main's head) is the revert commit this run already pushed:
+ * its parent is the yellow commit, the yellow soak authored it, and its
+ * message names this run. A retried roll back step then records that commit
+ * instead of deciding again (main is no longer at the yellow commit).
+ */
+export function isOwnRevert(top: { parents: string[]; author: { email: string }; message: string } | null, input: { yellowCommit: string; runId: string }): boolean {
+	if (!top) return false;
+	return top.parents[0] === input.yellowCommit && top.author.email === ROLLBACK_AUTHOR.email && top.message.includes(`Yellow run ${input.runId}.`);
+}
+
 /** Build-time intent records the yellow change added (present at the yellow commit, absent at the last green one). */
 export function changeIntents(atYellow: BuildTimeIntent[], atGreen: BuildTimeIntent[]): BuildTimeIntent[] {
 	const before = new Set(atGreen.map((i) => i.id));

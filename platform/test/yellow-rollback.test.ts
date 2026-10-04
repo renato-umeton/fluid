@@ -1,7 +1,7 @@
 import git from "isomorphic-git";
 import { describe, expect, it } from "vitest";
 import { commitChanges, headCommit, initRepo, listTrackedFiles, parseTrailers, readCommitMessage, readWorkspaceFile, writeFiles, removeFiles } from "../src/git/ops.ts";
-import { changeIntents, decideRollback, revertMain, rollbackIntent, rollbackMessage } from "../src/yellow/rollback.ts";
+import { changeIntents, decideRollback, isOwnRevert, revertMain, ROLLBACK_AUTHOR, rollbackIntent, rollbackMessage } from "../src/yellow/rollback.ts";
 import type { BuildTimeIntent } from "../src/forks/provision.ts";
 
 const Y = "y".repeat(40);
@@ -72,5 +72,33 @@ describe("revertMain", () => {
 describe("changeIntents", () => {
 	it("lists the intent records the yellow change added", () => {
 		expect(changeIntents([intent("int_a"), intent("int_b")], [intent("int_a")]).map((i) => i.id)).toEqual(["int_b"]);
+	});
+});
+
+describe("isOwnRevert", () => {
+	const message = rollbackMessage({ yellowCommit: Y, greenCommit: G, failure, runId: "run_yel-1", relies: [] });
+	const top = { parents: [Y], author: { email: ROLLBACK_AUTHOR.email }, message };
+
+	it("recognizes the revert this run already pushed (a retried roll back step)", () => {
+		expect(isOwnRevert(top, { yellowCommit: Y, runId: "run_yel-1" })).toBe(true);
+	});
+
+	it("does not take another run's revert, a revert of another commit, or a user commit as its own", () => {
+		expect(isOwnRevert(top, { yellowCommit: Y, runId: "run_yel-2" })).toBe(false);
+		expect(isOwnRevert({ ...top, parents: [G] }, { yellowCommit: Y, runId: "run_yel-1" })).toBe(false);
+		expect(isOwnRevert({ ...top, author: { email: "platform@fluid.invalid" } }, { yellowCommit: Y, runId: "run_yel-1" })).toBe(false);
+		expect(isOwnRevert(null, { yellowCommit: Y, runId: "run_yel-1" })).toBe(false);
+	});
+
+	it("matches the commit revertMain writes", async () => {
+		const ws = await initRepo();
+		await writeFiles(ws, { "a.txt": "1\n" });
+		const green = await commitChanges(ws, { message: "green" });
+		await writeFiles(ws, { "a.txt": "2\n" });
+		const yellow = await commitChanges(ws, { message: "yellow" });
+		const rb = rollbackIntent({ id: "int_rb", userId: "u", repo: "user-u", yellowCommit: yellow, greenCommit: green, failure, runId: "run_yel-1", stockTag: "v1.9.0", relies: [] });
+		const result = await revertMain({ remote: { url: "", token: "" }, yellowCommit: yellow, greenCommit: green, intent: rb, message: rollbackMessage({ yellowCommit: yellow, greenCommit: green, failure, runId: "run_yel-1", relies: [] }), ws });
+		const { commit } = await git.readCommit({ fs: ws.fs, dir: ws.dir, oid: result.commit! });
+		expect(isOwnRevert({ parents: commit.parent, author: { email: commit.author.email }, message: commit.message }, { yellowCommit: yellow, runId: "run_yel-1" })).toBe(true);
 	});
 });

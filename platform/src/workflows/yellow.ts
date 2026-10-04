@@ -16,18 +16,17 @@ import { headOf, openRepo, readTextFile } from "../runtime/repo-files.ts";
 import { pinnedTagOf } from "../stock/releases.ts";
 import { fleetStub, quotaStub, runsStub } from "../stubs.ts";
 import { parseUiPreferences, UI_PREFERENCES_PATH } from "../ui/preferences.ts";
-import { browserPlan, launchFailure, runBrowserChecks, type BrowserTierResult } from "../yellow/browser.ts";
-import { changeIntents, decideRollback, revertMain, rollbackIntent, rollbackMessage } from "../yellow/rollback.ts";
+import { browserPlan, configuredOrigin, launchFailure, runBrowserChecks, type BrowserTierResult } from "../yellow/browser.ts";
+import { changeIntents, decideRollback, isOwnRevert, revertMain, rollbackIntent, rollbackMessage } from "../yellow/rollback.ts";
 import { runE2E, type E2ERunResult } from "../yellow/run.ts";
-import { SOAK_PASSES, type HealthFailure } from "../yellow/state.ts";
+import { passVerdict, SOAK_PASSES, type HealthFailure } from "../yellow/state.ts";
 import { tierLine } from "../yellow/tiers.ts";
-import { appExports, errorText, GATE_STEP, GIT_STEP, guarded, repoRemote, runLog, startInstance, steps, type YellowParams } from "./common.ts";
+import { appExports, ensureRun, errorText, GATE_STEP, GIT_STEP, repoRemote, runLog, startInstance, steps, type Steps, type YellowParams } from "./common.ts";
 
 /** Pause between soak passes. */
 export const SOAK_PAUSE = "10 seconds";
 /** Browser sessions the whole platform may start per minute (a release lands many forks at once). */
 export const BROWSER_BUDGET = { perMinute: 6 };
-export const ORIGIN_KEY = "publicOrigin";
 
 export function yellowRepairRunId(repo: string, commit: string): string {
 	return `run_repair_y_${commit.slice(0, 12)}_${fnv1a(repo)}`;
@@ -41,8 +40,25 @@ export interface PassRecord {
 	durationMs: number;
 	runner: string;
 	stockTag: string | null;
+	/** The first attempt failed only for retryable reasons and this is the second attempt. */
+	retried?: boolean;
 	tiers: E2ERunResult["tiers"];
 	failures: E2ERunResult["failures"];
+}
+
+/**
+ * The failure recorded when the yellow run itself errored after its step
+ * retries (the suite could not run, or a step kept failing). A change that
+ * cannot be verified does not stay live, so it is treated like a failed soak.
+ */
+export function errorFailure(message: string): HealthFailure {
+	return { tier: "platform", scenario: "yellow run", step: null, detail: `the end-to-end soak could not finish after its retries: ${message}`.slice(0, 400) };
+}
+
+/** A run result for an errored soak, in the shape fail() and the repair read. */
+export function errorResult(p: Pick<YellowParams, "repo" | "commit" | "runId">, message: string): E2ERunResult {
+	const failure = errorFailure(message);
+	return { repo: p.repo, commit: p.commit, stockTag: null, runner: "stock", at: new Date().toISOString(), passed: false, retryable: false, tiers: [], failures: [{ tier: failure.tier, scenario: failure.scenario, step: null, path: "", op: "error", expected: "the end-to-end soak finishes", actual: failure.detail }], durationMs: 0, testUser: "" };
 }
 
 export function failureOf(result: { failures: E2ERunResult["failures"] } | null, browser: BrowserTierResult | null): HealthFailure {
@@ -50,6 +66,11 @@ export function failureOf(result: { failures: E2ERunResult["failures"] } | null,
 	if (first) return { tier: first.tier, scenario: first.scenario, step: first.step, detail: `${first.path || "result"} ${first.op}: expected ${JSON.stringify(first.expected)}, got ${JSON.stringify(first.actual)}`.slice(0, 400) };
 	const check = browser?.checks.find((c) => !c.passed);
 	return { tier: "browser", scenario: check?.name ?? "browser checks", step: null, detail: check?.detail ?? browser?.detail ?? "failed" };
+}
+
+function firstFailureText(run: E2ERunResult): string {
+	const f = run.failures[0];
+	return f ? `${f.tier} ${f.scenario}${f.step ? ` at ${f.step}` : ""}: ${f.op} ${JSON.stringify(f.actual)}`.slice(0, 200) : "no detail";
 }
 
 /** The soak's failures in the gate result shape the repair agent reads. */
@@ -74,7 +95,28 @@ export function repairGate(input: { repo: string; commit: string; stockTag: stri
 export class YellowWorkflow extends WorkflowEntrypoint<Env, YellowParams> {
 	async run(event: Readonly<WorkflowEvent<YellowParams>>, workflowStep: WorkflowStep) {
 		const p = event.payload;
-		return guarded(steps(workflowStep), this.env, { runId: p.runId, kind: "yellow", repo: p.repo }, () => this.execute(event, workflowStep));
+		const step = steps(workflowStep);
+		try {
+			return await this.execute(event, workflowStep);
+		} catch (error) {
+			// The soak errored after its step retries. Treat it as a failure and roll back: a change that
+			// cannot be verified must not stay live, and the fork must not stay yellow with no run.
+			const message = errorText(error);
+			try {
+				return await this.fail(step, p, errorResult(p, message), null, "after error ");
+			} catch (second) {
+				await step.do("record failure", async () => {
+					await ensureRun(this.env, { id: p.runId, kind: "yellow", repo: p.repo });
+					const log = runLog(this.env, p.runId);
+					await log.step("Error", "failed", `${message}; the rollback also failed: ${errorText(second)}`);
+					await log.status("failed", { error: message });
+					// Recorded without a revert commit: the fork stays yellow with the failure shown and no run, so an admin re-check can start.
+					await fleetStub(this.env).yellowFailure(p.repo, { runId: p.runId, failure: errorFailure(message), revertCommit: null });
+					return true;
+				});
+				throw error;
+			}
+		}
 	}
 
 	private async execute(event: Readonly<WorkflowEvent<YellowParams>>, workflowStep: WorkflowStep) {
@@ -96,9 +138,18 @@ export class YellowWorkflow extends WorkflowEntrypoint<Env, YellowParams> {
 
 			const result = await step.do(`e2e pass ${pass}`, GATE_STEP, async () => {
 				await log.step(`Soak pass ${pass} of ${SOAK_PASSES}`, "running", "Running the end-to-end tiers against the live fork");
-				const run = await runE2E({ env: this.env, exports }, { repo: p.repo, commit: p.commit, runId: p.runId });
+				let run = await runE2E({ env: this.env, exports }, { repo: p.repo, commit: p.commit, runId: p.runId });
+				let retried = false;
+				if (!run.passed && run.retryable) {
+					// Host errors, timeouts, and latency past the hard cap may come from the platform: run the pass once more in a fresh runner isolate.
+					await log.step(`Pass ${pass}: run again`, "info", `Only retryable failures (${firstFailureText(run)}); running the pass again in a fresh runner isolate before deciding`);
+					run = await runE2E({ env: this.env, exports }, { repo: p.repo, commit: p.commit, runId: p.runId, fresh: `p${pass}-${Date.now().toString(36)}` });
+					retried = true;
+					// Still only retryable failures: the step retries with backoff, and if it keeps failing the run errors and rolls back.
+					if (!run.passed && run.retryable) throw new Error(`soak pass ${pass} failed twice for retryable reasons: ${firstFailureText(run)}`);
+				}
 				for (const tier of run.tiers) await log.step(`Pass ${pass}: ${tier.tier} scenarios`, tier.passed ? "done" : "failed", tierLine(tier));
-				const record: PassRecord = { pass, passed: run.passed, at: run.at, durationMs: run.durationMs, runner: run.runner, stockTag: run.stockTag, tiers: run.tiers, failures: run.failures };
+				const record: PassRecord = { pass, passed: run.passed, at: run.at, durationMs: run.durationMs, runner: run.runner, stockTag: run.stockTag, ...(retried ? { retried } : {}), tiers: run.tiers, failures: run.failures };
 				const stored = ((await runsStub(this.env, p.runId).get())?.passes ?? []) as unknown as PassRecord[];
 				await log.update({ passes: [...stored.filter((r) => r.pass !== pass), record] as never, stockTag: run.stockTag, testUser: run.testUser });
 				await log.step(`Soak pass ${pass} of ${SOAK_PASSES}`, run.passed ? "done" : "failed", run.passed ? `All scenarios passed in ${run.durationMs} ms (${run.runner === "stock" ? `stock ${run.stockTag} suite` : `basic platform scenarios; stock ${run.stockTag} has no end-to-end suite`})` : `Failed: ${run.failures[0] ? `${run.failures[0].scenario}${run.failures[0].step ? ` at step ${run.failures[0].step}` : ""}` : "setup"}`);
@@ -110,11 +161,12 @@ export class YellowWorkflow extends WorkflowEntrypoint<Env, YellowParams> {
 			if (!result.passed || browser?.status === "failed") return this.fail(step, p, result, pass === 1 ? browser : null);
 
 			const recorded = await step.do(`record pass ${pass}`, async () => {
-				const outcome = await fleetStub(this.env).yellowPass(p.repo, { runId: p.runId, pass });
-				if (!outcome || outcome.stale) return { stale: true, health: null as string | null };
-				await log.update({ pass, health: outcome.state.health });
-				await this.updateParent(p, { health: outcome.state.health, pass, of: SOAK_PASSES, ...(browser ? { browser: { status: browser.status, detail: browser.detail } } : {}) }, outcome.state.health === "green" ? "done" : "running", outcome.state.health === "green" ? `Green: ${SOAK_PASSES} consecutive passes; ${short} is the last green commit` : `Soak pass ${pass} of ${SOAK_PASSES} passed`);
-				return { stale: false, health: outcome.state.health };
+				// A retry of this step after the pass was applied finds the fork green at this commit: still a success.
+				const verdict = passVerdict(await fleetStub(this.env).yellowPass(p.repo, { runId: p.runId, pass }), p.commit);
+				if (verdict.stale) return { stale: true, health: null as string | null };
+				await log.update({ pass, health: verdict.health });
+				await this.updateParent(p, { health: verdict.health, pass, of: SOAK_PASSES, ...(browser ? { browser: { status: browser.status, detail: browser.detail } } : {}) }, verdict.health === "green" ? "done" : "running", verdict.health === "green" ? `Green: ${SOAK_PASSES} consecutive passes; ${short} is the last green commit` : `Soak pass ${pass} of ${SOAK_PASSES} passed`);
+				return { stale: false, health: verdict.health as string | null };
 			});
 			if (recorded.stale) return this.cancel(step, p, "a newer change superseded this run");
 			if (pass < SOAK_PASSES) await step.sleep(`pause ${pass}`, SOAK_PAUSE);
@@ -139,7 +191,7 @@ export class YellowWorkflow extends WorkflowEntrypoint<Env, YellowParams> {
 		return { ok: true, reason: "" };
 	}
 
-	private async cancel(step: ReturnType<typeof steps>, p: YellowParams, reason: string) {
+	private async cancel(step: Steps, p: YellowParams, reason: string) {
 		await step.do("cancel", async () => {
 			await fleetStub(this.env).yellowCancel(p.repo, { runId: p.runId, reason });
 			await runLog(this.env, p.runId).step("Cancelled", "info", reason);
@@ -155,8 +207,9 @@ export class YellowWorkflow extends WorkflowEntrypoint<Env, YellowParams> {
 		const log = runLog(this.env, p.runId);
 		const fleet = fleetStub(this.env);
 		const entry = await fleet.get(p.repo);
-		const origin = (await fleet.getValue(ORIGIN_KEY)) as string | null;
-		const env = this.env as Env & { BROWSER?: Fetcher };
+		const env = this.env as Env & { BROWSER?: Fetcher; PUBLIC_ORIGIN?: string };
+		// The configured URL users reach. While this run is current, main there is the yellow commit (checked before each pass).
+		const origin = configuredOrigin(env);
 		let result: BrowserTierResult;
 		const plan = browserPlan({ hasBinding: Boolean(env.BROWSER), origin, seeded: entry?.seeded ?? false });
 		if (!plan.run) {
@@ -183,17 +236,20 @@ export class YellowWorkflow extends WorkflowEntrypoint<Env, YellowParams> {
 	}
 
 	/** Roll main back (when it is still at the yellow commit) and open a repair linked to the change's intent records. */
-	private async fail(step: ReturnType<typeof steps>, p: YellowParams, result: E2ERunResult, browser: BrowserTierResult | null) {
+	private async fail(step: Steps, p: YellowParams, result: E2ERunResult, browser: BrowserTierResult | null, prefix = "") {
 		const log = runLog(this.env, p.runId);
 		const failure = failureOf(result, browser);
-		const rollback = await step.do("roll back", GIT_STEP, async () => {
+		const rollback = await step.do(`${prefix}roll back`, GIT_STEP, async () => {
 			const fleet = fleetStub(this.env);
 			const health = await fleet.health(p.repo);
-			let head: string | null;
+			let top: { hash: string; parents: string[]; author: { email: string }; message: string } | null;
 			{
 				using repo = await openRepo(this.env.ARTIFACTS, p.repo);
-				head = await headOf(repo, "main");
+				top = (await repo.log({ ref: "main", limit: 1 }))[0] ?? null;
 			}
+			const head = top?.hash ?? null;
+			// A retried step whose first attempt already pushed the revert: record that commit instead of deciding again.
+			if (top && isOwnRevert(top, { yellowCommit: p.commit, runId: p.runId })) return this.recordRevert(p, failure, top.hash);
 			const decision = decideRollback({ mainHead: head, yellowCommit: p.commit, lastGreenCommit: health?.lastGreenCommit ?? null, currentRunId: health?.runId ?? null, runId: p.runId });
 			if (decision.action === "cancel") return { action: "cancel" as const, reason: decision.reason, revertCommit: null as string | null, relies: [] as string[] };
 			const relies = changeIntents(await readIntents(this.env, p.repo, p.commit), decision.action === "revert" ? await readIntents(this.env, p.repo, decision.to) : []).map((i) => i.id);
@@ -222,16 +278,12 @@ export class YellowWorkflow extends WorkflowEntrypoint<Env, YellowParams> {
 				throw error;
 			}
 			if (!reverted.ok) return { action: "cancel" as const, reason: reverted.reason ?? "main moved", revertCommit: null as string | null, relies };
-			await fleet.yellowFailure(p.repo, { runId: p.runId, failure, revertCommit: reverted.commit });
-			const entry = await fleet.get(p.repo);
-			if (entry && stockTag !== "unknown" && entry.pinnedTag !== stockTag) await fleet.update(p.repo, { pinnedTag: stockTag });
-			await log.step("Roll back", "done", `main is back on the tree of ${decision.to.slice(0, 7)} with revert commit ${reverted.commit!.slice(0, 7)} (intent ${intentId}); ${p.commit.slice(0, 7)} stays in history`);
-			await log.update({ revertCommit: reverted.commit, rolledBackTo: decision.to, rollbackIntent: intentId });
-			return { action: "revert" as const, reason: "", revertCommit: reverted.commit, relies };
+			await log.update({ rolledBackTo: decision.to, rollbackIntent: intentId });
+			return this.recordRevert(p, failure, reverted.commit!, relies);
 		});
 		if (rollback.action === "cancel") return this.cancel(step, p, rollback.reason);
 
-		const repairId = await step.do("open repair", async () => {
+		const repairId = await step.do(`${prefix}open repair`, async () => {
 			const gate = repairGate({ repo: p.repo, commit: p.commit, stockTag: result.stockTag, result, browser, runId: p.runId });
 			await log.update({ gate: gate as never, failure: failure as never, changeIntents: rollback.relies });
 			const id = yellowRepairRunId(p.repo, p.commit);
@@ -250,13 +302,35 @@ export class YellowWorkflow extends WorkflowEntrypoint<Env, YellowParams> {
 			return id;
 		});
 
-		await step.do("finish failed", async () => {
+		await step.do(`${prefix}finish failed`, async () => {
 			const detail = `${failure.tier} scenario ${failure.scenario}${failure.step ? ` failed at step ${failure.step}` : " failed"}`;
 			await log.status("failed", { health: rollback.action === "revert" ? "rolled_back" : "yellow", repairRunId: repairId, failure: failure as never });
 			await this.updateParent(p, { health: rollback.action === "revert" ? "rolled_back" : "yellow", failure, revertCommit: rollback.revertCommit, repairRunId: repairId }, "failed", rollback.action === "revert" ? `${detail}; main rolled back to the last green commit (revert ${rollback.revertCommit?.slice(0, 7)}); repair ${repairId}` : `${detail}; ${rollback.reason}; repair ${repairId}`);
 			return true;
 		});
 		return { repo: p.repo, commit: p.commit, health: rollback.action === "revert" ? "rolled_back" : "yellow", failure };
+	}
+
+	/**
+	 * Records a pushed revert commit: the fork is rolled back (a repeat is a no-op, the state machine
+	 * ignores a run that is no longer current) and its pin follows the restored fluid.toml.
+	 */
+	private async recordRevert(p: YellowParams, failure: HealthFailure, revertCommit: string, knownRelies?: string[]) {
+		const fleet = fleetStub(this.env);
+		let toml: string | null;
+		{
+			using repo = await openRepo(this.env.ARTIFACTS, p.repo);
+			toml = await readTextFile(repo, revertCommit, "fluid.toml");
+		}
+		// The revert tree is the green tree plus the rollback record, so the change's own records are the ones it lacks.
+		const relies = knownRelies ?? changeIntents(await readIntents(this.env, p.repo, p.commit), await readIntents(this.env, p.repo, revertCommit)).map((i) => i.id);
+		await fleet.yellowFailure(p.repo, { runId: p.runId, failure, revertCommit });
+		const stockTag = pinnedTagOf(toml);
+		const entry = await fleet.get(p.repo);
+		if (entry && stockTag && entry.pinnedTag !== stockTag) await fleet.update(p.repo, { pinnedTag: stockTag });
+		await runLog(this.env, p.runId).step("Roll back", "done", `main is back on the last green tree with revert commit ${revertCommit.slice(0, 7)}; ${p.commit.slice(0, 7)} stays in history`);
+		await runLog(this.env, p.runId).update({ revertCommit });
+		return { action: "revert" as const, reason: "", revertCommit: revertCommit as string | null, relies };
 	}
 
 	/** Mirrors the yellow phase on the run that landed the change. Best effort: the yellow run record is the source of truth. */
