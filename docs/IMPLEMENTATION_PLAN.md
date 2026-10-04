@@ -192,3 +192,9 @@ Pre-deploy hardening:
 - `/api/forks/:repo` and `/api/intents/:repo` answer only for fleet forks and `stock`. Visitors ask by branch or tag, never by raw SHA. A SHA ref must exist in the repo. The direct gate trigger gates only the branch head.
 - Error responses carry a `requestId` (also in `x-request-id`). Unexpected errors return `internal error`, and their scrubbed details go only to the log.
 - The `fluid` AI Gateway is capped at 300 requests per minute (see `docs/GATE_AND_AGENTS.md`).
+
+## Stage 6: Yellow to green regression
+**Goal**: Every change that passes the gate goes live on `main` in a yellow state with a badge. A stock-owned end-to-end regression suite (multi-step API scenarios plus a few real browser checks through Browser Rendering) runs against the live fork. Three consecutive passes turn it green. Any failure rolls `main` back to the last green commit and opens a repair linked to the intent record. Users and the test suggester can add their own end-to-end scenarios on top of the stock suite, which is always read from stock at the pinned tag.
+**Success Criteria**: Customizations, upgrades, and repairs all pass through yellow. The UI shows yellow and green states per fork and in the fleet grid. A change that breaks a basic flow but passes tiers 1 to 3 is caught in yellow and rolled back automatically. Owner decisions recorded 2026-10-04: live with badge, API plus browser, mothership-owned with user additions, yellow lasts until the suite passes (3 consecutive runs).
+**Tests**: Unit tests for the yellow state machine and rollback; scenario runner tests; an end-to-end script that lands a change which breaks a basic flow and watches it roll back.
+**Status**: Not Started
