@@ -206,18 +206,35 @@ export async function notifyParent(env: Env, exports: AppExports, parentRunId: s
 	}
 }
 
-/** One yellow run per (repo, commit). */
-export function yellowInstanceId(repo: string, commit: string): string {
-	return `yel-${fnv1a(repo)}-${commit.slice(0, 12)}`;
+/** One yellow run per (repo, commit); an admin re-check adds a nonce so it always starts a new run. */
+export function yellowInstanceId(repo: string, commit: string, nonce?: string): string {
+	return `yel-${fnv1a(repo)}-${commit.slice(0, 12)}${nonce ? `-${nonce.slice(0, 12)}` : ""}`;
+}
+
+/**
+ * The instance id to start: the deterministic one while it runs or after it
+ * finished (starting it again is a no-op), or a fresh id when it errored or
+ * was terminated, so a landed change always gets a live soak.
+ */
+export async function yellowInstanceToStart<P>(binding: WorkflowBinding<P>, id: string): Promise<string> {
+	let status: string;
+	try {
+		status = (await (await binding.get(id)).status()).status;
+	} catch {
+		return id;
+	}
+	return status === "errored" || status === "terminated" ? `${id.slice(0, 50)}-r${Date.now().toString(36).slice(-6)}` : id;
 }
 
 /**
  * A gated change landed on main: mark the fork yellow at once (so the badge
  * shows before the workflow starts), create the run record, start the yellow
- * workflow, and show the yellow phase on the run that landed the change.
+ * workflow, and show the yellow phase on the run that landed the change. The
+ * fork's health names the run before its instance exists, so the run never
+ * finds itself superseded at its first check.
  */
-export async function startYellowRun(env: Env, exports: AppExports, input: { repo: string; commit: string; previous: string | null; source: YellowSource; parentRunId?: string | null }): Promise<{ runId: string; created: boolean }> {
-	const id = yellowInstanceId(input.repo, input.commit);
+export async function startYellowRun(env: Env, exports: AppExports, input: { repo: string; commit: string; previous: string | null; source: YellowSource; parentRunId?: string | null; nonce?: string }): Promise<{ runId: string; created: boolean }> {
+	const id = await yellowInstanceToStart(exports.YellowWorkflow, yellowInstanceId(input.repo, input.commit, input.nonce));
 	const runId = `run_${id}`;
 	await fleetStub(env).yellowStart(input.repo, { commit: input.commit, runId, previous: input.previous, source: input.source });
 	await ensureRun(env, { id: runId, kind: "yellow", repo: input.repo, fields: { commit: input.commit, previous: input.previous, source: input.source, parentRunId: input.parentRunId ?? null, pass: 0, of: 3, health: "yellow" } });

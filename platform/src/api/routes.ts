@@ -415,7 +415,8 @@ route("POST", "/api/admin/yellow/:repo", async (rc, { repo }) => {
 		head = await headOf(handle, "main");
 	}
 	if (!head) throw new HttpError(404, "fork has no main branch");
-	const started = await startYellowRun(rc.env, appExports(rc.ctx), { repo: name, commit: head, previous: entry.health.lastGreenCommit ?? head, source: "admin" });
+	// A nonce in the instance id: a re-check always starts a new run, even for a commit whose earlier run finished or errored.
+	const started = await startYellowRun(rc.env, appExports(rc.ctx), { repo: name, commit: head, previous: entry.health.lastGreenCommit ?? head, source: "admin", nonce: Date.now().toString(36) });
 	return json({ repo: name, commit: head, runId: started.runId, created: started.created }, started.created ? 202 : 200);
 });
 
