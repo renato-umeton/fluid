@@ -18,9 +18,11 @@ export interface ReleaseMetadata {
 	graceUntil: string | null;
 	previousTag: string | null;
 	intentId: string | null;
+	/** Invariant probes the publish carried forward from the latest release's tightened floor. */
+	keptInvariants?: string[];
 }
 
-export function releaseMetadata(input: { tag: string; notes?: string; safety?: boolean; date?: Date; previousTag?: string | null; intentId?: string | null }): ReleaseMetadata {
+export function releaseMetadata(input: { tag: string; notes?: string; safety?: boolean; date?: Date; previousTag?: string | null; intentId?: string | null; keptInvariants?: string[] }): ReleaseMetadata {
 	const date = input.date ?? new Date();
 	const safety = input.safety === true;
 	const graceUntil = safety ? new Date(date.getTime() + SAFETY_GRACE_DAYS * 86_400_000).toISOString() : null;
@@ -33,6 +35,7 @@ export function releaseMetadata(input: { tag: string; notes?: string; safety?: b
 		graceUntil,
 		previousTag: input.previousTag ?? null,
 		intentId: input.intentId ?? null,
+		keptInvariants: [...(input.keptInvariants ?? [])],
 	};
 }
 

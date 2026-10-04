@@ -15,6 +15,11 @@ describe("releaseMetadata", () => {
 		expect(releaseMetadata({ tag: "v1.2.0" })).toMatchObject({ safety: false, graceDays: null, graceUntil: null });
 	});
 
+	it("records the invariants a publish carried forward from the latest release", () => {
+		expect(releaseMetadata({ tag: "v1.11.0", keptInvariants: ["inv-research-cross-check-visible"] }).keptInvariants).toEqual(["inv-research-cross-check-visible"]);
+		expect(releaseMetadata({ tag: "v1.11.0" }).keptInvariants).toEqual([]);
+	});
+
 	it("stores metadata under releases/", () => {
 		expect(releaseMetadataPath("v1.1.0")).toBe("releases/v1.1.0.json");
 	});

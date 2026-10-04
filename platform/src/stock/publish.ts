@@ -17,6 +17,8 @@ export interface StockRelease {
 	notes?: string;
 	/** A safety release tightens the floor; it carries a grace period (spec 7). */
 	safety?: boolean;
+	/** Invariant probes carried forward from the latest release (recorded in releases/<tag>.json). */
+	keptInvariants?: string[];
 }
 
 export interface PublishResult {
@@ -61,7 +63,7 @@ export async function publishStockRelease(env: Env, release: StockRelease): Prom
 		if (path.startsWith(RELEASES_DIR)) earlier[path] = (await readWorkspaceFile(ws, path)) ?? "";
 	}
 	const previousTag = (await listStockTags(env).catch(() => [] as string[]))[0] ?? null;
-	const metadata = releaseMetadata({ tag: release.tag, notes: release.notes, safety: release.safety, previousTag, intentId: release.intentId });
+	const metadata = releaseMetadata({ tag: release.tag, notes: release.notes, safety: release.safety, previousTag, intentId: release.intentId, keptInvariants: release.keptInvariants });
 	await replaceTree(ws, { ...files, ...earlier, [releaseMetadataPath(release.tag)]: `${JSON.stringify(metadata, null, 2)}\n` });
 	const commit = await commitChanges(ws, {
 		message: release.message ?? defaultMessage(release.tag, metadata),

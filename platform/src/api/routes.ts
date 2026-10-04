@@ -374,7 +374,7 @@ route("POST", "/api/admin/stock/publish", async (rc) => {
 	// A new tag keeps any floor the latest release tightened (the demo release invariants).
 	const latest = (await listStockTags(rc.env))[0] ?? null;
 	const floor = latest && latest !== tag ? keepFloorTightening(bundled.files, await readStockFiles(rc.env, latest).then((f) => f["tests/invariants/manifest.json"] ?? null)) : { files: bundled.files, kept: [] };
-	const result = await publishStockRelease(rc.env, { ...bundled, files: floor.files, tag, notes: typeof body.notes === "string" ? body.notes : undefined, safety: body.safety === true });
+	const result = await publishStockRelease(rc.env, { ...bundled, files: floor.files, tag, notes: typeof body.notes === "string" ? body.notes : undefined, safety: body.safety === true, keptInvariants: floor.kept });
 	await recordRelease(rc.env, result.tag, result.release, result.commit);
 	const synced = await syncStockReleases(rc.env);
 	return json({ ...result, synced, keptInvariants: result.alreadyPublished ? [] : floor.kept }, result.alreadyPublished ? 200 : 201);
