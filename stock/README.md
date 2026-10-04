@@ -70,7 +70,10 @@ unknown tier is an error. Each sample has a time limit (default 5000 ms) and a
 timeout is a failed sample. Ops: `equals`, `notEquals`, `gte`, `lte`,
 `exists`, `some`, `every` (fails on an empty array unless `allowEmpty: true`),
 `contains`, `notContains`, `length_gte`, and `notMatches` (regex as
-`"/pattern/flags"`; with `path: ""` it checks the whole card as JSON). A probe
+`"/pattern/flags"`; with `path: ""` it checks the whole card as JSON). A
+`notMatches` pattern is at most 200 characters and may not repeat a group that
+already holds an unbounded quantifier (`(a+)+`, `(\w*x)*`), since manifests can
+come from a fork and such patterns backtrack for exponential time. A probe
 may set `focusMode` to assert on the card in that mode, either the card itself
 or the matching alternative of a multi-intent card, so probes stay valid when
 a fork raises tau.
@@ -103,8 +106,18 @@ or `"$live.stockTag"` names the live fork; `"$<step>.<path>"` names a value
 from an earlier step's target. `requires: { "connector": "redcap" }` on a
 scenario or step skips it when the fork has no `connectors/redcap.ts`. Each
 step has a latency budget (`latencyBudgetMs` on the step, scenario, or
-manifest; default 10000 ms) and a time limit. A scenario stops at its first
-failing step.
+manifest; default 10000 ms) and a time limit. A step over its budget gets a
+warning (`warnings[]`); only a step slower than 3 times its budget fails. A
+scenario stops at its first failing step.
+
+Failures that may come from the platform rather than the fork carry
+`retryable: true`: a host error, a step that hit its time limit, and a step
+past the hard latency cap. A host error whose message starts with
+`fork error: ` was caused by the fork (its code threw or did not build) and is
+not retryable, and neither is any assertion on the fork's output. A failed
+scenario is `retryable` when every failure of its failing step is, and a tier
+result is `retryable` when every failed scenario is. The platform runs a
+retryable pass again before it rolls anything back.
 
 `runScenarios({ manifest, host, live, tier?, stepTimeoutMs? })` runs a
 manifest against a host that implements `ask`, `override`, `ledger`,

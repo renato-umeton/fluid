@@ -15,6 +15,18 @@ export const E2E_TIERS: readonly E2ETier[] = ["stock", "platform", "user"];
 
 export const DEFAULT_LATENCY_BUDGET_MS = 10_000;
 export const DEFAULT_STEP_TIMEOUT_MS = 15_000;
+/**
+ * A step over its latency budget is a warning. Only a step slower than this
+ * many times its budget fails, and that failure is retryable: under load the
+ * platform, not the fork, is usually what is slow.
+ */
+export const LATENCY_HARD_FACTOR = 3;
+/**
+ * A host error whose message starts with this prefix was caused by the fork
+ * (its code threw or did not build). Any other host error is an
+ * infrastructure problem and is retryable.
+ */
+export const FORK_ERROR_PREFIX = "fork error: ";
 export const LIMITS = { maxScenarios: 40, maxSteps: 12 };
 
 export interface Requires {
@@ -91,6 +103,8 @@ export interface StepFailure {
   op: string;
   expected: unknown;
   actual: unknown;
+  /** Set when the failure may come from the platform rather than the fork (a host error, a timeout, a step past the hard latency cap). */
+  retryable?: boolean;
 }
 
 export interface StepResult {
@@ -100,6 +114,8 @@ export interface StepResult {
   latencyMs: number;
   skipped?: string;
   failures: StepFailure[];
+  /** Soft problems that do not fail the step (a step over its latency budget). */
+  warnings?: StepFailure[];
 }
 
 export interface ScenarioResult {
@@ -109,6 +125,8 @@ export interface ScenarioResult {
   skipped?: string;
   /** First failing step; later steps did not run. */
   failedStep?: string;
+  /** On a failed scenario: true when every failure of the failing step is retryable. */
+  retryable?: boolean;
   durationMs: number;
   steps: StepResult[];
 }
@@ -119,6 +137,8 @@ export interface E2EResult {
   total: number;
   failed: number;
   skipped: number;
+  /** True when the tier failed and every failed scenario is retryable (running it again may pass). */
+  retryable: boolean;
   scenarios: ScenarioResult[];
 }
 
@@ -240,8 +260,9 @@ export async function runScenarios(options: E2ERunOptions): Promise<E2EResult> {
   const scenarios: ScenarioResult[] = [];
   for (const scenario of options.manifest.scenarios) scenarios.push(await runScenario(scenario, options, connectorList));
   const skipped = scenarios.filter((s) => s.skipped).length;
-  const failed = scenarios.filter((s) => !s.passed).length;
-  return { tier, passed: failed === 0, total: scenarios.length, failed, skipped, scenarios };
+  const failing = scenarios.filter((s) => !s.passed);
+  const retryable = failing.length > 0 && failing.every((s) => s.retryable === true);
+  return { tier, passed: failing.length === 0, total: scenarios.length, failed: failing.length, skipped, retryable, scenarios };
 }
 
 interface ScenarioState {
@@ -262,7 +283,7 @@ async function runScenario(scenario: Scenario, options: E2ERunOptions, connector
   for (const step of scenario.steps) {
     const result = await runStep(step, scenario, options, state, connectorList);
     steps.push(result);
-    if (!result.passed) return { ...base, passed: false, failedStep: step.id, durationMs: now() - started, steps };
+    if (!result.passed) return { ...base, passed: false, failedStep: step.id, retryable: result.failures.every((f) => f.retryable === true), durationMs: now() - started, steps };
   }
   return { ...base, passed: true, durationMs: now() - started, steps };
 }
@@ -284,8 +305,9 @@ async function runStep(step: Step, scenario: Scenario, options: E2ERunOptions, s
     target = await withTimeout(perform(step, options.host, state), timeoutMs);
   } catch (error) {
     const latencyMs = now() - started;
-    if (error instanceof StepTimeout) return fail(step, latencyMs, { path: "", op: "timeout", expected: `answer within ${timeoutMs} ms`, actual: "no answer" });
-    return fail(step, latencyMs, { path: "", op: step.kind, expected: "no error", actual: error instanceof Error ? error.message : String(error) });
+    if (error instanceof StepTimeout) return fail(step, latencyMs, { path: "", op: "timeout", expected: `answer within ${timeoutMs} ms`, actual: "no answer", retryable: true });
+    const text = error instanceof Error ? error.message : String(error);
+    return fail(step, latencyMs, { path: "", op: step.kind, expected: "no error", actual: text, ...(text.startsWith(FORK_ERROR_PREFIX) ? {} : { retryable: true }) });
   }
   const latencyMs = now() - started;
   state.targets.set(step.id, target);
@@ -296,8 +318,11 @@ async function runStep(step: Step, scenario: Scenario, options: E2ERunOptions, s
   }
   const failures: StepFailure[] = [];
   for (const assertion of step.assert ?? []) failures.push(...evaluate(substitute(assertion, state) as Assertion, subject, ""));
-  if (latencyMs > budget) failures.push({ path: "latencyMs", op: "latency", expected: `at most ${budget} ms`, actual: latencyMs });
-  return { id: step.id, kind: step.kind, passed: failures.length === 0, latencyMs, failures };
+  const hardCap = budget * LATENCY_HARD_FACTOR;
+  const warnings: StepFailure[] = [];
+  if (latencyMs > hardCap) failures.push({ path: "latencyMs", op: "latency", expected: `at most ${hardCap} ms`, actual: latencyMs, retryable: true });
+  else if (latencyMs > budget) warnings.push({ path: "latencyMs", op: "latency", expected: `at most ${budget} ms`, actual: latencyMs });
+  return { id: step.id, kind: step.kind, passed: failures.length === 0, latencyMs, failures, ...(warnings.length ? { warnings } : {}) };
 }
 
 function fail(step: Step, latencyMs: number, failure: StepFailure): StepResult {

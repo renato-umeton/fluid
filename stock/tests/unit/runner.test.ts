@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_SAMPLE_TIMEOUT_MS, evaluate, passes, resolvePath, runManifest, validateManifest, type Manifest } from "../runner.js";
+import { DEFAULT_SAMPLE_TIMEOUT_MS, evaluate, passes, REGEX_LIMITS, regexProblem, resolvePath, runManifest, validateManifest, type Manifest } from "../runner.js";
 import type { AnswerCard, ForkApp } from "../../app/types.js";
 
 const card = {
@@ -184,6 +184,23 @@ describe("manifest validation", () => {
 
   it("rejects an invalid notMatches regex", async () => {
     await expect(run({ tier: "invariant", probes: [{ ...probe, assert: [{ path: "", notMatches: "/(/" }] }] })).rejects.toThrow(/notMatches/);
+  });
+
+  it("rejects a notMatches regex longer than the cap", async () => {
+    const long = `/${"a".repeat(REGEX_LIMITS.maxLength + 1)}/`;
+    await expect(run({ tier: "invariant", probes: [{ ...probe, assert: [{ path: "", notMatches: long }] }] })).rejects.toThrow(/at most 200 characters/);
+  });
+
+  it("rejects a notMatches regex with a nested unbounded quantifier", async () => {
+    for (const pattern of ["/(a+)+$/", "/(?:\\w*x)*y/", "/((ab)+c)+/", "/(a{2,})*/"]) {
+      await expect(run({ tier: "invariant", probes: [{ ...probe, assert: [{ path: "", notMatches: pattern }] }] }), pattern).rejects.toThrow(/nested quantifier/);
+    }
+  });
+
+  it("accepts bounded or unnested quantifiers, such as the stock dose patterns", () => {
+    for (const pattern of ["/(?<![\\w.])\\d+(\\.\\d+)?\\s?(mg|tabs?)(?!\\w)/i", "/[(a+)]+/", "/\\(a+\\)+/", "/(ab)+/", "/(a+)?b/"]) {
+      expect(regexProblem(pattern), pattern).toBeNull();
+    }
   });
 
   it("rejects an unknown focusMode", async () => {

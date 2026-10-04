@@ -285,12 +285,72 @@ function check(op: Exclude<Op, "some" | "every">, expected: unknown, actual: unk
   }
 }
 
+/**
+ * Limits on notMatches patterns. Manifests can come from a fork (tier 3, user
+ * end-to-end scenarios), so a pattern is capped in length and may not nest an
+ * unbounded quantifier inside another one, the shape that makes a regex
+ * backtrack for exponential time.
+ */
+export const REGEX_LIMITS = { maxLength: 200 };
+
 /** "/pattern/flags" or a plain pattern. The global and sticky flags are dropped so test() has no state. */
 export function parseRegex(source: string): RegExp {
   if (typeof source !== "string") throw new Error(`expected a string, got ${JSON.stringify(source)}`);
   const literal = /^\/(.*)\/([a-z]*)$/s.exec(source);
+  const pattern = literal ? literal[1]! : source;
+  const problem = patternProblem(pattern);
+  if (problem) throw new Error(problem);
   if (!literal) return new RegExp(source);
-  return new RegExp(literal[1]!, literal[2]!.replace(/[gy]/g, ""));
+  return new RegExp(pattern, literal[2]!.replace(/[gy]/g, ""));
+}
+
+/** Why a notMatches value is refused (too long, nested quantifier), or null when it is acceptable. */
+export function regexProblem(source: string): string | null {
+  const literal = /^\/(.*)\/([a-z]*)$/s.exec(source);
+  return patternProblem(literal ? literal[1]! : source);
+}
+
+function patternProblem(pattern: string): string | null {
+  if (pattern.length > REGEX_LIMITS.maxLength) return `pattern must be at most ${REGEX_LIMITS.maxLength} characters, got ${pattern.length}`;
+  return hasNestedQuantifier(pattern) ? "nested quantifier: a group with an unbounded quantifier (+, *, {n,}) inside may not repeat without bound" : null;
+}
+
+/** True when a group that contains an unbounded quantifier is itself followed by one, as in (a+)+. */
+function hasNestedQuantifier(pattern: string): boolean {
+  // One flag per open group: does it contain an unbounded quantifier so far?
+  const groups: boolean[] = [];
+  let inner = false;
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i]!;
+    if (ch === "\\") i++;
+    else if (ch === "[") i = classEnd(pattern, i);
+    else if (ch === "(") {
+      groups.push(inner);
+      inner = false;
+      continue;
+    } else if (ch === ")") {
+      if (inner && unboundedAt(pattern, i + 1)) return true;
+      inner = (groups.pop() ?? false) || inner;
+    }
+    if (unboundedAt(pattern, i + 1)) inner = true;
+  }
+  return false;
+}
+
+/** Index of the closing bracket of the character class that opens at `start`. */
+function classEnd(pattern: string, start: number): number {
+  for (let i = start + 1; i < pattern.length; i++) {
+    if (pattern[i] === "\\") i++;
+    else if (pattern[i] === "]" && i > start + 1) return i;
+  }
+  return pattern.length;
+}
+
+/** True when an unbounded quantifier (+, *, {n,}) starts at index i. */
+function unboundedAt(pattern: string, i: number): boolean {
+  const ch = pattern[i];
+  if (ch === "+" || ch === "*") return true;
+  return ch === "{" && /^\{\d+,\}/.test(pattern.slice(i));
 }
 
 function contains(actual: unknown, expected: unknown): boolean {

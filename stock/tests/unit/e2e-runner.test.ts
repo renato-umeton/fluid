@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import app from "../../app/index.js";
 import type { AnswerCard, ForkApp } from "../../app/types.js";
-import { focusOn, resolveValue, runScenarios, validateE2EManifest, type E2EManifest, type Scenario } from "../e2e/runner.js";
+import { FORK_ERROR_PREFIX, focusOn, LATENCY_HARD_FACTOR, resolveValue, runScenarios, validateE2EManifest, type E2EManifest, type Scenario } from "../e2e/runner.js";
 import { fakeHost } from "../helpers/e2e-host.js";
 import { loadSyntheticData, readStockFile } from "../helpers/synthetic.js";
 
@@ -138,20 +138,32 @@ describe("scenario steps", () => {
     expect(h.calls.some((c) => c.startsWith("ledger:"))).toBe(false);
   });
 
-  it("fails a step that exceeds its latency budget", async () => {
+  function ticking(ms: number) {
     let t = 0;
     const slow = host();
-    const ticking = { ...slow, ask: async (r: Parameters<typeof slow.ask>[0]) => ((t += 900), slow.ask(r)) };
-    const result = await runScenarios({
-      manifest: { suite: "e2e", latencyBudgetMs: 500, scenarios: [{ id: "s", steps: [{ id: "a", kind: "ask", request: { question: "Is Morphinex on formulary?", context: {} }, assert: [{ path: "answer_id", exists: true }] }] }] },
-      host: ticking,
-      live: LIVE,
-      now: () => t,
-    });
-    expect(result.scenarios[0]!.steps[0]!.failures).toEqual([{ path: "latencyMs", op: "latency", expected: "at most 500 ms", actual: 900 }]);
+    return { host: { ...slow, ask: async (r: Parameters<typeof slow.ask>[0]) => ((t += ms), slow.ask(r)) }, now: () => t };
+  }
+  const oneAsk = (budget: number): E2EManifest => ({ suite: "e2e", latencyBudgetMs: budget, scenarios: [{ id: "s", steps: [{ id: "a", kind: "ask", request: { question: "Is Morphinex on formulary?", context: {} }, assert: [{ path: "answer_id", exists: true }] }] }] });
+
+  it("records a step over its latency budget as a warning, not a failure", async () => {
+    const clock = ticking(900);
+    const result = await runScenarios({ manifest: oneAsk(500), host: clock.host, live: LIVE, now: clock.now });
+    const step = result.scenarios[0]!.steps[0]!;
+    expect(step.passed).toBe(true);
+    expect(step.failures).toEqual([]);
+    expect(step.warnings).toEqual([{ path: "latencyMs", op: "latency", expected: "at most 500 ms", actual: 900 }]);
+    expect(result.passed).toBe(true);
   });
 
-  it("fails a step that does not answer within the step time limit", async () => {
+  it("fails a step past the hard latency cap as a retryable failure", async () => {
+    const clock = ticking(500 * LATENCY_HARD_FACTOR + 1);
+    const result = await runScenarios({ manifest: oneAsk(500), host: clock.host, live: LIVE, now: clock.now });
+    expect(result.scenarios[0]!.steps[0]!.failures).toEqual([{ path: "latencyMs", op: "latency", expected: `at most ${500 * LATENCY_HARD_FACTOR} ms`, actual: 500 * LATENCY_HARD_FACTOR + 1, retryable: true }]);
+    expect(result.scenarios[0]!.retryable).toBe(true);
+    expect(result.retryable).toBe(true);
+  });
+
+  it("fails a step that does not answer within the step time limit, as retryable", async () => {
     const stuck = { ...host(), ask: () => new Promise<never>(() => undefined) };
     const result = await runScenarios({
       manifest: manifestOf({ id: "s", steps: [{ id: "a", kind: "ask", request: { question: "x?", context: {} }, assert: [{ path: "mode", exists: true }] }] }),
@@ -159,13 +171,46 @@ describe("scenario steps", () => {
       live: LIVE,
       stepTimeoutMs: 20,
     });
-    expect(result.scenarios[0]!.steps[0]!.failures[0]!.op).toBe("timeout");
+    expect(result.scenarios[0]!.steps[0]!.failures[0]).toMatchObject({ op: "timeout", retryable: true });
   });
 
-  it("records a host error as a failure of that step", async () => {
+  it("records a host error as a retryable failure of that step", async () => {
     const broken = { ...host(), intents: async () => { throw new Error("Artifacts unavailable"); } };
     const result = await runScenarios({ manifest: manifestOf({ id: "s", steps: [{ id: "i", kind: "intents", assert: [{ path: "count", gte: 1 }] }] }), host: broken, live: LIVE });
-    expect(result.scenarios[0]!.steps[0]!.failures[0]).toMatchObject({ op: "intents", actual: "Artifacts unavailable" });
+    expect(result.scenarios[0]!.steps[0]!.failures[0]).toMatchObject({ op: "intents", actual: "Artifacts unavailable", retryable: true });
+    expect(result.retryable).toBe(true);
+  });
+
+  it("records an error the fork caused as a failure that is not retryable", async () => {
+    const broken = { ...host(), ask: async () => { throw new Error(`${FORK_ERROR_PREFIX}TypeError: cards is undefined`); } };
+    const result = await runScenarios({ manifest: oneAsk(5000), host: broken, live: LIVE });
+    const failure = result.scenarios[0]!.steps[0]!.failures[0]!;
+    expect(failure).toMatchObject({ op: "ask", actual: `${FORK_ERROR_PREFIX}TypeError: cards is undefined` });
+    expect(failure.retryable).toBeUndefined();
+    expect(result.scenarios[0]!.retryable).toBe(false);
+    expect(result.retryable).toBe(false);
+  });
+
+  it("an assertion failure on the fork's output is never retryable, even next to a retryable scenario", async () => {
+    const h = host();
+    const flaky = { ...h, intents: async () => { throw new Error("Artifacts unavailable"); } };
+    const result = await runScenarios({
+      manifest: manifestOf(
+        { id: "infra", steps: [{ id: "i", kind: "intents", assert: [{ path: "count", gte: 1 }] }] },
+        { id: "fork", steps: [{ id: "a", kind: "ask", request: { question: "Is Morphinex on formulary?", context: {} }, assert: [{ path: "mode", equals: "clinical" }] }] },
+      ),
+      host: flaky,
+      live: LIVE,
+    });
+    expect(result.scenarios.map((s) => s.retryable)).toEqual([true, false]);
+    expect(result.retryable).toBe(false);
+  });
+
+  it("a passing run is not marked retryable", async () => {
+    const result = await runScenarios({ manifest: oneAsk(5000), host: host(), live: LIVE });
+    expect(result.passed).toBe(true);
+    expect(result.retryable).toBe(false);
+    expect(result.scenarios[0]!.retryable).toBeUndefined();
   });
 
   it("skips a step or scenario whose connector the fork does not have", async () => {
