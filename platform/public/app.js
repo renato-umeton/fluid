@@ -1,14 +1,16 @@
 // Fluid UI entry: session, persona switching, routing between views.
 import { api, initApi, state as apiState } from "./js/api.js";
-import { h, mount, short } from "./js/dom.js";
+import { h, s, mount, short } from "./js/dom.js";
 import * as workspace from "./js/views/workspace.js";
 import * as forkView from "./js/views/fork.js";
 import * as customize from "./js/views/customize.js";
 import * as fleet from "./js/views/fleet.js";
 import * as harvest from "./js/views/harvest.js";
 import * as about from "./js/views/about.js";
+import * as tab from "./js/views/tab.js";
+import { applyUiPreferences, describePreferences } from "./js/ui-prefs.js";
 
-const VIEWS = { workspace, fork: forkView, customize, fleet, harvest, about };
+const VIEWS = { workspace, fork: forkView, customize, fleet, harvest, about, tab };
 const STOCK_MIN_TAU = 0.85;
 const PERSONA_KEY = "fluid.persona";
 
@@ -17,6 +19,8 @@ const app = {
   persona: null,
   userId: null,
   fork: null,
+  /** The active fork's validated UI preferences (font, density, accent, extra tabs). */
+  ui: {},
   view: null,
   get mock() { return apiState.mock; },
   stockMinTau: STOCK_MIN_TAU,
@@ -29,6 +33,7 @@ const app = {
     if (!this.fork) return null;
     this.fork = await api.fork(this.fork.repo);
     renderForkPill();
+    await loadUi();
     return this.fork;
   },
   go(view, params = "") {
@@ -59,6 +64,10 @@ async function boot() {
     const btn = e.target.closest("[data-view]");
     if (btn) app.go(btn.dataset.view);
   });
+  document.getElementById("fork-tabs").addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-tab]");
+    if (btn) app.go("tab", `i=${btn.dataset.tab}`);
+  });
   window.addEventListener("hashchange", route);
   route();
 }
@@ -85,7 +94,45 @@ async function switchPersona(id) {
   app.fork = me.fork ?? (await api.createFork());
   document.querySelectorAll(".persona-btn").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.persona === id)));
   renderForkPill();
+  await loadUi();
   if (app.view) route();
+}
+
+/**
+ * Reads the active fork's ui/preferences.json (validated by the platform) and
+ * applies it: font, density, and accent as root attributes styles.css maps,
+ * and extra tabs in the rail. Nothing from the fork runs here.
+ */
+async function loadUi() {
+  let prefs = {};
+  try {
+    prefs = (await api.forkUi(app.fork.repo))?.preferences ?? {};
+  } catch (err) {
+    console.warn(`Fluid: UI preferences unavailable (${err.message}); using the defaults.`);
+  }
+  app.ui = applyUiPreferences(document.documentElement, prefs);
+  const tabs = app.ui.tabs ?? [];
+  document.getElementById("fork-tabs-group").hidden = tabs.length === 0 && !describePreferences(app.ui);
+  mount(document.getElementById("fork-tabs"), tabs.map((t, i) => h("li", {},
+    h("button", { class: "nav-btn", type: "button", dataset: { view: "tab", tab: String(i) } }, chartIcon(), t.title))));
+  mount(document.getElementById("rail-prefs"), describePreferences(app.ui) ? `From ui/preferences.json: ${describePreferences(app.ui)}` : "");
+  if (app.view === "tab") route();
+  else markCurrent();
+}
+
+function chartIcon() {
+  return s("svg", { viewBox: "0 0 16 16", "aria-hidden": "true" },
+    s("path", { d: "M2 14h12M4 12V8M8 12V4M12 12V6", fill: "none", stroke: "currentColor", "stroke-width": "1.6", "stroke-linecap": "round" }));
+}
+
+function markCurrent() {
+  const [name, query = ""] = location.hash.replace(/^#/, "").split("?");
+  const i = new URLSearchParams(query).get("i") ?? "0";
+  document.querySelectorAll(".nav-btn").forEach((b) => {
+    const current = b.dataset.view === app.view && (app.view !== "tab" || (name === "tab" && b.dataset.tab === i));
+    if (current) b.setAttribute("aria-current", "page");
+    else b.removeAttribute("aria-current");
+  });
 }
 
 function renderForkPill() {
@@ -106,14 +153,12 @@ function route() {
   if (app.view && app.view !== key) VIEWS[app.view].leave?.();
   app.view = key;
   for (const k of Object.keys(VIEWS)) document.getElementById(`view-${k}`).hidden = k !== key;
-  document.querySelectorAll(".nav-btn").forEach((b) => {
-    if (b.dataset.view === key) b.setAttribute("aria-current", "page");
-    else b.removeAttribute("aria-current");
-  });
+  markCurrent();
   const view = VIEWS[key];
-  document.getElementById("view-title").textContent = view.title;
+  const title = typeof view.title === "function" ? view.title(app, params) : view.title;
+  document.getElementById("view-title").textContent = title;
   document.getElementById("view-sub").textContent = typeof view.sub === "function" ? view.sub(app) : view.sub;
-  document.title = `${view.title} | Fluid`;
+  document.title = `${title} | Fluid`;
   Promise.resolve(view.render(document.getElementById(`view-${key}`), app, params)).catch((err) => {
     console.error(err);
     mount(document.getElementById(`view-${key}`), h("div", { class: "card-error", role: "alert" }, err.message));

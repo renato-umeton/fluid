@@ -617,6 +617,7 @@ dialog::backdrop { background: rgba(15, 25, 30, 0.45); }
 .viz .vm-fail { fill: var(--fail); }
 .viz .vm-track { fill: var(--panel-2); stroke: var(--line); }
 .viz .vm-accent { fill: var(--accent); }
+.viz .vm-link { fill: var(--link); }
 .viz .vm-line { stroke: var(--line-strong); stroke-width: 2; fill: none; }
 .viz .vm-dot { stroke: var(--panel); stroke-width: 2; }
 .viz rect[data-hit]:hover, .viz circle[data-hit]:hover { opacity: 0.8; }

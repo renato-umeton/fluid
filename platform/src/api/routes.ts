@@ -10,6 +10,7 @@ import { askFork, type PlatformExports } from "../runtime/loader.ts";
 import { bundledStockRelease, compareSemverDesc, listStockTags, publishStockRelease, readReleaseMetadata, readStockFiles, stockTagCommit, unrecordedStockTags } from "../stock/publish.ts";
 import type { ReleaseMetadata } from "../stock/releases.ts";
 import { runGate } from "../gate/run.ts";
+import type { GateResult } from "../gate/tiers.ts";
 import type { RunTimeRecord } from "../durable/user-ledger.ts";
 import type { RunSummary } from "../durable/fleet.ts";
 import { ledgerStub, quotaStub, runsStub } from "../stubs.ts";
@@ -21,7 +22,9 @@ import { isSeededRepo, SEED_DEFAULT, SEED_MAX } from "../fleet/seed-catalog.ts";
 import { cloneRepo, fastForward, fetchBranch, pushBranch } from "../git/ops.ts";
 import type { Json } from "../lib/json.ts";
 import { shortRef } from "../runtime/refs.ts";
-import { headOf, openRepo } from "../runtime/repo-files.ts";
+import { headOf, openRepo, readTextFile } from "../runtime/repo-files.ts";
+import { parseUiPreferences, UI_PREFERENCES_PATH } from "../ui/preferences.ts";
+import { aggregateCharts, CHART_LIMITS } from "../ui/charts.ts";
 import { DEMO_OVERLAY, demoReleaseFiles } from "../stock/releases.ts";
 import { appExports, ensureRun, repoRemote, startGateInstance } from "../workflows/common.ts";
 import { upgradeTargets } from "../workflows/upgrade.ts";
@@ -232,6 +235,41 @@ route("GET", "/api/forks/:repo", async (rc, { repo }) => {
 	const info = await forkInfoOrNull(rc.env, name);
 	if (!info) throw new HttpError(404, "fork not found");
 	return json(info);
+});
+
+// Fork-owned UI preferences (ui/preferences.json on main), validated against the platform schema.
+// An invalid file is reported and the defaults are served; the gate keeps invalid files off main.
+route("GET", "/api/forks/:repo/ui", async (rc, { repo }) => {
+	const name = repoParam(repo!);
+	await takeReadQuota(rc);
+	await requirePublicRepo(rc.env, name);
+	let head: string | null;
+	let text: string | null = null;
+	{
+		using handle = await openRepo(rc.env.ARTIFACTS, name);
+		head = await headOf(handle, "main");
+		if (head) text = await readTextFile(handle, head, UI_PREFERENCES_PATH);
+	}
+	if (!head) throw new HttpError(404, "fork has no main branch");
+	const parsed = parseUiPreferences(text);
+	return json({ repo: name, commit: head, path: UI_PREFERENCES_PATH, present: parsed.present, valid: parsed.ok, preferences: parsed.ok ? parsed.preferences : {}, ...(parsed.ok ? {} : { errors: parsed.errors }) });
+});
+
+// Chart data for the session's own fork: its run-time ledger, build-time intents, and gate history.
+route("GET", "/api/me/charts", async (rc) => {
+	const session = await requireSession(rc);
+	const repo = forkRepoName(session.userId);
+	if (!(await fleetStub(rc.env).get(repo))) throw new HttpError(404, "you have no fork yet");
+	await takeReadQuota(rc);
+	const [ledger, intents, gates] = await Promise.all([
+		ledgerStub(rc.env, session.userId).list(CHART_LIMITS.ledger),
+		readIntents(rc.env, repo, "main").catch((error: unknown) => {
+			if (error instanceof ForkNotFoundError) return [];
+			throw error;
+		}),
+		fleetStub(rc.env).gates(repo),
+	]);
+	return json(aggregateCharts({ repo, ledger, intents, gates: gates as unknown as GateResult[] }));
 });
 
 route("POST", "/api/ask", async (rc) => {

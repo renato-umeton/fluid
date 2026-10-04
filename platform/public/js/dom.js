@@ -1,10 +1,20 @@
 // Small DOM helpers. h() builds elements; text is always set as text, never HTML.
 
+const SVG_NS = "http://www.w3.org/2000/svg";
+
 export function h(tag, attrs = {}, ...children) {
-  const el = document.createElement(tag);
+  return build(document.createElement(tag), attrs, children);
+}
+
+/** h() for inline SVG elements (charts). Same rules: text only through text nodes. */
+export function s(tag, attrs = {}, ...children) {
+  return build(document.createElementNS(SVG_NS, tag), attrs, children);
+}
+
+function build(el, attrs, children) {
   for (const [key, value] of Object.entries(attrs || {})) {
     if (value === undefined || value === null || value === false) continue;
-    if (key === "class") el.className = value;
+    if (key === "class") el.setAttribute("class", value);
     else if (key === "text") el.textContent = value;
     else if (key === "dataset") Object.assign(el.dataset, value);
     else if (key === "style" && typeof value === "object") Object.assign(el.style, value);

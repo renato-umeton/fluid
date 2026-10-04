@@ -86,3 +86,11 @@ describe("allowlists", () => {
 		expect(validateUiPreferences(DEFAULT_UI_PREFERENCES).ok).toBe(true);
 	});
 });
+
+describe("browser sanitizePreferences", () => {
+	it("keeps only allowlisted values, whatever the platform sent", async () => {
+		const ui = await import("../public/js/ui-prefs.js");
+		expect(ui.sanitizePreferences({ font: "url(x)", accent: "teal", density: "compact", tabs: [{ title: "Charts", widgets: ["override-rate", "script"] }, { title: "", widgets: ["gate-history"] }], extra: 1 }))
+			.toEqual({ accent: "teal", density: "compact", tabs: [{ title: "Charts", widgets: ["override-rate"] }] });
+	});
+});

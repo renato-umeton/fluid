@@ -10,6 +10,7 @@ const EXAMPLES = [
   "Add a REDCap connector so research mode reports enrollment for my protocols",
   "Lower my confidence threshold to 0.6",
   "Raise my confidence threshold to 0.9",
+  "Use Palatino fonts and add a tab with charts",
 ];
 const POLL_MS = 600;
 const runs = new Map(); // persona id -> { runId, run }
@@ -95,7 +96,9 @@ function paint(run) {
     return;
   }
   mount($("#run-status"), statusTag(run.status));
-  mount($("#run-steps"), h("p", { class: "small", style: { marginBottom: "10px" } }, h("strong", {}, "Request: "), run.request ?? ""), renderTimeline(run.steps));
+  mount($("#run-steps"), h("p", { class: "small", style: { marginBottom: "10px" } }, h("strong", {}, "Request: "), run.request ?? ""), renderTimeline(run.steps),
+    run.status === "failed" && run.error ? h("div", { class: "explain", role: "status", style: { marginTop: "10px" } }, h("strong", {}, "Why the run stopped: "), run.error) : null,
+    run.intent?.mapped?.length ? h("div", { class: "explain", style: { marginTop: "10px" } }, h("strong", {}, "How your request was mapped: "), h("ul", { class: "framing" }, run.intent.mapped.map((m) => h("li", {}, m)))) : null);
   mount($("#run-branch"), run.branch ? h("code", {}, `${run.branch}${run.commit ? ` at ${run.commit.slice(0, 7)}` : ""}`) : "");
   mount($("#run-diff"), renderDiff(run.diff));
   mount($("#run-suggestions"), run.suggestions?.length ? run.suggestions.map((s) => suggestion(run, s)) : h("p", { class: "empty" }, "Suggestions appear after the change is pushed."));

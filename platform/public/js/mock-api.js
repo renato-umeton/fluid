@@ -5,6 +5,7 @@
 // with timers so every demo scene works without a backend.
 import { SYNTHETIC } from "./synthetic.js";
 import { cannedCard } from "./mock-canned.js";
+import { sanitizePreferences, FONT_LABELS, WIDGET_LABELS } from "./ui-prefs.js";
 
 const STOCK_MIN_TAU = 0.85;
 const STOCK_TAG = "v1.0.0";
@@ -34,6 +35,7 @@ const db = {
   harvest: [],
   subscribers: new Set(),
   records: {},
+  ui: {},
 };
 const sessionSuffix = hex(4);
 let runCounter = 0;
@@ -86,6 +88,8 @@ const routes = [
   ["GET", /^\/api\/me$/, () => ({ userId: db.userId, persona: db.personaId, fork: currentFork() })],
   ["POST", /^\/api\/forks$/, () => provisionFork()],
   ["GET", /^\/api\/forks\/([^/]+)$/, (m) => forkInfo(m[1])],
+  ["GET", /^\/api\/forks\/([^/]+)\/ui$/, (m) => forkUi(m[1])],
+  ["GET", /^\/api\/me\/charts$/, () => chartData()],
   ["POST", /^\/api\/ask$/, (m, body) => ask(body)],
   ["POST", /^\/api\/override$/, (m, body) => override(body)],
   ["GET", /^\/api\/ledger\/([^/]+)$/, (m) => db.ledgers[m[1]] ?? []],
@@ -296,10 +300,11 @@ function startCustomize(body) {
   const text = String(body?.request ?? "").trim();
   if (!text) throw new HttpError(400, "Describe the change you want");
   const tauMatch = text.match(/\b(0?\.\d+|1(?:\.0+)?)\b/);
-  const script = /redcap/i.test(text) ? redcapScript : /(threshold|tau|τ)/i.test(text) && tauMatch ? tauScript(Number(tauMatch[1])) : genericScript;
+  const uiMapping = /redcap/i.test(text) || (/(threshold|tau|τ)/i.test(text) && tauMatch) ? null : mapUiRequest(text);
+  const script = /redcap/i.test(text) ? redcapScript : /(threshold|tau|τ)/i.test(text) && tauMatch ? tauScript(Number(tauMatch[1])) : uiMapping ? uiScript(uiMapping) : genericScript;
   const id = `run_${hex(10)}`;
   const intentId = nextIntentId();
-  const slug = /redcap/i.test(text) ? "redcap-enrollment" : script === genericScript ? "custom-change" : "tau-threshold";
+  const slug = /redcap/i.test(text) ? "redcap-enrollment" : uiMapping ? "ui-preferences" : script === genericScript ? "custom-change" : "tau-threshold";
   const run = {
     id, kind: "customize", status: "running", repo: fork.repo, request: text, startedAt: now(),
     branch: null, commit: null, diff: [], intent: null, suggestions: [], gate: null,
@@ -596,6 +601,116 @@ function genericScript(run) {
       },
     },
   ];
+}
+
+// ---------- fork UI preferences (ui/preferences.json) ----------
+
+function forkUi(repo) {
+  const fork = db.forks[repo];
+  if (!fork) throw new HttpError(404, `Fork ${repo} not found`);
+  const preferences = db.ui[repo] ?? {};
+  return { repo, commit: fork.head, path: "ui/preferences.json", present: Boolean(db.ui[repo]), valid: true, preferences };
+}
+
+/** A small stand-in for the platform's request mapping (platform/src/agents/ui-recipe.ts). */
+function mapUiRequest(text) {
+  const out = { prefs: {}, notes: [] };
+  const font = [["palatino", /palatino|book antiqua|lino ?type/i], ["georgia", /georgia|\bserif\b(?!.*sans)/i], ["humanist-sans", /humanist|optima|sans/i], ["mono", /\bmono/i], ["system", /system font/i]].find(([, re]) => re.test(text));
+  if (font) { out.prefs.font = font[0]; out.notes.push(`font "${font[0]}" (${FONT_LABELS[font[0]]})`); }
+  if (/\b(compact|dense|tighter)\b/i.test(text)) { out.prefs.density = "compact"; out.notes.push('density "compact"'); }
+  else if (/\b(comfortable|spacious|roomy)\b/i.test(text)) { out.prefs.density = "comfortable"; out.notes.push('density "comfortable"'); }
+  const accent = /\b(colou?r|accent|theme|buttons?|links?)\b/i.test(text) && [["teal", /teal|cyan/i], ["blue", /blue|navy/i], ["violet", /violet|purple/i], ["amber", /amber|orange|gold/i], ["green", /green/i], ["rose", /rose|pink|red\b/i], ["slate", /slate|gr[ae]y/i]].find(([, re]) => re.test(text));
+  if (accent) { out.prefs.accent = accent[0]; out.notes.push(`accent "${accent[0]}"`); }
+  if (/\b(tabs?|dashboards?|pages?)\b/i.test(text) && /\b(charts?|graphs?|dashboards?|stats|metrics)\b/i.test(text)) {
+    const title = /dashboard/i.test(text) ? "Dashboard" : "Charts";
+    out.tab = { title, widgets: Object.keys(WIDGET_LABELS) };
+    out.notes.push(`tab "${title}" with the default set of ${out.tab.widgets.length} charts`);
+  }
+  return out.notes.length ? out : null;
+}
+
+function uiScript(mapping) {
+  return (run) => {
+    const { fork, intentId, persona } = run._ctx;
+    const next = { ...(db.ui[fork.repo] ?? {}), ...mapping.prefs };
+    if (mapping.tab) next.tabs = [...(next.tabs ?? []).filter((t) => t.title !== mapping.tab.title), mapping.tab].slice(-4);
+    const prefs = sanitizePreferences(next);
+    const assert = [
+      ...["font", "density", "accent"].filter((k) => prefs[k]).map((k) => ({ path: k, equals: prefs[k] })),
+      ...(prefs.tabs ?? []).map((t) => ({ path: "tabs", some: { path: "title", equals: t.title } })),
+    ];
+    return [
+      { name: "Read the fork's intent ledger", ms: 700, done: (r, v) => { v.detail = `${db.intents[fork.repo].length} build-time records read`; } },
+      { name: "Plan the change", ms: 800, done: (r, v) => { v.detail = `Matched the ui recipe. Mapped: ${mapping.notes.join("; ")}`; } },
+      {
+        name: "Write code and load it in an isolate", ms: 700,
+        done: (r, v) => {
+          run.diff = [{ path: "ui/preferences.json", status: db.ui[fork.repo] ? "modified" : "added", additions: 8, deletions: 0, summary: `Mapped: ${mapping.notes.join("; ")}` }];
+          v.detail = "ui/preferences.json matches the UI preferences schema; no runtime code changed, so answer cards keep the stock contract";
+        },
+      },
+      {
+        name: "Record build-time intent", ms: 500,
+        done: (r, v) => {
+          run.intent = { id: intentId, author: `user:${persona.id}`, agent: "customization-agent", request: run._ctx.text, purpose: "Change how this fork's control plane looks for its owner. UI preferences are declarative, validated by the platform, and never change answer cards.", modes_affected: [], files: ["ui/preferences.json", `.intent/${intentId}.json`], tests_added: [], stock_tag: fork.stockTag, recipe: "ui", mapped: mapping.notes };
+          run.diff.push({ path: `.intent/${intentId}.json`, status: "added", additions: 14, deletions: 0, summary: "Why this change exists" });
+          v.detail = `.intent/${intentId}.json`;
+        },
+      },
+      pushStep(run),
+      suggestStep(run, () => [{
+        id: `t-${intentId}-ui-preferences`, title: "UI preferences stay as requested", file: "tests/user/manifest.json", intentId, decision: null,
+        rationale: `Checks the purpose of ${intentId}: ui/preferences.json keeps the requested preferences. The platform runs this config probe itself.`,
+        probe: { id: `t-${intentId}-ui-preferences`, kind: "config", file: "ui/preferences.json", assert },
+      }]),
+      ...gateSteps(run, []),
+      {
+        name: "Merge to main and deploy", ms: 700,
+        done: (r, v) => {
+          db.ui[fork.repo] = prefs;
+          fork.head = hex(40);
+          fork.branches = fork.branches.filter((b) => b.name !== run.branch);
+          fork.branches[0].commit = fork.head;
+          db.intents[fork.repo].unshift({ ...run.intent, commit: fork.head.slice(0, 7), at: now() });
+          v.detail = `main is now ${fork.head.slice(0, 7)}; the UI applies the new preferences`;
+        },
+      },
+    ];
+  };
+}
+
+/** Same shape as GET /api/me/charts (platform/src/ui/charts.ts), over the mock session's data. */
+function chartData() {
+  const fork = currentFork();
+  const intents = ["clinical", "research", "administrative", "multi"];
+  const zero = () => ({ clinical: 0, research: 0, administrative: 0, multi: 0 });
+  const records = db.ledgers[db.userId] ?? [];
+  const days = {};
+  const confidence = Array.from({ length: 10 }, (_, i) => ({ from: i / 10, to: (i + 1) / 10, ...zero() }));
+  const byIntent = Object.fromEntries(intents.map((k) => [k, { total: 0, overridden: 0 }]));
+  const kinds = {};
+  let overridden = 0;
+  for (const r of records) {
+    if (!intents.includes(r.intent)) continue;
+    const day = String(r.at ?? now()).slice(0, 10);
+    (days[day] ??= zero())[r.intent]++;
+    confidence[Math.min(9, Math.max(0, Math.floor(Number(r.confidence) * 10)))][r.intent]++;
+    byIntent[r.intent].total++;
+    if (r.override) { byIntent[r.intent].overridden++; overridden++; }
+    for (const src of r.sources ?? []) { const k = String(src).split(":")[0] || "other"; kinds[k] = (kinds[k] ?? 0) + 1; }
+  }
+  const total = intents.reduce((n, k) => n + byIntent[k].total, 0);
+  return {
+    repo: fork?.repo ?? null,
+    generatedAt: now(),
+    answers: total,
+    answersByIntent: Object.entries(days).sort().map(([day, c]) => ({ day, ...c })),
+    confidence,
+    overrides: { total, overridden, byIntent },
+    sourcesByKind: Object.entries(kinds).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([kind, count]) => ({ kind, count })),
+    intentTimeline: (fork ? db.intents[fork.repo] ?? [] : []).map((r) => ({ id: r.id, at: r.at ?? null, agent: r.agent ?? "mothership", request: r.request, files: r.files?.length ?? 0 })).sort((a, b) => String(a.at).localeCompare(String(b.at))),
+    gateHistory: (fork ? db.gates[fork.repo] ?? [] : []).slice(0, 20).reverse().map((g) => ({ at: g.at, ref: g.ref, commit: g.commit, passed: g.passed, tiers: Object.fromEntries(Object.entries(g.tiers).map(([t, v]) => [t, { passed: v.total - v.failed, total: v.total }])) })),
+  };
 }
 
 // ---------- fleet ----------

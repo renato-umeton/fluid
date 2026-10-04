@@ -65,6 +65,10 @@ export const api = {
   me: () => call("GET", "/api/me"),
   createFork: () => call("POST", "/api/forks", {}),
   fork: (repo) => call("GET", `/api/forks/${enc(repo)}`),
+  /** The fork's validated ui/preferences.json (font, density, accent, extra tabs). */
+  forkUi: (repo) => call("GET", `/api/forks/${enc(repo)}/ui`),
+  /** Chart data over the session's own fork: ledger, intents, gates. */
+  charts: () => call("GET", "/api/me/charts"),
   ask: (body) => call("POST", "/api/ask", body),
   override: (answer_id, mode) => call("POST", "/api/override", { answer_id, mode }),
   ledger: (userId) => call("GET", `/api/ledger/${enc(userId)}`),
