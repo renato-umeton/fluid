@@ -142,6 +142,22 @@ export async function listStockTags(env: Env): Promise<string[]> {
 		.sort(compareSemverDesc);
 }
 
+/**
+ * Stock tags (newest first, as listStockTags returns them) that the fleet has not
+ * recorded, oldest first. A new deployment against an existing stock repo starts
+ * with an empty fleet, and publishing an existing tag records only that one tag.
+ */
+export function unrecordedStockTags(stockTagsNewestFirst: string[], recorded: Iterable<string>): string[] {
+	const known = new Set(recorded);
+	return stockTagsNewestFirst.filter((tag) => !known.has(tag)).reverse();
+}
+
+/** The commit a stock tag points to, or null when the tag is missing. */
+export async function stockTagCommit(env: Env, tag: string): Promise<string | null> {
+	using repo = await env.ARTIFACTS.get(STOCK_REPO);
+	return await headOf(repo, tag);
+}
+
 export function compareSemverDesc(a: string, b: string): number {
 	const pa = a.slice(1).split(/[.-]/).map((x) => Number(x) || 0);
 	const pb = b.slice(1).split(/[.-]/).map((x) => Number(x) || 0);

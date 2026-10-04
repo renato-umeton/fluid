@@ -7,7 +7,7 @@ import { scrubText } from "../git/tokens.ts";
 import { forkRepoName, isValidRepoName, newIntentId, newSandboxUserId, STOCK_REPO, userIdFromForkRepo } from "../lib/names.ts";
 import { readCookie, safeEqual, SESSION_COOKIE, sessionCookieHeader, signSession, verifySession, type Session } from "../lib/session.ts";
 import { askFork, type PlatformExports } from "../runtime/loader.ts";
-import { bundledStockRelease, compareSemverDesc, listStockTags, publishStockRelease, readReleaseMetadata, readStockFiles } from "../stock/publish.ts";
+import { bundledStockRelease, compareSemverDesc, listStockTags, publishStockRelease, readReleaseMetadata, readStockFiles, stockTagCommit, unrecordedStockTags } from "../stock/publish.ts";
 import type { ReleaseMetadata } from "../stock/releases.ts";
 import { runGate } from "../gate/run.ts";
 import type { RunTimeRecord } from "../durable/user-ledger.ts";
@@ -173,6 +173,13 @@ async function recordRelease(env: Env, tag: string, release: ReleaseMetadata | n
 	await fleet.addRelease({ tag, notes: release.notes, safety: release.safety, date: release.date, graceDays: release.graceDays, graceUntil: release.graceUntil, commit });
 }
 
+/** Records every release tag in stock that the fleet does not know yet (with its safety metadata). */
+async function syncStockReleases(env: Env): Promise<string[]> {
+	const missing = unrecordedStockTags(await listStockTags(env), await fleetStub(env).stockTags());
+	for (const tag of missing) await recordRelease(env, tag, await readReleaseMetadata(env, tag), (await stockTagCommit(env, tag)) ?? "");
+	return missing;
+}
+
 // ---------- routes ----------
 
 route("GET", "/api/health", async () => json({ ok: true }));
@@ -322,7 +329,8 @@ route("POST", "/api/admin/stock/publish", async (rc) => {
 	const tag = typeof body.tag === "string" ? body.tag : bundled.tag;
 	const result = await publishStockRelease(rc.env, { ...bundled, tag, notes: typeof body.notes === "string" ? body.notes : undefined, safety: body.safety === true });
 	await recordRelease(rc.env, result.tag, result.release, result.commit);
-	return json(result, result.alreadyPublished ? 200 : 201);
+	const synced = await syncStockReleases(rc.env);
+	return json({ ...result, synced }, result.alreadyPublished ? 200 : 201);
 });
 
 route("POST", "/api/admin/forks/:repo/delete", async (rc, { repo }) => {

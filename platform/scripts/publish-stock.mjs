@@ -9,10 +9,11 @@ if (!adminToken) {
 	process.exit(2);
 }
 
-const res = await fetch(`${base}/api/admin/stock/publish`, { method: "POST", headers: { "x-fluid-admin": adminToken } });
+const res = await fetch(`${base}/api/admin/stock/publish`, { method: "POST", headers: { "content-type": "application/json", "x-fluid-admin": adminToken }, body: "{}" });
 const body = await res.json().catch(() => ({}));
 if (!res.ok) {
 	console.error(`publish-stock: ${res.status} ${body.error ?? res.statusText}`);
 	process.exit(1);
 }
 console.log(body.alreadyPublished ? `stock ${body.tag} already published at ${body.commit}` : `published stock ${body.tag} at ${body.commit} (${body.files} files)`);
+if (body.synced?.length) console.log(`recorded earlier stock tags in the fleet: ${body.synced.join(", ")}`);
