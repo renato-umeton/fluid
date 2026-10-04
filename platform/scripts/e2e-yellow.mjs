@@ -156,7 +156,8 @@ try {
 	const badYellow = await timed("bad change: yellow to rollback", () => waitYellow(badYellowId));
 	timings["bad change: landed to rolled back"] = `${((Date.now() - badT0) / 1000).toFixed(1)} s from request`;
 	const failure = badYellow.failure ?? {};
-	check("bad change: the soak failed on ledger provenance", badYellow.status === "failed" && /ledger|override|platform-override/.test(String(failure.scenario)), `${failure.tier} ${failure.scenario} at step ${failure.step}: ${failure.detail}`);
+	// Several scenarios read ledger records; the first one in suite order reports the wrong fork_commit.
+	check("bad change: the soak failed on ledger provenance", badYellow.status === "failed" && /fork_commit/.test(String(failure.detail)) && /build-cache/.test(String(failure.detail)), `${failure.tier} ${failure.scenario} at step ${failure.step}: ${failure.detail}`);
 	const hRolled = await health(repo);
 	check("bad change: the fork is rolled back and keeps the last green commit", hRolled.health.health === "rolled_back" && hRolled.health.lastGreenCommit === good.run.commit && hRolled.health.rolledBackFrom === bad.run.commit, `${hRolled.health.health}; last green ${short(hRolled.health.lastGreenCommit)}; rolled back from ${short(hRolled.health.rolledBackFrom)}`);
 	const afterRollback = await call("GET", `/api/forks/${repo}`);
