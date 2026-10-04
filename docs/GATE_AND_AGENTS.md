@@ -7,7 +7,7 @@ How Fluid's control plane (`platform/`) gates fork changes and runs its agents. 
 All agent work runs in Workflows, declared in `platform/cloudflare.config.ts` and called through `ctx.exports`. Every run writes its timeline to a `Runs` Durable Object (`GET /api/runs/:runId`), and fork status changes go to the `Fleet` Durable Object, which streams them over `GET /api/fleet/stream`.
 
 | Workflow | Name | One instance per | What it does |
-| --- | --- | --- | --- |
+| :-- | :-- | :-- | :-- |
 | `GateWorkflow` | `fluid-gate` | push (repo, branch, commit) | Runs tiers 1 to 3 against the pushed commit. On a pass `main` fast-forwards to that commit (see "Main only fast-forwards"); on a fail `main` is untouched and a repair starts. `repair/*` branches are only checked, unless the user applies one. |
 | `CustomizeWorkflow` | `fluid-customize` | user request | Plans the change (a recipe or the agent model), checks its imports and loads it in an isolate (a model-written change gets up to 2 repairs, see "Customization checks and repairs"), writes `.intent/<id>.json`, has the suggester propose tier 3 tests, waits for the user's decisions, commits on `work/<slug>` with an `Intent-Id:` trailer, records the gate link, pushes, starts the gate, and waits for the gate's (and any repair's) event. |
 | `RepairWorkflow` | `fluid-repair` | failed gate | Opens `repair/<short-sha>` with `.repair/<short-sha>.md`, a repair intent record (`relies_on` lists the records it used), and a fix when a rule applies (restore tau, revert a customization that broke the clinical or research floor). It checks the fix in check mode and never merges it; the user applies it. |
@@ -202,7 +202,7 @@ Messages that still fail after 5 deliveries go to the dead letter queue `fluid-e
 These numbers come from `cf dev` with Artifacts and AI remote. The first table is the latest run of `scripts/e2e-stage3.mjs --seed 30` after the Stage 3 review fixes (release v1.8.0, 31 forks, seeds pinned to v1.5.0):
 
 | Step | Time |
-| --- | --- |
+| :-- | :-- |
 | Provision a fork | 7 s |
 | REDCap customization from request to fast-forward of main, including the test decisions | 15 s |
 | Lower-tau customization through the failed gate and the linked repair | 12 s |
@@ -218,7 +218,7 @@ Of the 31 forks, 30 passed, 6 of them after the merge agent resolved a conflict.
 `scripts/e2e-yellow.mjs` against production (fork on stock v1.10.0, stock tier 10 scenarios plus 1 skipped, user tier 1 scenario) and against `cf dev` with remote Artifacts:
 
 | Step | Production | Local |
-| --- | --- | --- |
+| :-- | :-- | :-- |
 | Good change, request to merged (gate, including test decisions) | 17.9 s | 12.1 s |
 | Good change, yellow soak to green (3 passes, browser checks once) | 38.9 s | 48.2 s |
 | Admin test change, request to merged (tiers 1 to 3 passed) | 15.1 s | 10.1 s |

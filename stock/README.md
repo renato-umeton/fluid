@@ -34,7 +34,7 @@ passes those probes too (`tests/unit/demo-overlay.test.ts`).
 (shapes in `app/types.ts`). `env` is:
 
 | key          | meaning                                                                 |
-| ------------ | ----------------------------------------------------------------------- |
+| :-- | :-- |
 | `fluidToml`  | text of the fork's `fluid.toml` (stock defaults if absent)              |
 | `forkCommit` | commit that produced the answer, recorded in the ledger                 |
 | `data`       | synthetic data, keys as in `synthetic/manifest.json`                    |
@@ -91,7 +91,7 @@ a stock scenario id.
 A scenario is an ordered list of steps. Step kinds:
 
 | kind       | does                                                              | assertion target              |
-| ---------- | ----------------------------------------------------------------- | ----------------------------- |
+| :-- | :-- | :-- |
 | `ask`      | asks the live fork (`request`, optional `withHistory`, `focusMode`) | the answer card               |
 | `override` | records the user's mode override on `answer`; `reask` asks the named ask step again in that mode | `{ record, card? }` |
 | `ledger`   | reads the run-time record of `answer`                             | the record, or null           |
