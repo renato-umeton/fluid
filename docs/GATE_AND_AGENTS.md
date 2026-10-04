@@ -9,7 +9,7 @@ All agent work runs in Workflows, declared in `platform/cloudflare.config.ts` an
 | Workflow | Name | One instance per | What it does |
 | --- | --- | --- | --- |
 | `GateWorkflow` | `fluid-gate` | push (repo, branch, commit) | Runs tiers 1 to 3 against the pushed commit. On a pass `main` fast-forwards to that commit (see "Main only fast-forwards"); on a fail `main` is untouched and a repair starts. `repair/*` branches are only checked, unless the user applies one. |
-| `CustomizeWorkflow` | `fluid-customize` | user request | Plans the change (a recipe or the agent model), loads it in an isolate, writes `.intent/<id>.json`, has the suggester propose tier 3 tests, waits for the user's decisions, commits on `work/<slug>` with an `Intent-Id:` trailer, records the gate link, pushes, starts the gate, and waits for the gate's (and any repair's) event. |
+| `CustomizeWorkflow` | `fluid-customize` | user request | Plans the change (a recipe or the agent model), checks its imports and loads it in an isolate (a model-written change gets up to 2 repairs, see "Customization checks and repairs"), writes `.intent/<id>.json`, has the suggester propose tier 3 tests, waits for the user's decisions, commits on `work/<slug>` with an `Intent-Id:` trailer, records the gate link, pushes, starts the gate, and waits for the gate's (and any repair's) event. |
 | `RepairWorkflow` | `fluid-repair` | failed gate | Opens `repair/<short-sha>` with `.repair/<short-sha>.md`, a repair intent record (`relies_on` lists the records it used), and a fix when a rule applies (restore tau, revert a customization that broke the clinical or research floor). It checks the fix in check mode and never merges it; the user applies it. |
 | `ReleaseWorkflow` | `fluid-release` | release | Starts one upgrade per fork that still needs the tag, in batches of 20 with a 1 second pause between batches. |
 | `UpgradeWorkflow` | `fluid-upgrade` | (tag, fork) | Creates `upgrade/<tag>`, merges the stock tag (the merge agent resolves conflicts), and runs the gate at the new tag. It then fast-forwards `main` if `auto_upgrade` is set, or records a pending upgrade for one-tap approval. On a fail the fork stays pinned and a repair opens. |
@@ -32,6 +32,27 @@ If a step fails after all its retries, the run is marked `failed` with the error
 - **Gateway backstop.** The `fluid` AI Gateway itself allows at most 300 requests per minute (fixed window), set with `cf ai-gateway gateways update fluid --rate-limiting-limit 300 --rate-limiting-interval 60 --rate-limiting-technique fixed`. The update is a full PUT, so it repeats every current setting unchanged (`workers_ai_billing_mode` stays `postpaid`, `byok_only` stays false, no spend limits); rate limiting is not billed. It caps every model caller together, including the platform's own agents, if a code path ever skips the per-repo and global budgets.
 - **Repairs.** Repair branches are never merged automatically. Applying one (`POST /api/forks/:repo/repairs/:sha/apply`, or the Apply button) gates it in merge mode, and `main` fast-forwards to it only if every tier passes.
 
+## Customization checks and repairs
+
+Nothing is committed until the planned change passes these checks, so a failed customization never leaves a branch behind (`platform/src/agents/attempts.ts`, `platform/src/agents/imports.ts`, `validateCandidate` in `platform/src/workflows/customize.ts`):
+
+1. **File rules.** At most 3 files, only under `app/`, `intent/`, `policies/`, `connectors/`, or exactly `ui/preferences.json`; each file parses, and `ui/preferences.json` matches its schema.
+2. **Static imports.** Every import in a changed runtime file must resolve to a file in the fork's tree or in the change, under the name the module map uses (`foo.ts` is loaded as `foo.js`, JSON keeps its name). Bare package specifiers are rejected. This catches a plan such as a wrapper of `app/cards.ts` that imports a `./cards.base.js` it never wrote, before any isolate loads.
+3. **Load and smoke test.** The fork is loaded with the change overlaid in a throwaway isolate variant and must answer one question with the card contract.
+
+For a model-written change, any failure in these steps (or a plan that is not valid JSON) goes back to the model with the exact error, at most 2 times. A recipe runs once. If the change still fails, the run ends as `failed` with a plain explanation in `error` and a "Nothing committed" step: what was attempted, why it could not be loaded (first line of the error, no stack, tokens redacted), and what to try. A recipe that cannot apply (the REDCap connector already exists, a fifth tab) ends the same way.
+
+The planner prompt states that look and layout (fonts, density, colors, tabs, charts, dashboards) never go into answer card code, that card JSON stays the stock contract, and that such requests write only `ui/preferences.json`.
+
+## UI preferences
+
+`ui/preferences.json` is a declarative, fork-owned file that changes how the control plane looks for the fork's owner (schema in `platform/src/ui/preferences.ts`, described in `docs/UI.md`). It is never runtime code: the loader ignores it and no fork code runs in the browser.
+
+- **Recipe.** Requests about fonts, density, accent colors, or a tab with charts or a dashboard match the `ui` recipe (`platform/src/agents/ui-recipe.ts`), checked after the REDCap and tau recipes. It maps the request onto the closest allowlisted values, merges them into the current file (a tab with the same title is replaced; a fifth tab is refused), and records each mapping in the run, the diff note, and the intent record's `mapped` field. For example, "Always use palatino lino type kind of fonts and add a tab with charts" maps "palatino lino type kind of fonts" to the `palatino` stack and "a tab with charts" to a tab titled "Charts" with the default set of all 6 widgets. Named widgets ("override rate and confidence") narrow the set, and "called X" names the tab.
+- **Intent and tests.** The build-time intent lists `ui/preferences.json` and the record, with no modes affected. The suggester proposes one tier 3 probe of kind `config` with `file: "ui/preferences.json"`, asserting each preference (`font equals palatino`, `tabs some title equals Charts`).
+- **Tier 3 on the platform.** Stock's runner reads config probes as TOML only, so stock is unchanged: the gate splits config probes whose `file` is `ui/preferences.json` out of the tier 3 manifest, evaluates them on the platform against the parsed file with the runner's assertion semantics (`platform/src/gate/ui-check.ts`, checked against the runner in `test/ui-gate.test.ts`), and merges the results into the user tier.
+- **Tier 1 platform invariant.** When the pushed commit has `ui/preferences.json`, tier 1 gains probe `ui-preferences-valid`. An invalid file (bad JSON, a value off the allowlist, an unknown key, too many tabs or widgets) fails it with `op: "schema"`, the file, and the schema errors, next to whatever the stock suites found.
+
 ## Main only fast-forwards
 
 `main` moves only to a commit a gate passed, and only by fast-forward (`git push` without force, so the remote refuses it if `main` moved meanwhile):
@@ -53,6 +74,8 @@ Stock's `fluid.toml` ships `harvest_opt_in = false`, new forks write both prefer
 
 ```
 POST /api/customize                 {repo, request} -> {runId}             session (own fork) or admin
+GET  /api/forks/:repo/ui            -> {repo, commit, path, present, valid, preferences, errors?}   validated ui/preferences.json on main
+GET  /api/me/charts                 -> chart aggregates for the session's own fork (ledger, intents, gates)
 GET  /api/runs/:runId               -> Run
 POST /api/suggestions/:runId/decide {testId, decision, edited?} -> Run     edit sends edited: {assert: [...]}
 GET  /api/gates/:repo               -> GateResult[] (newest first, last 20)

@@ -88,8 +88,14 @@ flowchart TB
 
 ### Customization agent and test suggester (spec 6.3, 11)
 
-- **Code.** `platform/src/workflows/customize.ts`. Known requests (the REDCap connector, τ changes) use fixed recipes in `platform/src/agents/recipes.ts`. Other requests go to the agent model, whose plan is checked before anything runs it: at most 3 files, only under `app/`, `intent/`, `policies/`, or `connectors/`, each one must parse, and the change is validated in an isolate. The suggester (`platform/src/agents/suggester.ts`) proposes tier 3 probes from the diff and the intent record, plus probes next to the nearest invariants when the change touches τ, the intent engine, or a mode contract. The workflow waits for the user's accept, edit, or reject decisions (`step.waitForEvent`), commits on `work/<slug>`, pushes, and starts the gate.
+- **Code.** `platform/src/workflows/customize.ts`. Known requests (the REDCap connector, τ changes, and UI look and layout) use fixed recipes in `platform/src/agents/recipes.ts` and `platform/src/agents/ui-recipe.ts`. Other requests go to the agent model, whose plan is checked before anything runs it: at most 3 files, only under `app/`, `intent/`, `policies/`, or `connectors/` (or `ui/preferences.json`), each one must parse, every import must resolve to a file in the fork or the change, and the change is validated in an isolate. A failure goes back to the model with the exact error for at most 2 repairs; after that the run ends with a plain explanation and nothing is committed (`platform/src/agents/attempts.ts`). The suggester (`platform/src/agents/suggester.ts`) proposes tier 3 probes from the diff and the intent record, plus probes next to the nearest invariants when the change touches τ, the intent engine, or a mode contract. The workflow waits for the user's accept, edit, or reject decisions (`step.waitForEvent`), commits on `work/<slug>`, pushes, and starts the gate.
 - **Primitives.** Workflows, Workers AI through AI Gateway, Worker Loader.
+
+### Fork-owned UI preferences (extends spec 4.1)
+
+- **Code.** `ui/preferences.json` in the fork, validated by `platform/src/ui/preferences.ts` (allowlisted font stacks, density, accent palette, and at most 4 tabs of platform chart widgets; unknown keys rejected). `GET /api/forks/:repo/ui` serves it from `main`; `GET /api/me/charts` aggregates the session's own ledger, intents, and gate history (`platform/src/ui/charts.ts`). The UI maps the values to its own styles and draws the charts as inline SVG (`docs/UI.md`).
+- **Gate.** Tier 1 gains the platform invariant `ui-preferences-valid` when the file exists; tier 3 config probes on the file run on the platform (`platform/src/gate/ui-check.ts`), because stock's runner reads config files as TOML and stock stays unchanged.
+- **Why a file and not code.** The spec's fork layout puts the chat UI in `app/`, which would mean running fork code in the browser of a public site. A declarative file keeps the user's control over look and layout while the platform keeps control over what runs.
 
 ### Upgrades, merge agent, and pinning (spec 7)
 
@@ -140,6 +146,7 @@ Models (named only because the code pins them): `@cf/meta/llama-3.3-70b-instruct
 | Screen capture classified by a vision model. | The context simulator sets a screen label and confidence by hand. | No screen images are captured in the prototype. The label is the only thing the spec keeps anyway. |
 | Fleet health from Artifacts metrics. | Fleet health from the `Fleet` Durable Object and its event stream. | The demo needs per-fork status changes in real time. |
 | Stock tests read with `refs/tags/<tag>`. | Short tag names or SHAs. | The binding returns null for `refs/...` names. |
+| Each fork's `app/` serves its own chat UI. | The control plane serves one UI; a fork changes its look only through `ui/preferences.json`, which the platform validates and the UI maps to fixed styles and platform-computed charts. | No fork code runs in the browser of the public demo, and answer cards stay the stock JSON contract. |
 | Repair agent proposes a fix for every failure. | A fix is proposed when a rule applies. Otherwise the branch carries the explanation only. | Fixes to safety-critical behavior should come from fixed rules or the user, never from free model output. |
 
 ## Safety model
@@ -162,7 +169,7 @@ The platform side is also deterministic: the consumer filter, the choice of floo
 ### What models may do
 
 - Reword card bodies in research and administrative mode, through the fork's `LLM` capability. Any wording that adds a number, a number word, or a number-unit pair that the template does not contain is rejected.
-- Plan a customization, within the file limits above. The result still has to pass the full gate.
+- Plan a customization, within the file limits above. The result still has to pass the full gate. Look and layout may only be written as `ui/preferences.json`, which the platform validates against a fixed schema.
 - Propose tier 3 tests. The user accepts, edits, or rejects each one.
 - Resolve merge conflicts in up to 3 files. The gate decides whether the result ships.
 - Write repair explanations and harvest cluster labels.

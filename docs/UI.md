@@ -17,3 +17,15 @@ Then serve `platform/public/` and open `/?mock=1`.
 ## Untrusted text
 
 Intent records, harvest labels, run steps, gate failures, and ledger records can carry attacker-controlled text. The UI never assigns HTML: every element is built with `h()` in `js/dom.js`, which sets text through text nodes and `textContent`. Keep it that way; do not add `innerHTML`, `insertAdjacentHTML`, or `outerHTML`.
+
+## Fork UI preferences
+
+A fork can change how the control plane looks for its owner through one declarative file, `ui/preferences.json`, on its `main`. No fork code ever runs in the browser.
+
+- **Schema.** `platform/src/ui/preferences.ts` validates the file: `font` (`system`, `palatino`, `georgia`, `humanist-sans`, `mono`; web-safe stacks only, no font loading), `density` (`comfortable` or `compact`), `accent` (`teal`, `blue`, `violet`, `amber`, `green`, `rose`, `slate`), and `tabs` (at most 4, each a plain-text `title` of at most 40 characters and 1 to 6 `widgets`). Unknown keys are rejected at every level.
+- **Reading.** `GET /api/forks/:repo/ui` returns `{repo, commit, path, present, valid, preferences}` from `main`. An invalid file is reported with `errors` and the defaults are served; the gate keeps invalid files off `main`.
+- **Applying.** `app.js` sets `data-font`, `data-density`, and `data-accent` on the root element through `js/ui-prefs.js`, which keeps only allowlisted values. `styles.css` maps each value to its stack, sizes, and a light and a dark accent shade. Mode colors (clinical, research, administrative) never change.
+- **Tabs and charts.** Extra tabs appear under **Your tabs** in the rail and open `#tab?i=<n>` (`js/views/tab.js`). Widgets are computed by the platform over the session's own fork (`GET /api/me/charts`, `platform/src/ui/charts.ts`): answers by intent over time, confidence distribution, override rate, sources cited by kind, the build-time intent timeline, and gate results history. `js/charts.js` draws them as inline SVG with `s()` (the SVG twin of `h()` in `js/dom.js`), with no libraries and no `innerHTML`.
+- **Accessibility.** Every chart has a heading, a text summary as its caption, an SVG title, a legend when it has more than one series, a native tooltip per mark, and a "Show data as a table" view. Colors come from CSS variables, so charts follow the light and dark themes. The mode colors are the established identity colors of the UI and are close for some color vision deficiencies, so charts never rely on color alone: legends, captions, and tables carry the same information.
+- **Mock mode** serves `GET /api/forks/:repo/ui` and `GET /api/me/charts` from the in-browser data and simulates the UI recipe, so the same request works with `?mock=1`.
+

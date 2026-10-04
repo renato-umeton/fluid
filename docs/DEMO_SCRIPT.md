@@ -140,6 +140,10 @@ Point out: the three tier boxes and their counts.
 
 Point out: the enrollment figure in the research card.
 
+**Optional shot 2.6 (0:20).** If there is time, stay on Sam and ask in **Customize**: "Always use palatino lino type kind of fonts and add a tab with charts". The run maps the request onto `ui/preferences.json` (the Palatino stack and a **Charts** tab), says what it mapped, proposes one config test, and passes all three tiers. The font changes and **Charts** appears under **Your tabs**.
+
+> Forks can change their own look too, but only through a declarative file the platform validates. No fork code runs in the browser.
+
 ## Scene 3: a failed shortcut (1:00)
 
 Persona: **Sam Okonkwo-Reyes**. View: **Customize**.
