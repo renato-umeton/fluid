@@ -6,7 +6,7 @@ Fluid is an assistant for people who change roles many times a day: clinician, r
 
 This is an entry to Cloudflare's "Build the next Git platform" competition.
 
-Live demo: see [docs/DEPLOY.md](docs/DEPLOY.md). The URL is added at deploy time.
+Live demo: https://fluid.renato83.workers.dev (synthetic data only). To deploy your own copy, see [docs/DEPLOY.md](docs/DEPLOY.md).
 
 ## Three proposals
 

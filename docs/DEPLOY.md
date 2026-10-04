@@ -4,7 +4,7 @@ These steps take a fresh clone to a running Fluid on your own Cloudflare account
 
 Run every `cf` command from `platform/`. The CLI is a dev dependency there, so `npx cf` uses the pinned version (v1.0.0-beta.12). Commands that delete things ask for confirmation. Add `--force` in a non-interactive shell.
 
-Live demo URL: `https://fluid.<your-subdomain>.workers.dev` once deployed. Fill in the real URL here after the deploy step.
+Live demo URL: https://fluid.renato83.workers.dev. Your own deploy answers at `https://fluid.<your-subdomain>.workers.dev`.
 
 ## 1. Prerequisites
 
@@ -114,7 +114,7 @@ The answer is `{"ok":true}`.
 
 ## 8. Publish stock
 
-Publishing writes the bundled stock release to the `stock` repository and tags it. It is idempotent: an existing tag is reported and left alone.
+Publishing writes the bundled stock release to the `stock` repository and tags it. It is idempotent: an existing tag is reported and left alone. It also records every tag already in `stock` (with its `releases/<tag>.json`) in the fleet. So after a new deploy against an existing `stock` repo, run it once: the fleet then knows the earlier releases, the safety floors, and the next tag to suggest.
 
 ```sh
 ADMIN_TOKEN="$(grep '^ADMIN_TOKEN=' ~/.config/fluid/secrets.env | cut -d= -f2-)" \
@@ -140,10 +140,10 @@ From a shell:
 curl -s -X POST "$FLUID_URL/api/admin/fleet/seed" \
   -H "content-type: application/json" \
   -H "x-fluid-admin: $(grep '^ADMIN_TOKEN=' ~/.config/fluid/secrets.env | cut -d= -f2-)" \
-  -d '{"count": 300}'
+  -d '{"count": 200}'
 ```
 
-Seeding runs in a Workflow and takes about 20 to 30 seconds for a few hundred forks. To remove seeded forks later, `POST /api/admin/fleet/cleanup` with body `{}` and the same header. It deletes only `user-seed-*` forks.
+Seeding runs in a Workflow. 200 forks settled in about 40 seconds on the live deployment. To remove seeded forks later, `POST /api/admin/fleet/cleanup` with body `{}` and the same header. It deletes only `user-seed-*` forks.
 
 The full scripted scenario (customize, failed gate, release, harvest) runs with:
 

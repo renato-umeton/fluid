@@ -18,19 +18,24 @@ Running total: about 8 minutes 40 seconds.
 
 ## Pre-recording checklist
 
+Live URL: https://fluid.renato83.workers.dev
+
 Do these in order, about 30 minutes before recording.
 
-1. **Deployment is current.** The deployed Worker runs the latest commit, and stock is published (`npm run publish-stock`, see `docs/DEPLOY.md`).
+1. **Deployment is current.** The deployed Worker runs the latest commit, and stock is published (`npm run publish-stock`, see `docs/DEPLOY.md`). The **Fleet** header lists stock tags up to the newest release (v1.9.0 at the last check), and the **Release** form suggests the next tag (v1.10.0).
 2. **Admin secret ready.** Have the `ADMIN_TOKEN` value in your password manager. You will paste it once into the Fleet view. Never show it on screen: paste it before you start recording the Fleet scene, or blur it in editing.
-3. **Clear old runs.**
-   - Remove earlier seeded forks: `POST /api/admin/fleet/cleanup` with `{}` and the admin header.
-   - Use a fresh browser profile or a private window, so the session, the forks, the gate history, and the ledgers are new. Each new session gets new sandbox forks.
-   - Reload the page before recording. The Customize view keeps its last run only in the page.
-4. **Seed the fleet.** In **Fleet**, enter the admin secret, set **Seed demo fleet** to 300, and press **Seed**. Wait until every square shows **Pinned**. Seeding takes about 20 to 30 seconds.
-5. **Create the persona forks ahead of time.** Click each of the three personas once under **Signed in as**. Each click provisions that persona's fork (4 to 7 seconds). The per-client limit is 3 forks per hour, so do this once and do not click around afterwards.
+3. **Check the fleet.** The production fleet is already seeded with 200 forks pinned to v1.5.0. **Fleet** should show about 195 **Pinned** and 5 **Repair open**. The repair-open forks are seeds whose lowered-tau change failed on a work branch. Their `main` is clean, so they upgrade normally on release day. Leave the fleet alone if it looks like that. If it has already been released, or it looks wrong, reseed it:
+   - `POST /api/admin/fleet/cleanup` with `{}` and the admin header. This deletes only `user-seed-*` forks.
+   - In **Fleet**, enter the admin secret, set **Seed demo fleet** to 200, and press **Seed**. It settled in about 40 seconds on production.
+   - Do not seed fewer than 12. The forks that stay pinned on release day (compact research answers) are seed numbers 11, 61, 111, and 161, so a 200-fork fleet has 4 of them.
+4. **Clear the page state.** Open a fresh private window (or a new browser profile) on the live URL. The session cookie, and with it your persona forks, belongs to that window. Reloading keeps the same session and the same forks. The Customize view keeps its last run only in the page.
+5. **Create the persona forks a few minutes before recording, in that window.** The first page load provisions Dr. Rowan Ellery's fork (4 to 7 seconds). Then click **Sam Okonkwo-Reyes**, then **Dana Whitfield**, once each. That makes three forks, which is exactly the per-client limit of 3 forks per hour. A client is your public IPv4 address (or IPv6 /64), so every browser on your network shares it.
+   - Switching back to a persona you already used in this window reuses its fork and costs no quota. You can switch freely during the recording.
+   - Do not open another private window or profile within the hour, and do not provision forks from other devices on the same network. A new window starts a new session, and a fourth fork is refused with a quota error.
+   - If you have to start over within the hour, wait until an hour has passed since the first fork, or delete the old forks first (`POST /api/admin/forks/<repo>/delete` with the admin header). Deleting does not give quota back.
 6. **Pick the clock times.** The synthetic schedule for 2026-10-03 has Dr. Rowan Ellery on service from 07:00 to 13:00, and a manuscript writing block from 14:00 to 17:00. The manuscript shot must be off service, after 14:00. The **Writing the manuscript** scene sets the clock to 15:00. The **At the bedside** scene sets 09:00. Check the clock readout before each ask.
 7. **Keep the fleet stream open.** Open **Fleet** in a second tab and leave it open. Confirm the header reads **Live stream: live**. Switch to that tab for scene 4.
-8. **Do a dry run of scene 2.** The REDCap customization takes 9 to 12 seconds from request to merge, and the lower-tau run takes 12 to 14 seconds. Plan to cut the waits in editing.
+8. **Rehearse scene 2 in your head, not on production.** A dry run in the recording window uses the same fork, and the run then shows up in its history. On production the REDCap customization took 13 to 20 seconds from accepting the tests to the merge, and the lower-tau run took 15 to 27 seconds to the failed gate and the repair. Plan to cut the waits in editing.
 9. **Screen setup.** Browser at 1440 by 900, zoom 100 percent, light theme (**Theme** button in the bottom left), notifications off. The synthetic data notice bar stays visible at the top of every shot.
 
 ## Opening: the problem through one question (0:30)
@@ -162,9 +167,9 @@ Point out: the `repair/...` branch, and the red stock minimum mark on the τ met
 
 View: **Fleet**, in the tab you kept open.
 
-**Shot 4.1 (0:20).** Show the full grid, all **Pinned**.
+**Shot 4.1 (0:20).** Show the full grid, almost all **Pinned**.
 
-> This is the mothership view. Each square is one user's fork. Here there are about three hundred.
+> This is the mothership view. Each square is one user's fork. Here there are about two hundred.
 > All of them are pinned to the current stock release.
 
 Point out: the header line with the fork count and stock tags, and **Live stream: live**.
@@ -183,6 +188,8 @@ Point out: the status line "Tagged v... N upgrade runs started."
 > Then each fork runs its own gate, at the new tag.
 > These are hundreds of agents working on hundreds of repositories at once.
 > In our test run, more than a hundred forks were upgrading or gating at the same moment.
+
+The production rehearsal (12 forks) finished in 43 seconds, and the first upgrade finished after 12 seconds. Expect a 200-fork release to take about 2 to 3 minutes. Of the 200 seeds, the 4 compact-research forks stay pinned with a repair branch. Everything else should pass, some after the merge agent resolves a conflict.
 
 Point out: the counters moving, the progress bar, and the stream lines arriving with fork names.
 
@@ -243,4 +250,5 @@ Narration:
 - A card says "The fork could not answer": wait a few seconds and ask again. The fork isolate loads on first use.
 - **Live stream** reads **reconnecting**: reload the Fleet tab before tagging.
 - A release fails with a 409: the tag already exists. The form suggests the next tag after a reload.
-- Fork creation fails with a quota error: you hit the 3 forks per hour limit. Reuse the current session.
+- Fork creation fails with a quota error: you hit the 3 forks per hour limit. Go back to the window that already has the persona forks; switching personas there costs nothing.
+- A harvest or release button reports `admin token required`: enter the admin secret in **Fleet** first. It is kept for the browser tab only.

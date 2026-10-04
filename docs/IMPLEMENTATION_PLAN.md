@@ -176,7 +176,14 @@ As in spec section 8, stored at `.intent/<id>.json`, commit trailer `Intent-Id: 
 **Goal**: Deployed public demo, seeded fleet, README, LICENSE, `docs/DEMO_SCRIPT.md`, run instructions.
 **Success Criteria**: Public URL works for all scenes; fresh clone setup instructions verified; no credentials in the repo; write routes protected.
 **Tests**: Scripted run of all scenes against the deployed URL; secret scan.
-**Status**: In Progress. Pre-deploy hardening is done (no deploy yet):
+**Status**: Complete. Deployed at https://fluid.renato83.workers.dev. Production checks on 2026-10-04:
+- The REDCap and lower-tau customizations ran on production: the REDCap change passed its gate and merged, and the lower-tau change failed `inv-tau-config-floor` and got a linked repair. The queue drained (backlog 0, dead letter queue empty).
+- Rehearsal: 10 seeds plus 2 other forks, released as v1.9.0. All 12 upgraded within 43 s, with 12 in flight at once, and passed (4 after a merge-agent conflict resolution). The rehearsal was then cleaned up.
+- The final fleet is 200 seeded forks pinned to v1.5.0, not released. All five scenes were verified in a browser on the live URL with no console errors (`docs/screenshots/live-*.png`).
+- Cross-origin POST answers 403 and rate limits answer 429. No token appears in any response or in git history.
+- Fixes found on production: the publish route now records the existing stock tags in the fleet, persona switches keep each persona's fork, and the fork detail wording for failed work branches was corrected.
+
+Pre-deploy hardening:
 - Per-client quotas run ahead of the global ones. A client is an IPv4 address or an IPv6 /64, and the admin is exempt. The limits: forks 3 per hour per client and 60 per hour overall, asks 30 per minute per client, and Artifacts-backed reads (`/api/me`, `/api/forks/:repo`, `/api/intents/:repo`) 60 per minute per client. Fork info is cached for 5 seconds.
 - Fork claims are atomic in `Fleet.claimProvisioning`. A concurrent second request gets a 409, and failed attempts do not count toward the 500-fork cap.
 - Fleet streams are capped at 200 overall and 5 per client. A subscriber with more than 256 KB unread is dropped.

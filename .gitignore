@@ -11,3 +11,4 @@ dist/
 Pipfile
 Pipfile.lock
 platform/public/vendor/
+.claude/settings.local.json
