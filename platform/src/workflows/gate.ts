@@ -7,10 +7,11 @@
 // branches are only checked, unless the user applies one (merge mode).
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { fnv1a, gateInstanceId } from "../events/filter.ts";
-import { checkoutBranch, cloneRepo, fastForward, fetchBranch, headCommit, mergeInto, pushBranch } from "../git/ops.ts";
+import { checkoutBranch, cloneRepo, fastForward, fetchBranch, firstParent, headCommit, mergeInto, pushBranch } from "../git/ops.ts";
 import { runGate } from "../gate/run.ts";
 import { gateBrief, type GateResult } from "../gate/tiers.ts";
 import { fleetStub } from "../stubs.ts";
+import { landedEarlier } from "../yellow/landing.ts";
 import { appExports, asJson, ensureRun, GATE_STEP, gateLinkOf, GIT_STEP, guarded, linkGateParent, notifyParent, repoRemote, runLog, setFleet, startGateInstance, startInstance, startYellowRun, steps, type GateParams } from "./common.ts";
 
 export function gateRunId(instanceId: string): string {
@@ -104,6 +105,8 @@ export class GateWorkflow extends WorkflowEntrypoint<Env, GateParams> {
 			}
 			const yellowRunId = merged.landed
 				? await step.do("go yellow", async () => {
+						// The pin goes first: a fast rollback restores the old pin, and nothing after this step may overwrite it.
+						if (gate.stockTag) await setFleet(this.env, p.repo, { pinnedTag: gate.stockTag });
 						const source = origin.source === "customize" ? "customize" : origin.source === "repair-apply" ? "repair-apply" : "gate";
 						const started = await startYellowRun(this.env, exports, { repo: p.repo, commit: p.commit, previous: merged.previous ?? null, source, parentRunId: origin.parentRunId ?? runId });
 						await log.step("Yellow: live on main, end-to-end soak", "info", `${p.commit.slice(0, 7)} is live with a yellow badge; ${started.runId} runs the end-to-end suite 3 times before the fork turns green`);
@@ -112,7 +115,7 @@ export class GateWorkflow extends WorkflowEntrypoint<Env, GateParams> {
 				: null;
 			await step.do("finish pass", async () => {
 				await log.status(merged.ok ? "passed" : "failed", { mergedCommit: merged.oid, yellowRunId });
-				const pin = merged.ok && gate.stockTag ? { pinnedTag: gate.stockTag } : {};
+				const pin = merged.ok && !merged.landed && gate.stockTag ? { pinnedTag: gate.stockTag } : {};
 				await setFleet(this.env, p.repo, { status: "pinned", ...pin, ...(merged.ok ? { pendingUpgrade: null } : {}), lastRun: { runId, kind: "gate", branch: p.branch, status: merged.ok ? "passed" : "failed", merged: merged.ok, ...gateBrief(gate) } });
 				if (origin.parentRunId) await notifyParent(this.env, exports, origin.parentRunId, "gate-finished", { gateRunId: runId, passed: true, merged: merged.ok, mergedCommit: merged.oid });
 				return true;
@@ -172,6 +175,11 @@ export class GateWorkflow extends WorkflowEntrypoint<Env, GateParams> {
 			return { ok: true, oid: p.commit, regate: null, previous, landed: true };
 		}
 		if (ff.outcome === "already") {
+			// A retried step after a successful push: main is at the commit but its yellow run never started.
+			if (landedEarlier({ mainHead: ff.oid, commit: p.commit, healthCommit: (await fleetStub(this.env).health(p.repo))?.commit ?? null })) {
+				await log.step("Merge to main", "done", `main is already at ${p.commit.slice(0, 7)} (an earlier attempt pushed it); its yellow run starts now`);
+				return { ok: true, oid: p.commit, regate: null, previous: await firstParent(ws, p.commit), landed: true };
+			}
 			await log.step("Merge to main", "done", `main already contains ${p.commit.slice(0, 7)}`);
 			return { ok: true, oid: ff.oid, regate: null };
 		}

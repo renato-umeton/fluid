@@ -21,7 +21,8 @@ import { validateProbe, type Suggestion } from "../agents/suggester.ts";
 import { newRunId } from "../durable/runs.ts";
 import { gateInstanceId, gateModeFor } from "../events/filter.ts";
 import { isSeededRepo, SEED_DEFAULT, SEED_MAX } from "../fleet/seed-catalog.ts";
-import { cloneRepo, fastForward, fetchBranch, headCommit, pushBranch } from "../git/ops.ts";
+import { cloneRepo, fastForward, fetchBranch, firstParent, headCommit, pushBranch } from "../git/ops.ts";
+import { landedEarlier } from "../yellow/landing.ts";
 import type { Json } from "../lib/json.ts";
 import { shortRef } from "../runtime/refs.ts";
 import { headOf, openRepo, readTextFile } from "../runtime/repo-files.ts";
@@ -532,10 +533,15 @@ route("POST", "/api/forks/:repo/upgrade", async (rc, { repo }) => {
 	const ff = await fastForward(ws, "main", pending.commit);
 	if (ff.outcome === "diverged") throw new HttpError(409, `main moved since upgrade/${pending.tag} was gated at ${pending.commit.slice(0, 7)}; a new upgrade run is needed`);
 	if (ff.outcome === "fast-forward") await pushBranch(ws, remote, "main");
-	// The approved upgrade is live: it soaks in yellow like every other change that lands on main.
-	const yellow = ff.outcome === "fast-forward" ? await startYellowRun(rc.env, appExports(rc.ctx), { repo: name, commit: pending.commit, previous, source: "one-tap", parentRunId: pending.runId }) : null;
+	// A repeated tap after a push whose response was lost finds main at the commit with no yellow run for it yet.
+	const landed = ff.outcome === "fast-forward" || landedEarlier({ mainHead: ff.oid, commit: pending.commit, healthCommit: entry.health.commit });
 	const lastRun: RunSummary = entry.lastRun?.runId === pending.runId ? { ...entry.lastRun, applied: true, at: new Date().toISOString() } : { runId: pending.runId, kind: "upgrade", tag: pending.tag, status: "passed", applied: true, commit: pending.commit, at: new Date().toISOString() };
-	const updated = await fleet.update(name, { status: "passed", pinnedTag: pending.tag, pendingUpgrade: null, lastRun });
+	// The pin goes first: a fast rollback restores the old pin, and nothing after the yellow start may overwrite it.
+	// The pending upgrade stays until the yellow run has started, so a repeated tap can still start it.
+	await fleet.update(name, { pinnedTag: pending.tag });
+	// The approved upgrade is live: it soaks in yellow like every other change that lands on main.
+	const yellow = landed ? await startYellowRun(rc.env, appExports(rc.ctx), { repo: name, commit: pending.commit, previous: ff.outcome === "fast-forward" ? previous : await firstParent(ws, pending.commit), source: "one-tap", parentRunId: pending.runId }) : null;
+	const updated = await fleet.update(name, { status: "passed", pendingUpgrade: null, lastRun });
 	forkInfoCache.delete(name);
 	return json({ repo: name, tag: pending.tag, commit: pending.commit, fork: updated, yellowRunId: yellow?.runId ?? null });
 });

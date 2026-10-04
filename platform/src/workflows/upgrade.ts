@@ -10,7 +10,7 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloud
 import { buildIntent, intentJson, intentPath } from "../agents/intent.ts";
 import { acceptModelResolutions, fallbackResolution, MERGE_SCHEMA, mergePrompt, type Resolution } from "../agents/merge-resolve.ts";
 import { fnv1a } from "../events/filter.ts";
-import { checkoutBranch, cloneRepo, commitChanges, fastForward, fetchBranch, fetchStockTag, headCommit, mergeInto, mergeWithResolver, pushBranch, readWorkspaceFile, writeFiles, type ConflictVersions } from "../git/ops.ts";
+import { checkoutBranch, cloneRepo, commitChanges, fastForward, fetchBranch, fetchStockTag, firstParent, headCommit, mergeInto, mergeWithResolver, pushBranch, readWorkspaceFile, writeFiles, type ConflictVersions } from "../git/ops.ts";
 import { preferencesOf, readIntents, type BuildTimeIntent } from "../forks/provision.ts";
 import { runGate } from "../gate/run.ts";
 import { gateBrief, type GateResult } from "../gate/tiers.ts";
@@ -18,7 +18,8 @@ import { newIntentId, STOCK_REPO, userIdFromForkRepo } from "../lib/names.ts";
 import { parseToml, setTomlValue } from "../lib/toml.ts";
 import { AGENT_MODEL, callModel } from "../runtime/llm.ts";
 import { pinnedTagOf } from "../stock/releases.ts";
-import { quotaStub } from "../stubs.ts";
+import { fleetStub, quotaStub } from "../stubs.ts";
+import { landedEarlier } from "../yellow/landing.ts";
 import { logTiers, persistGate, repairRunId } from "./gate.ts";
 import { appExports, ensureRun, errorText, GATE_STEP, GIT_STEP, repoRemote, runLog, setFleet, startInstance, startOrRetryInstance, startYellowRun, guarded, steps, type ReleaseParams, type UpgradeParams } from "./common.ts";
 
@@ -200,13 +201,17 @@ export class UpgradeWorkflow extends WorkflowEntrypoint<Env, UpgradeParams> {
 				continue;
 			}
 			const yellowRunId = applied.landed
-				? await step.do(`go yellow${suffix}`, async () => (await startYellowRun(this.env, exports, { repo: p.repo, commit: at, previous: applied.previous ?? null, source: "upgrade", parentRunId: p.runId })).runId)
+				? await step.do(`go yellow${suffix}`, async () => {
+						// The pin goes first: a fast rollback restores the old pin, and nothing after this step may overwrite it.
+						await setFleet(this.env, p.repo, { pinnedTag: p.tag, pendingUpgrade: null });
+						return (await startYellowRun(this.env, exports, { repo: p.repo, commit: at, previous: applied.previous ?? null, source: "upgrade", parentRunId: p.runId })).runId;
+					})
 				: null;
 			await step.do(`finish pass${suffix}`, async () => {
 				await log.status("passed", { applied: applied.applied, commit: at, yellowRunId });
 				await setFleet(this.env, p.repo, {
 					status: "passed",
-					...(applied.applied ? { pinnedTag: p.tag, pendingUpgrade: null } : { pendingUpgrade: { tag: p.tag, commit: at, runId: p.runId } }),
+					...(applied.applied ? (applied.landed ? {} : { pinnedTag: p.tag, pendingUpgrade: null }) : { pendingUpgrade: { tag: p.tag, commit: at, runId: p.runId } }),
 					lastRun: lastRun({ status: "passed", applied: applied.applied, commit: at, conflicts: merged.conflicts.filter((c) => c !== "fluid.toml").length }),
 				});
 				return true;
@@ -246,10 +251,16 @@ export class UpgradeWorkflow extends WorkflowEntrypoint<Env, UpgradeParams> {
 		await fetchBranch(ws, remote, branch);
 		const previous = await headCommit(ws, "main");
 		const ff = await fastForward(ws, "main", commit);
-		if (ff.outcome !== "diverged") {
-			if (ff.outcome === "fast-forward") await pushBranch(ws, remote, "main");
+		if (ff.outcome === "fast-forward") {
+			await pushBranch(ws, remote, "main");
 			await log.step("Merge to main", "done", `main fast-forwarded to ${commit.slice(0, 7)} on ${tag}`);
-			return { applied: true, regate: null, previous, landed: ff.outcome === "fast-forward" };
+			return { applied: true, regate: null, previous, landed: true };
+		}
+		if (ff.outcome === "already") {
+			// A retried step after a successful push: main is at the commit but its yellow run never started.
+			const landed = landedEarlier({ mainHead: ff.oid, commit, healthCommit: (await fleetStub(this.env).health(repo))?.commit ?? null });
+			await log.step("Merge to main", "done", landed ? `main is already at ${commit.slice(0, 7)} (an earlier attempt pushed it); its yellow run starts now` : `main already contains ${commit.slice(0, 7)}`);
+			return { applied: true, regate: null, previous: landed ? await firstParent(ws, commit) : previous, landed };
 		}
 		await checkoutBranch(ws, branch);
 		const outcome = await mergeInto(ws, { ours: branch, theirs: "main", message: `Merge main into ${branch}\n\nmain moved to ${ff.oid.slice(0, 7)} during the upgrade to ${tag}; the merge is gated before main moves.` });
