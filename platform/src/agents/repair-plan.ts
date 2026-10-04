@@ -14,7 +14,7 @@ export interface RepairPlan {
 	intentRefs: string[];
 	/** Failures the deterministic rules could not address (the model may explain them). */
 	unexplained: GateFailure[];
-	rule: "restore-tau" | "revert-customization" | "none";
+	rule: "restore-tau" | "revert-customization" | "keep-green" | "none";
 }
 
 export interface RepairInput {
@@ -122,6 +122,24 @@ export function planRepair(input: RepairInput): RepairPlan {
 	const fixSummary = fixes.length ? capitalize(fixes.join("; ")) : null;
 	const explanation = `${reasons.join(" ")}${fixSummary ? ` Proposed fix: ${fixSummary}.` : ""} The fork stays on its current main; nothing merges until you review this branch.`;
 	return { files, fixSummary, explanation, intentRefs: [...refs], unexplained, rule };
+}
+
+/**
+ * Repair for a change the yellow soak rolled back. main is already back on
+ * the last green tree, and the repair branch starts there. It relies only on
+ * the change's own intent records and never writes files: reverting files to
+ * stock could undo older customizations that were green. Applying it keeps
+ * the green tree and records the diagnosis; the change comes back only when
+ * the user reworks it and runs the request again.
+ */
+export function planYellowRepair(input: RepairInput, changeIntentIds: string[]): RepairPlan {
+	const ids = new Set(changeIntentIds);
+	const own = input.intents.filter((i) => ids.has(i.id));
+	const f = input.gate.failures[0];
+	const what = f ? `${f.probe}${f.description ? ` (${f.description})` : ""}: ${f.path || "result"} ${f.op}, expected ${JSON.stringify(f.expected)}, got ${JSON.stringify(f.actual)}` : "the end-to-end suite";
+	const change = own.length ? own.map((i) => `${i.id} ("${i.request}", files ${i.files.filter((x) => !x.startsWith(".intent/")).join(", ") || "none"})`).join("; ") : changeIntentIds.length ? changeIntentIds.join(", ") : "a change with no intent record";
+	const explanation = `The change went live on main in yellow and the end-to-end suite then failed ${what}, so main was rolled back to the last green commit. The change: ${change}. Applying this repair keeps main on the last green tree that the rollback restored and records this diagnosis; it never reverts older customizations. To bring the change back, rework it and run the request again.`;
+	return { files: {}, fixSummary: "Keep the last green tree that the rollback restored and record the diagnosis", explanation, intentRefs: own.length ? own.map((i) => i.id) : [...ids], unexplained: input.gate.failures, rule: "keep-green" };
 }
 
 function capitalize(s: string): string {

@@ -6,8 +6,8 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { buildIntent, intentJson, intentPath } from "../agents/intent.ts";
 import { diffEntries } from "../agents/diff.ts";
-import { customizedRuntimeFiles, planRepair, repairNote, type RepairPlan } from "../agents/repair-plan.ts";
-import { checkoutBranch, cloneRepo, commitChanges, pushBranch, readWorkspaceFile, removeFiles, writeFiles } from "../git/ops.ts";
+import { customizedRuntimeFiles, planRepair, planYellowRepair, repairNote, type RepairPlan } from "../agents/repair-plan.ts";
+import { checkoutBranch, cloneRepo, commitChanges, headCommit, pushBranch, readWorkspaceFile, removeFiles, writeFiles } from "../git/ops.ts";
 import { readIntents, STOCK_MIN_TAU, type BuildTimeIntent } from "../forks/provision.ts";
 import { runGate } from "../gate/run.ts";
 import type { GateResult } from "../gate/tiers.ts";
@@ -67,11 +67,9 @@ export class RepairWorkflow extends WorkflowEntrypoint<Env, RepairParams> {
 
 		const plan = await step.do("plan the repair", async () => {
 			await log.step("Diagnose and propose a fix", "running");
-			const planned = planRepair({ gate: context.gate, intents: context.intents, fluidToml: context.fluidToml, stockMinTau: STOCK_MIN_TAU, stockVersions: context.stockVersions });
-			// A yellow rollback already returned main to the last green commit: the repair explains the failure and links the change's intent records.
-			const base = p.reason === "yellow"
-				? { ...planned, intentRefs: [...new Set([...(p.intentIds ?? []), ...planned.intentRefs])], explanation: `${short} passed the gate and went live in yellow, then the end-to-end suite failed against the live fork, so main was rolled back to the last green commit. ${planned.explanation}` }
-				: planned;
+			const input = { gate: context.gate, intents: context.intents, fluidToml: context.fluidToml, stockMinTau: STOCK_MIN_TAU, stockVersions: context.stockVersions };
+			// A yellow rollback already returned main to the last green commit: the repair relies only on the change's records and writes no files.
+			const base = p.reason === "yellow" ? planYellowRepair(input, p.intentIds ?? []) : planRepair(input);
 			let modelNote: string | null = null;
 			if (base.rule === "none") {
 				try {
@@ -90,7 +88,9 @@ export class RepairWorkflow extends WorkflowEntrypoint<Env, RepairParams> {
 			await log.step(`Open ${branch}`, "running");
 			const remote = await repoRemote(this.env, p.repo, "write");
 			const ws = await cloneRepo({ ...remote, ref: p.branch, singleBranch: true });
-			await checkoutBranch(ws, branch, { create: true, from: p.commit });
+			// A yellow repair starts from main as the rollback left it (the revert commit), so applying it keeps the green tree.
+			const from = p.reason === "yellow" ? await headCommit(ws, "main") : p.commit;
+			await checkoutBranch(ws, branch, { create: true, from });
 			const before: Record<string, string | null> = {};
 			for (const path of Object.keys(plan.files)) before[path] = await readWorkspaceFile(ws, path);
 			const writes = Object.fromEntries(Object.entries(plan.files).filter(([, v]) => v !== null)) as Record<string, string>;
@@ -113,7 +113,7 @@ export class RepairWorkflow extends WorkflowEntrypoint<Env, RepairParams> {
 			});
 			await writeFiles(ws, { [notePath]: note, [intentPath(intentId)]: intentJson(intent) });
 			const commit = await commitChanges(ws, {
-				message: `Repair ${p.branch}: ${plan.fixSummary ?? "explain the gate failure"}\n\nThe gate failed at ${short} against stock ${context.gate.stockTag}. Relies on intent records ${plan.intentRefs.join(", ") || "(none)"}. Not merged automatically; review it.`,
+				message: `Repair ${p.branch}: ${plan.fixSummary ?? "explain the gate failure"}\n\n${p.reason === "yellow" ? `The end-to-end soak failed at ${short} and main was rolled back; this branch starts from the rolled back main` : `The gate failed at ${short}`} against stock ${context.gate.stockTag}. Relies on intent records ${plan.intentRefs.join(", ") || "(none)"}. Not merged automatically; review it.`,
 				intentId,
 				author: { name: "Fluid repair agent", email: "repair-agent@fluid.invalid" },
 			});

@@ -8,7 +8,7 @@ import { clusterRecords, draftFilesFor, eligibility, forksIn, proposalOf, determ
 import { buildIntent, cleanText, slugify } from "../src/agents/intent.ts";
 import { diffEntries, lineStats } from "../src/agents/diff.ts";
 import { matchRecipe, protocolsFor, redcapChange, replanOnMovedMain, tauChange, tauTarget } from "../src/agents/recipes.ts";
-import { planRepair } from "../src/agents/repair-plan.ts";
+import { planRepair, planYellowRepair } from "../src/agents/repair-plan.ts";
 import { fallbackSuggestion, mergeUserManifest, suggestionsFromModel, suggestTests, touchedAreas, validateProbe } from "../src/agents/suggester.ts";
 import { requestFor, seedChange, seedPlan, seedTarget, type SeedKind } from "../src/fleet/seed-catalog.ts";
 import { demoReleaseFiles } from "../src/stock/releases.ts";
@@ -294,6 +294,35 @@ describe("repair planning", () => {
 		expect(plan.rule).toBe("none");
 		expect(plan.fixSummary).toBeNull();
 		expect(plan.explanation).toContain("t-mine");
+	});
+});
+
+describe("yellow repair planning", () => {
+	const green: BuildTimeIntent = { id: "int_green", author: "user:x", agent: "customization-agent", request: "Plain wording", purpose: "older green change", modes_affected: ["clinical"], files: ["app/cards.ts", "policies/clinical.ts"], tests_added: [], stock_tag: "v1.10.0" };
+	const change: BuildTimeIntent = { id: "int_change", author: "user:x", agent: "customization-agent", request: "[admin test] break ledger fork_commit", purpose: "the change that went live in yellow", modes_affected: [], files: ["app/ledger.ts"], tests_added: [], stock_tag: "v1.10.0" };
+	const gate = (probe: string) => ({ failures: [{ tier: "e2e", probe, sample: 1, samples: 1, path: "ledger.fork_commit", op: "equals", expected: "abc", actual: "build-cache" }], stockTag: "v1.10.0", ref: "main", commit: "c".repeat(40) }) as never;
+	const input = (probe: string) => ({ gate: gate(probe), intents: [green, change], fluidToml: 'stock_tag = "v1.10.0"\n', stockMinTau: 0.85, stockVersions: { "app/cards.ts": "stock cards", "policies/clinical.ts": "stock clinical", "app/ledger.ts": "stock ledger" } });
+
+	it("relies only on the records of the change that went live, never on older green customizations", () => {
+		const plan = planYellowRepair(input("e2e-ledger-provenance"), ["int_change"]);
+		expect(plan.intentRefs).toEqual(["int_change"]);
+		expect(plan.explanation).not.toContain("int_green");
+	});
+
+	it("never proposes reverting files, even when a scenario name looks like a clinical floor failure", () => {
+		const plain = planRepair(input("e2e-clinical-contract"));
+		expect(Object.keys(plain.files)).toContain("app/cards.ts");
+		const plan = planYellowRepair(input("e2e-clinical-contract"), ["int_change"]);
+		expect(plan.files).toEqual({});
+		expect(plan.rule).toBe("keep-green");
+		expect(plan.intentRefs).toEqual(["int_change"]);
+	});
+
+	it("says that applying it keeps the green tree the rollback restored", () => {
+		const plan = planYellowRepair(input("e2e-ledger-provenance"), ["int_change"]);
+		expect(plan.fixSummary).toMatch(/keep the last green tree/i);
+		expect(plan.explanation).toMatch(/Applying this repair keeps main on the last green tree/);
+		expect(plan.explanation).toMatch(/run the request again/);
 	});
 });
 
