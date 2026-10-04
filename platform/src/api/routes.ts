@@ -30,7 +30,7 @@ import { parseUiPreferences, UI_PREFERENCES_PATH } from "../ui/preferences.ts";
 import { aggregateCharts, CHART_LIMITS } from "../ui/charts.ts";
 import { DEMO_OVERLAY, demoReleaseFiles, keepFloorTightening } from "../stock/releases.ts";
 import { appExports, ensureRun, repoRemote, startGateInstance, startYellowRun } from "../workflows/common.ts";
-import { upgradeTargets } from "../workflows/upgrade.ts";
+import { rerunTargets, upgradeTargets } from "../workflows/upgrade.ts";
 import { decodeParam, HttpError, json, readJson, requireJsonPost, requireString } from "./http.ts";
 import { askRef, parsePreferences } from "./validate.ts";
 
@@ -591,10 +591,12 @@ route("POST", "/api/admin/release", async (rc) => {
 		result = await publishStockRelease(rc.env, { tag, files: { ...files, [`.intent/${intentId}.json`]: `${JSON.stringify(intent, null, 2)}\n` }, intentId, notes, safety });
 	}
 	await recordRelease(rc.env, tag, result.release, result.commit);
-	const repos = upgradeTargets(tag, await fleetStub(rc.env).list());
+	const forks = await fleetStub(rc.env).list();
+	const repos = upgradeTargets(tag, forks);
+	const rerun = rerunTargets(tag, forks);
 	const runId = newRunId("release");
-	await runsStub(rc.env, runId).create({ id: runId, kind: "release", status: "running", fields: { tag, safety, forks: repos.length } });
-	await appExports(rc.ctx).ReleaseWorkflow.create({ id: runId, params: { runId, tag, safety: result.release?.safety ?? safety, graceUntil: result.release?.graceUntil ?? null, repos } });
+	await runsStub(rc.env, runId).create({ id: runId, kind: "release", status: "running", fields: { tag, safety, forks: repos.length, rerun: rerun.length } });
+	await appExports(rc.ctx).ReleaseWorkflow.create({ id: runId, params: { runId, tag, safety: result.release?.safety ?? safety, graceUntil: result.release?.graceUntil ?? null, repos, rerun } });
 	return json({ tag, upgradeRuns: repos.length, runId, commit: result.commit, alreadyPublished: result.alreadyPublished, release: result.release }, 202);
 });
 

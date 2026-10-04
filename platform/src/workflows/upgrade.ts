@@ -20,6 +20,7 @@ import { AGENT_MODEL, callModel } from "../runtime/llm.ts";
 import { pinnedTagOf } from "../stock/releases.ts";
 import { fleetStub, quotaStub } from "../stubs.ts";
 import { landedEarlier } from "../yellow/landing.ts";
+import { findRolledBackUpgrade, reapplyChange } from "../yellow/reapply.ts";
 import { logTiers, persistGate, repairRunId } from "./gate.ts";
 import { appExports, ensureRun, errorText, GATE_STEP, GIT_STEP, repoRemote, runLog, setFleet, startInstance, startOrRetryInstance, startYellowRun, guarded, steps, type ReleaseParams, type UpgradeParams } from "./common.ts";
 
@@ -27,21 +28,41 @@ import { appExports, ensureRun, errorText, GATE_STEP, GIT_STEP, repoRemote, runL
 export const FAN_OUT = { batchSize: 20, pause: "1 second" };
 export const MERGE_MODEL_LIMIT = { maxFiles: 3, maxChars: 40_000, perMinute: 30 };
 
-/** One upgrade per (tag, fork): re-running a release never upgrades a fork twice. */
-export function upgradeInstanceId(tag: string, repo: string): string {
-	return `upg-${tag.replace(/[^A-Za-z0-9]/g, "-")}-${fnv1a(repo)}`.slice(0, 64);
+/**
+ * One upgrade per (tag, fork): re-running a release never upgrades a fork
+ * twice. An upgrade the yellow soak rolled back is run again under an
+ * attempt suffix (see rerunTargets).
+ */
+export function upgradeInstanceId(tag: string, repo: string, attempt?: string): string {
+	return `upg-${tag.replace(/[^A-Za-z0-9]/g, "-")}-${fnv1a(repo)}${attempt ? `-${attempt.slice(0, 12)}` : ""}`.slice(0, 64);
 }
 
 /** Rounds of "main moved, merge it into the upgrade branch, gate again" before an auto upgrade gives up. */
 export const MAX_REGATES = 2;
 
-/** Forks a release still has to upgrade: not already on the tag, not waiting to approve it, and not already handled at it. */
-export function upgradeTargets(tag: string, forks: { repo: string; status: string; pinnedTag: string; lastRun: { tag?: unknown; kind?: string } | null; pendingUpgrade: { tag: string } | null }[]): string[] {
+type TargetFork = { repo: string; status: string; pinnedTag: string; lastRun: { tag?: unknown; kind?: string } | null; pendingUpgrade: { tag: string } | null; health?: { health: string } };
+
+/** A fork whose upgrade to `tag` landed and was then rolled back by the yellow soak (its pin went back). */
+function rolledBackAt(tag: string, f: TargetFork): boolean {
+	return f.lastRun?.tag === tag && f.lastRun.kind === "upgrade" && f.pinnedTag !== tag && f.health?.health === "rolled_back";
+}
+
+/**
+ * Forks a release still has to upgrade: not already on the tag, not waiting
+ * to approve it, and not already handled at it, except a fork whose upgrade
+ * to the tag was rolled back, which is upgraded again.
+ */
+export function upgradeTargets(tag: string, forks: TargetFork[]): string[] {
 	return forks
 		.filter((f) => f.status !== "provisioning")
 		.filter((f) => f.pinnedTag !== tag && f.pendingUpgrade?.tag !== tag)
-		.filter((f) => !(f.lastRun?.tag === tag && (f.lastRun.kind === "upgrade" || f.lastRun.kind === "repair")))
+		.filter((f) => rolledBackAt(tag, f) || !(f.lastRun?.tag === tag && (f.lastRun.kind === "upgrade" || f.lastRun.kind === "repair")))
 		.map((f) => f.repo);
+}
+
+/** Targets whose earlier upgrade to the tag was rolled back: they need a new upgrade instance. */
+export function rerunTargets(tag: string, forks: TargetFork[]): string[] {
+	return forks.filter((f) => f.status !== "provisioning" && rolledBackAt(tag, f)).map((f) => f.repo);
 }
 
 export class ReleaseWorkflow extends WorkflowEntrypoint<Env, ReleaseParams> {
@@ -64,8 +85,9 @@ export class ReleaseWorkflow extends WorkflowEntrypoint<Env, ReleaseParams> {
 		for (let i = 0; i < p.repos.length; i += FAN_OUT.batchSize) {
 			const batch = p.repos.slice(i, i + FAN_OUT.batchSize);
 			started += await step.do(`fan out ${i}`, GIT_STEP, async () => {
+				const rerun = new Set(p.rerun ?? []);
 				const items = batch.map((repo) => {
-					const id = upgradeInstanceId(p.tag, repo);
+					const id = upgradeInstanceId(p.tag, repo, rerun.has(repo) ? fnv1a(p.runId) : undefined);
 					return { id, params: { runId: `run_${id}`, repo, tag: p.tag, safety: p.safety, graceUntil: p.graceUntil, releaseRunId: p.runId } };
 				});
 				// Queued goes first: an upgrade cannot start before its instance exists, so its own updates always come later.
@@ -132,6 +154,17 @@ export class UpgradeWorkflow extends WorkflowEntrypoint<Env, UpgradeParams> {
 				},
 			});
 			if (!outcome.ok) throw new Error(outcome.error);
+			let reapplied: { applied: string[]; kept: string[] } | null = null;
+			if (outcome.alreadyMerged) {
+				// The tag is already in main's history: an earlier upgrade to it was rolled back. Apply its changes again.
+				const rolledBack = await findRolledBackUpgrade(ws, branch, p.tag);
+				if (rolledBack) {
+					reapplied = await reapplyChange(ws, { from: rolledBack.revert, to: rolledBack.yellow });
+					if (reapplied.applied.length) {
+						await commitChanges(ws, { message: `Apply stock ${p.tag} again on ${branch}\n\nThe upgrade to ${p.tag} at ${rolledBack.yellow.slice(0, 7)} was rolled back by the yellow soak (${rolledBack.revert.slice(0, 7)}), so merging the tag again changes nothing. This commit applies that upgrade's changes again on top of main${reapplied.kept.length ? `; main's version is kept for ${reapplied.kept.join(", ")}` : ""}. The gate decides whether it ships.` });
+					}
+				}
+			}
 			const toml = (await readWorkspaceFile(ws, "fluid.toml")) ?? mainToml;
 			if (pinnedTagOf(toml) !== p.tag) {
 				await writeFiles(ws, { "fluid.toml": setTomlValue(toml, null, "stock_tag", p.tag) });
@@ -156,7 +189,7 @@ export class UpgradeWorkflow extends WorkflowEntrypoint<Env, UpgradeParams> {
 			const commit = await headCommit(ws);
 			await pushBranch(ws, remote, branch, { force: true });
 			const textual = outcome.conflicts.filter((c) => c !== "fluid.toml");
-			await log.step(`Merge stock ${p.tag} into ${branch}`, "done", textual.length ? `Textual conflicts in ${textual.join(", ")} resolved by the merge agent` : "No textual conflicts");
+			await log.step(`Merge stock ${p.tag} into ${branch}`, "done", reapplied ? `${p.tag} was already merged and then rolled back; applied its changes again (${reapplied.applied.length} files${reapplied.kept.length ? `, main's version kept for ${reapplied.kept.join(", ")}` : ""})` : textual.length ? `Textual conflicts in ${textual.join(", ")} resolved by the merge agent` : "No textual conflicts");
 			if (resolutions.length) {
 				await log.step("Merge agent", "done", resolutions.map((r) => `${r.path}: ${r.choice === "ours" ? "kept the fork's version" : r.choice === "theirs" ? "took stock's version" : r.choice === "toml" ? "kept fork settings, new stock_tag" : "merged"} (${r.by})`).join("; "));
 			}

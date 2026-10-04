@@ -76,6 +76,8 @@ export interface ReleaseParams {
 	safety: boolean;
 	graceUntil: string | null;
 	repos: string[];
+	/** Forks whose upgrade to the tag was rolled back: their upgrade runs again under a new instance id. */
+	rerun?: string[];
 }
 
 export interface SeedFleetParams {
