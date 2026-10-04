@@ -159,7 +159,8 @@ try {
 	// Several scenarios read ledger records; the first one in suite order reports the wrong fork_commit.
 	check("bad change: the soak failed on ledger provenance", badYellow.status === "failed" && /fork_commit/.test(String(failure.detail)) && /build-cache/.test(String(failure.detail)), `${failure.tier} ${failure.scenario} at step ${failure.step}: ${failure.detail}`);
 	const hRolled = await health(repo);
-	check("bad change: the fork is rolled back and keeps the last green commit", hRolled.health.health === "rolled_back" && hRolled.health.lastGreenCommit === good.run.commit && hRolled.health.rolledBackFrom === bad.run.commit, `${hRolled.health.health}; last green ${short(hRolled.health.lastGreenCommit)}; rolled back from ${short(hRolled.health.rolledBackFrom)}`);
+	// The revert commit (the green tree plus the rollback record) becomes the last green commit.
+	check("bad change: the fork is rolled back to the green tree, and the revert commit is the last green", hRolled.health.health === "rolled_back" && hRolled.health.lastGreenCommit === badYellow.revertCommit && hRolled.health.rolledBackFrom === bad.run.commit && badYellow.rolledBackTo === good.run.commit, `${hRolled.health.health}; restored ${short(badYellow.rolledBackTo)}; last green ${short(hRolled.health.lastGreenCommit)}; rolled back from ${short(hRolled.health.rolledBackFrom)}`);
 	const afterRollback = await call("GET", `/api/forks/${repo}`);
 	check("bad change: main is a new revert commit (history kept, no force push)", afterRollback.head === badYellow.revertCommit && afterRollback.head !== good.run.commit && afterRollback.head !== bad.run.commit, `main ${short(afterRollback.head)}, revert ${short(badYellow.revertCommit)}`);
 	const intents = await call("GET", `/api/intents/${repo}`);
