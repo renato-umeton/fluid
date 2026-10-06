@@ -1,9 +1,10 @@
 // Import Workflow: one instance per push of a work/* branch to an inbox
 // (instance id from importRunId, with -r1, -r2, ... when the same commit is
 // pushed again after a refused or failed import), started by the queue
-// consumer, which only acks. The heavy part (fetch, inflate, walk, push) runs here, so one large
-// or hostile push stalls only its own import, never the shared consumer
-// batch or other users' gate triggers. Quotas are taken before any clone.
+// consumer, which only acks. The heavy part (fetch, inflate, walk, push)
+// runs here, so one large or hostile push stalls only its own import, never
+// the shared consumer batch or other users' gate triggers. Quotas are taken before any clone
+// and before the run record exists.
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { gateInstanceId } from "../events/filter.ts";
 import { liveImportIO, runImport, takeImportQuota, type ImportOutcome } from "../forks/inbox.ts";
@@ -27,20 +28,26 @@ export class ImportWorkflow extends WorkflowEntrypoint<Env, ImportParams> {
 		const imp = { inbox: p.inbox, fork: p.fork, branch: p.branch, commit: p.commit };
 		const log = runLog(this.env, p.runId);
 
-		const ready = await step.do("start", async () => {
+		// The quota is taken in its own step, before the run record exists: a refused push leaves no
+		// run behind, only this instance's output and a log line. A retried later step never takes it again.
+		const ready = await step.do("take the import quota", async () => {
 			const fleet = fleetStub(this.env);
 			const entry = await fleet.get(p.fork);
 			const grant = (await fleet.getValue(outsideGrantKey(p.fork))) as OutsideGrant | null;
 			if (!entry || entry.status === "provisioning" || grant?.inbox !== p.inbox) return { ok: false as const, reason: null };
-			await ensureRun(this.env, { id: p.runId, kind: "import", repo: p.fork, fields: { inbox: p.inbox, branch: p.branch, commit: p.commit } });
-			await log.step("Import from your inbox", "running", `${p.branch} at ${p.commit.slice(0, 7)} in ${p.inbox}; only this branch head is read`);
 			const refused = await takeImportQuota((subject, bucket, limit, window) => quotaStub(this.env, subject).take(bucket, limit, window), p.fork);
 			return refused ? { ok: false as const, reason: refused } : { ok: true as const, reason: null };
 		});
 		if (!ready.ok) {
-			if (ready.reason) await step.do("refused by quota", async () => this.refuse(p.runId, ready.reason!));
-			return { status: ready.reason ? "refused" : "skipped" };
+			if (!ready.reason) return { status: "skipped" };
+			console.warn(`import of ${p.branch} at ${p.commit.slice(0, 7)} from ${p.inbox} refused: ${ready.reason}`);
+			return { status: "refused", reason: ready.reason };
 		}
+		await step.do("start", async () => {
+			await ensureRun(this.env, { id: p.runId, kind: "import", repo: p.fork, fields: { inbox: p.inbox, branch: p.branch, commit: p.commit } });
+			await log.step("Import from your inbox", "running", `${p.branch} at ${p.commit.slice(0, 7)} in ${p.inbox}; only this branch head is read`);
+			return true;
+		});
 
 		const outcome = await step.do("import", IMPORT_STEP, async (): Promise<ImportOutcome> => {
 			try {
