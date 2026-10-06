@@ -9,7 +9,6 @@
 // cancelled: the newer run decides.
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { fnv1a } from "../events/filter.ts";
-import { approveMainMove } from "../forks/main-guard.ts";
 import { readIntents } from "../forks/provision.ts";
 import type { GateFailure, GateResult } from "../gate/tiers.ts";
 import { newIntentId, userIdFromForkRepo } from "../lib/names.ts";
@@ -271,7 +270,7 @@ export class YellowWorkflow extends WorkflowEntrypoint<Env, YellowParams> {
 			const remote = await repoRemote(this.env, p.repo, "write");
 			let reverted;
 			try {
-				reverted = await revertMain({ remote, yellowCommit: p.commit, greenCommit: decision.to, intent, message: rollbackMessage({ yellowCommit: p.commit, greenCommit: decision.to, failure, runId: p.runId, relies }), approve: (from, to) => approveMainMove(this.env, p.repo, from, to) });
+				reverted = await revertMain({ remote, yellowCommit: p.commit, greenCommit: decision.to, intent, message: rollbackMessage({ yellowCommit: p.commit, greenCommit: decision.to, failure, runId: p.runId, relies }) });
 			} catch (error) {
 				// A refused push means main moved between the check and the push: the newer change decides.
 				const again = await this.stillCurrent(p);

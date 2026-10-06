@@ -4,8 +4,7 @@ import { currentStockTag, getForkInfo, findPersona, fleetStub, ForkNotFoundError
 import { serveAsk } from "./ask.ts";
 import { clientKey } from "../lib/client.ts";
 import { scrubText } from "../git/tokens.ts";
-import { approveMainMove } from "../forks/main-guard.ts";
-import { mintOutsideToken, outsideGrantKey, type OutsideGrant } from "../forks/outside.ts";
+import { inboxRepoName, mintOutsideToken, outsideGrantKey, type OutsideGrant } from "../forks/outside.ts";
 import { forkRepoName, isValidRepoName, newIntentId, newSandboxUserId, STOCK_REPO, userIdFromForkRepo } from "../lib/names.ts";
 import { readCookie, safeEqual, SESSION_COOKIE, sessionCookieHeader, signSession, switchPersona, verifySession, type Session } from "../lib/session.ts";
 import type { PlatformExports } from "../runtime/loader.ts";
@@ -28,7 +27,7 @@ import { cloneRepo, fastForward, fetchBranch, firstParent, headCommit, pushBranc
 import { landedEarlier } from "../yellow/landing.ts";
 import type { Json } from "../lib/json.ts";
 import { shortRef } from "../runtime/refs.ts";
-import { headOf, openRepo, readTextFile } from "../runtime/repo-files.ts";
+import { headOf, isNotFound, openRepo, readTextFile } from "../runtime/repo-files.ts";
 import { parseUiPreferences, UI_PREFERENCES_PATH } from "../ui/preferences.ts";
 import { aggregateCharts, CHART_LIMITS } from "../ui/charts.ts";
 import { DEMO_OVERLAY, demoReleaseFiles, keepFloorTightening } from "../stock/releases.ts";
@@ -395,8 +394,11 @@ route("POST", "/api/admin/forks/:repo/delete", async (rc, { repo }) => {
 	const name = repoParam(repo!);
 	if (name === STOCK_REPO) throw new HttpError(400, "refusing to delete stock");
 	const deleted = await rc.env.ARTIFACTS.delete(name).catch(() => false);
+	// A fork's inbox goes with it (it is not in the fleet, so nothing else would remove it).
+	const grant = (await fleetStub(rc.env).getValue(outsideGrantKey(name))) as OutsideGrant | null;
+	const inboxDeleted = grant ? await rc.env.ARTIFACTS.delete(grant.inbox).catch(() => false) : null;
 	const removed = await fleetStub(rc.env).remove(name);
-	return json({ repo: name, deleted, removedFromFleet: removed });
+	return json({ repo: name, deleted, inboxDeleted, removedFromFleet: removed });
 });
 
 // One run of the end-to-end tiers against a fork commit, with no state change (a dry run of a yellow soak pass).
@@ -593,10 +595,7 @@ route("POST", "/api/forks/:repo/upgrade", async (rc, { repo }) => {
 	const previous = await headCommit(ws, "main");
 	const ff = await fastForward(ws, "main", pending.commit);
 	if (ff.outcome === "diverged") throw new HttpError(409, `main moved since upgrade/${pending.tag} was gated at ${pending.commit.slice(0, 7)}; a new upgrade run is needed`);
-	if (ff.outcome === "fast-forward") {
-		await approveMainMove(rc.env, name, previous, pending.commit);
-		await pushBranch(ws, remote, "main");
-	}
+	if (ff.outcome === "fast-forward") await pushBranch(ws, remote, "main");
 	// A repeated tap after a push whose response was lost finds main at the commit with no yellow run for it yet.
 	const landed = ff.outcome === "fast-forward" || landedEarlier({ mainHead: ff.oid, commit: pending.commit, healthCommit: entry.health.commit });
 	const lastRun: RunSummary = entry.lastRun?.runId === pending.runId ? { ...entry.lastRun, applied: true, at: new Date().toISOString() } : { runId: pending.runId, kind: "upgrade", tag: pending.tag, status: "passed", applied: true, commit: pending.commit, at: new Date().toISOString() };
@@ -610,8 +609,9 @@ route("POST", "/api/forks/:repo/upgrade", async (rc, { repo }) => {
 	return json({ repo: name, tag: pending.tag, commit: pending.commit, fork: updated, yellowRunId: yellow?.runId ?? null });
 });
 
-// Bring your own agent: a one hour write token for the session's own fork. The grant is recorded
-// before the token exists, so main protection (main-guard.ts) is on before any outside push can land.
+// Bring your own agent: a one hour write token for the inbox of the session's own fork (never for
+// the fork itself). The inbox is created on the first request as an Artifacts fork of the user's fork;
+// work/* pushes to it are imported into the fork and gated (forks/inbox.ts). One mint per fork at a time.
 route("POST", "/api/forks/:repo/token", async (rc, { repo }) => {
 	const name = repoParam(repo!);
 	const session = await requireSession(rc);
@@ -625,16 +625,36 @@ route("POST", "/api/forks/:repo/token", async (rc, { repo }) => {
 	await takeClientQuota(rc, "outside-token", LIMITS.outsideTokensPerClientPerHour, 3600);
 	await takeQuota(rc.env, "global", "outside-token", LIMITS.outsideTokensGlobalPerHour, 3600);
 	const key = outsideGrantKey(name);
-	const previous = (await fleet.getValue(key)) as OutsideGrant | null;
-	const at = new Date().toISOString();
-	const grant: OutsideGrant = { repo: name, userId: session.userId, tokenId: previous?.tokenId ?? null, firstAt: previous?.firstAt ?? at, mintedAt: at, expiresAt: previous?.expiresAt ?? null };
-	await fleet.setValue(key, grant as unknown as Json);
-	using handle = await openRepo(rc.env.ARTIFACTS, name);
-	const minted = await mintOutsideToken(handle, name, previous?.tokenId ?? null);
-	await fleet.setValue(key, { ...grant, tokenId: minted.tokenId, expiresAt: minted.access.expiresAt } as unknown as Json);
-	console.log(`outside token minted for ${name} (token id ${minted.tokenId}, expires ${minted.access.expiresAt})${minted.revokeError ? `; previous token not revoked: ${minted.revokeError}` : ""}`);
-	return json(minted.access, 201);
+	const lock = `lock:${key}`;
+	if (!(await fleet.tryLock(lock, 30_000))) throw new HttpError(409, "a token for this fork is being minted right now; try again in a few seconds");
+	try {
+		const previous = (await fleet.getValue(key)) as OutsideGrant | null;
+		const inbox = inboxRepoName(name);
+		using handle = await openInbox(rc.env, name, inbox);
+		const minted = await mintOutsideToken(handle, { fork: name, inbox }, previous?.tokenId ?? null);
+		const at = new Date().toISOString();
+		const grant: OutsideGrant = { repo: name, inbox, userId: session.userId, tokenId: minted.tokenId, firstAt: previous?.firstAt ?? at, mintedAt: at, expiresAt: minted.access.expiresAt };
+		await fleet.setValue(key, grant as unknown as Json);
+		console.log(`outside token minted for ${inbox} (token id ${minted.tokenId}, expires ${minted.access.expiresAt})${minted.revokeError ? `; previous token ${previous?.tokenId} not revoked: ${minted.revokeError}` : ""}`);
+		return json(minted.access, 201);
+	} finally {
+		await fleet.unlock(lock);
+	}
 });
+
+/** The fork's inbox, created on first use as an Artifacts fork of the fork's main (no other branches). */
+async function openInbox(env: Env, fork: string, inbox: string): Promise<ArtifactsRepo> {
+	try {
+		return await env.ARTIFACTS.get(inbox);
+	} catch (error) {
+		if (!isNotFound(error) && !/not found/i.test(String((error as Error)?.message))) throw error;
+	}
+	{
+		using source = await openRepo(env.ARTIFACTS, fork);
+		await source.fork(inbox, { description: `Outside agent inbox for ${fork}: work/* branches are imported into the fork and gated`, defaultBranchOnly: true });
+	}
+	return env.ARTIFACTS.get(inbox);
+}
 
 // Apply a repair branch: gate repair/<sha> in merge mode; main fast-forwards to it only if it passes.
 route("POST", "/api/forks/:repo/repairs/:sha/apply", async (rc, { repo, sha }) => {

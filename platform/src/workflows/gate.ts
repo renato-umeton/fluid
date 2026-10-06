@@ -10,7 +10,6 @@ import { fnv1a, gateInstanceId } from "../events/filter.ts";
 import { addedIntentIds, draftMessage, draftOutsideIntent, needsIntentCheck, OUTSIDE_SOURCE } from "../agents/outside-intent.ts";
 import { intentJson, intentPath } from "../agents/intent.ts";
 import { changedFiles, checkoutBranch, cloneRepo, commitChanges, commitsBetween, fetchBranch, firstParent, headCommit, mergeBase, parseTrailers, pushBranch, readCommitMessage, readWorkspaceFile, writeFiles } from "../git/ops.ts";
-import { approveMainMove } from "../forks/main-guard.ts";
 import { newIntentId, userIdFromForkRepo } from "../lib/names.ts";
 import { pinnedTagOf } from "../stock/releases.ts";
 import { runGate } from "../gate/run.ts";
@@ -247,7 +246,6 @@ export class GateWorkflow extends WorkflowEntrypoint<Env, GateParams> {
 		const mainBefore = await headCommit(ws, "main");
 		const plan = await planMainAdvance(ws, { branch: p.branch, commit: p.commit, message: `Merge main into ${p.branch}\n\nmain moved to ${mainBefore.slice(0, 7)} while ${p.branch} was gated. main only fast-forwards to a gated commit, so this merge is gated before it can reach main (gate run ${runId}).` });
 		if (plan.outcome === "fast-forward") {
-			await approveMainMove(this.env, p.repo, plan.previous, p.commit);
 			await pushBranch(ws, remote, "main");
 			await log.step("Merge to main", "done", `main fast-forwarded to ${p.commit.slice(0, 7)}`);
 			return { ok: true, oid: p.commit, regate: null, previous: plan.previous, landed: true };

@@ -2,8 +2,7 @@
 // commit the onboarding change on main: fluid.toml keeps the stock values and
 // gains the user's preferences, and a build-time intent record explains why.
 import synthetic from "../generated/synthetic.json";
-import { cloneRepo, commitChanges, deleteRemoteBranch, headCommit, listRemoteRefs, pushBranch, readWorkspaceFile, resetBranch, writeFiles, type Remote } from "../git/ops.ts";
-import { approveMainMove } from "./main-guard.ts";
+import { cloneRepo, commitChanges, deleteRemoteBranch, listRemoteRefs, pushBranch, readWorkspaceFile, resetBranch, writeFiles, type Remote } from "../git/ops.ts";
 import { forkRepoName, newIntentId, STOCK_REPO } from "../lib/names.ts";
 import { parseToml, setTomlValue } from "../lib/toml.ts";
 import { headOf, isNotFound, openRepo, readCommitFiles, readTextFile } from "../runtime/repo-files.ts";
@@ -152,7 +151,6 @@ export async function provisionFork(env: Env, input: ProvisionInput): Promise<Fo
 			// moves the fork's main back to that tag's commit, which stock's history contains.
 			const latest = await currentStockTag(env);
 			const rewound = stockTag !== latest;
-			const before = await headCommit(ws, "main");
 			if (rewound) await resetBranch(ws, "main", await resolveStockTag(env, stockTag));
 			const tomlAtTag = rewound ? ((await readWorkspaceFile(ws, "fluid.toml")) ?? stockToml) : stockToml;
 			const intentId = newIntentId();
@@ -166,7 +164,6 @@ export async function provisionFork(env: Env, input: ProvisionInput): Promise<Fo
 				intentId,
 				author: { name: `user:${input.userId}`, email: `${input.userId}@users.fluid.invalid` },
 			});
-			await approveMainMove(env, repoName, before, await headCommit(ws, "main"));
 			await pushBranch(ws, remote, "main", { force: rewound });
 		}
 		await fleet.update(repoName, { status: "pinned" });

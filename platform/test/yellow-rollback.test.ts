@@ -59,14 +59,6 @@ describe("revertMain", () => {
 		expect(JSON.parse((await readWorkspaceFile(ws, ".intent/int_rb.json"))!)).toMatchObject({ agent: "yellow-rollback", relies_on: ["int_b"], rolled_back: yellow, restored: green, failed_scenario: "e2e-ledger-provenance", failed_step: "ask" });
 	});
 
-	it("records the move from the yellow commit to the revert commit before pushing (main guard)", async () => {
-		const { ws, green, yellow } = await history();
-		const rb = rollbackIntent({ id: "int_rb", userId: "u", repo: "user-u", yellowCommit: yellow, greenCommit: green, failure, runId: "run_1", stockTag: "v1.9.0", relies: [] });
-		const moves: [string, string][] = [];
-		const result = await revertMain({ remote: { url: "", token: "" }, yellowCommit: yellow, greenCommit: green, intent: rb, message: "m", ws, approve: async (from, to) => void moves.push([from, to]) });
-		expect(moves).toEqual([[yellow, result.commit!]]);
-	});
-
 	it("refuses when main is no longer at the yellow commit", async () => {
 		const { ws, green, yellow } = await history();
 		await removeFiles(ws, ["connectors/redcap.ts"]);

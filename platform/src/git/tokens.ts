@@ -2,7 +2,7 @@
 // before "?expires=" is the credential. The platform's own tokens are never
 // logged, returned to clients, written to git config, or embedded in URLs.
 // The one exception is the outside token route (forks/outside.ts), which
-// hands a one hour token to the fork's owner and nobody else.
+// hands a one hour token for the owner's inbox repo to the owner and nobody else.
 
 export function tokenSecret(token: string): string {
 	if (typeof token !== "string" || token === "") throw new Error("tokenSecret: token must be a non-empty string");
