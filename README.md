@@ -12,6 +12,10 @@ Live demo: https://fluid.renato83.workers.dev (synthetic data only). To deploy y
 
 The demo above is mock mode (`/?mock=1`): Dr. Rowan Ellery asks the same dosing question at the bedside, attests to see the research answer, asks again while writing a manuscript, and gets labeled answers on an ambiguous screen.
 
+![Customizing a fork in plain words: a St. Jude look and feel, a Windows XP look, and a page of charts](docs/screenshots/demo-customize.gif)
+
+The second demo, also in mock mode, customizes the fork in plain words. "I want the St. Jude Children's Research Hospital look and feel" applies the Crimson look (red and white colors, no logos or names). "Make the look and feel like it is 2001 and we run on windows xp" applies the Luna XP look. "Add a page of charts" adds a Charts tab and opens it. Each change is written to `ui/preferences.json`, gated, and merged; see [docs/UI.md](docs/UI.md).
+
 ## Three proposals
 
 1. **A fork per person.** A central team ships a stock release. Each user gets an Artifacts repository forked from a stock tag and changes it freely with their own agent.
