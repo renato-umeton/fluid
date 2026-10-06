@@ -14,10 +14,10 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { buildIntent, intentJson, intentPath } from "../agents/intent.ts";
 import { acceptModelResolutions, fallbackResolution, MERGE_SCHEMA, mergePrompt, type Resolution } from "../agents/merge-resolve.ts";
-import { isWish, orderIntents, planReplay, replaySummary, wishesCarriedText, type ReplaySummary } from "../agents/replay.ts";
+import { replaySummary, wishesCarriedText, type ReplaySummary } from "../agents/replay.ts";
 import { fnv1a } from "../events/filter.ts";
-import { buildReplayBranch, replayBranchName } from "../forks/replay-branch.ts";
-import { checkoutBranch, cloneRepo, commitChanges, fastForward, fetchBranch, fetchStockTag, firstParent, headCommit, intentCommitOrder, mergeInto, mergeWithResolver, pushBranch, readTreeFiles, readWorkspaceFile, writeFiles, type ConflictVersions } from "../git/ops.ts";
+import { buildReplayBranch, hasWishes, prepareReplay, replayBranchName } from "../forks/replay-branch.ts";
+import { checkoutBranch, cloneRepo, commitChanges, fastForward, fetchBranch, fetchStockTag, firstParent, headCommit, mergeInto, mergeWithResolver, pushBranch, readWorkspaceFile, writeFiles, type ConflictVersions } from "../git/ops.ts";
 import { preferencesOf, readIntents, type BuildTimeIntent } from "../forks/provision.ts";
 import { runGate } from "../gate/run.ts";
 import { gateBrief, type GateResult } from "../gate/tiers.ts";
@@ -58,7 +58,29 @@ export function replayEnabled(flag: boolean | undefined): boolean {
 	return flag ?? REPLAY_BY_DEFAULT;
 }
 
-type ReplayAttempt = { used: false; summary: ReplaySummary | null } | { used: true; branch: string; commit: string; autoUpgrade: boolean; summary: ReplaySummary };
+export type ReplayAttempt = { used: false; summary: ReplaySummary | null } | { used: true; branch: string; commit: string; autoUpgrade: boolean; summary: ReplaySummary };
+type UsedReplay = Extract<ReplayAttempt, { used: true }>;
+
+/**
+ * The order of an upgrade: intent replay first, the merge path otherwise.
+ * A replay that did not apply merges at once. A replay whose gate fails, or
+ * whose attempt stops before main moves (a step that gave up, main moving
+ * with a conflict, too many regates), is reported by `land` as not passed:
+ * the fallback is logged and the merge path runs. An error thrown by `land`
+ * comes after main moved to the replay, so it is not merged over.
+ */
+export async function replayFirst<T>(deps: {
+	attempt: () => Promise<ReplayAttempt>;
+	land: (replay: UsedReplay) => Promise<{ passed: true; outcome: "applied" | "ready" } | { passed: false; why: string }>;
+	fallback: (replay: UsedReplay, why: string) => Promise<ReplaySummary>;
+	merge: (summary: ReplaySummary | null) => Promise<T>;
+}): Promise<T | { outcome: "applied" | "ready"; path: "replay" }> {
+	const replay = await deps.attempt();
+	if (!replay.used) return deps.merge(replay.summary);
+	const landed = await deps.land(replay);
+	if (landed.passed) return { outcome: landed.outcome, path: "replay" };
+	return deps.merge(await deps.fallback(replay, landed.why));
+}
 
 type TargetFork = { repo: string; status: string; pinnedTag: string; lastRun: { tag?: unknown; kind?: string } | null; pendingUpgrade: { tag: string } | null; health?: { health: string } };
 
@@ -141,24 +163,32 @@ export class UpgradeWorkflow extends WorkflowEntrypoint<Env, UpgradeParams> {
 		const step = steps(workflowStep);
 		const p = event.payload;
 		const log = runLog(this.env, p.runId);
+		const result = await replayFirst({
+			// First attempt: rebuild the fork from fresh stock by replaying its wishes (intent replay).
+			attempt: () => step.do("replay wishes", GIT_STEP, () => this.replayWishes(p)),
+			land: async (replay) => {
+				const landed = await this.gateAndLand(step, p, { branch: replay.branch, commit: replay.commit, autoUpgrade: replay.autoUpgrade, prefix: "replay ", tiersPrefix: "Replay: ", extra: { path: "replay", replay: replay.summary }, failSoft: true });
+				if (landed.passed) return landed;
+				return { passed: false, why: landed.error ? `the replay attempt stopped: ${landed.error}` : `${replay.branch} did not pass the gate (${landed.gate ? (gateBrief(landed.gate).firstFailure ?? "failed") : "failed"})` };
+			},
+			fallback: (replay, why) =>
+				step.do("replay fallback", async () => {
+					const summary = replaySummary(p.tag, "merge", replay.summary.wishes.map((w) => ({ ...w, changed: [] })), `${why}; upgrading by merge instead`);
+					await log.step("Fall back to merge", "info", `${why}. main is unchanged; merging stock ${p.tag} into upgrade/${p.tag} instead.`);
+					await log.update({ replay: asJson(summary), branch: `upgrade/${p.tag}` });
+					return summary;
+				}),
+			merge: (summary) => this.mergePath(step, p, summary),
+		});
+		return "repo" in result ? result : { repo: p.repo, ...result };
+	}
+
+	/** The merge path: merge the stock tag into upgrade/<tag> (the merge agent resolves conflicts), gate, land, or open a repair. */
+	private async mergePath(step: Steps, p: UpgradeParams, mergeSummary: ReplaySummary | null) {
+		const log = runLog(this.env, p.runId);
 		const exports = appExports(this.ctx);
 		const branch = `upgrade/${p.tag}`;
 		const lastRun = (extra: Record<string, unknown>) => ({ runId: p.runId, kind: "upgrade", tag: p.tag, branch, ...extra });
-
-		// First attempt: rebuild the fork from fresh stock by replaying its wishes (intent replay).
-		const replay = await step.do("replay wishes", GIT_STEP, () => this.replayWishes(p));
-		let mergeSummary: ReplaySummary | null = replay.summary;
-		if (replay.used) {
-			const landed = await this.gateAndLand(step, p, { branch: replay.branch, commit: replay.commit, autoUpgrade: replay.autoUpgrade, prefix: "replay ", tiersPrefix: "Replay: ", extra: { path: "replay", replay: replay.summary } });
-			if (landed.passed) return { repo: p.repo, outcome: landed.outcome, path: "replay" };
-			mergeSummary = await step.do("replay fallback", async () => {
-				const why = gateBrief(landed.gate).firstFailure ?? "the gate failed";
-				const summary = replaySummary(p.tag, "merge", replay.summary.wishes.map((w) => ({ ...w, changed: [] })), `${replay.branch} did not pass the gate (${why}); upgrading by merge instead`);
-				await log.step("Fall back to merge", "info", `${replay.branch} did not pass the gate (${why}). main is unchanged; merging stock ${p.tag} into ${branch} instead.`);
-				await log.update({ replay: asJson(summary), branch });
-				return summary;
-			});
-		}
 		const mergeExtra = { path: "merge", ...(mergeSummary ? { replay: mergeSummary } : {}) };
 
 		const merged = await step.do("merge stock", GIT_STEP, async () => {
@@ -245,7 +275,7 @@ export class UpgradeWorkflow extends WorkflowEntrypoint<Env, UpgradeParams> {
 		const landed = await this.gateAndLand(step, p, { branch, commit: merged.commit, autoUpgrade: merged.autoUpgrade, prefix: "", tiersPrefix: "", extra: { ...mergeExtra, conflicts: merged.conflicts.filter((c) => c !== "fluid.toml").length } });
 		if (landed.passed) return { repo: p.repo, outcome: landed.outcome, conflicts: merged.conflicts, path: "merge" };
 
-		const failed = landed.gate;
+		const failed = landed.gate!;
 		const commit = landed.commit;
 		await step.do("hand off to repair", async () => {
 			const repairId = repairRunId(p.repo, commit);
@@ -282,47 +312,36 @@ export class UpgradeWorkflow extends WorkflowEntrypoint<Env, UpgradeParams> {
 		const log = runLog(this.env, p.runId);
 		const branch = replayBranchName(p.tag);
 		const name = `Replay wishes on stock ${p.tag}`;
-		let opened = false;
 		try {
 			const remote = await repoRemote(this.env, p.repo, "write");
 			const stock = await repoRemote(this.env, STOCK_REPO, "read");
 			const ws = await cloneRepo({ ...remote, ref: "main", singleBranch: true });
 			const main = await headCommit(ws, "main");
-			const mainFiles = await readTreeFiles(ws, main);
-			const fromTag = pinnedTagOf(mainFiles["fluid.toml"]);
+			const mainToml = (await readWorkspaceFile(ws, "fluid.toml")) ?? "";
+			const fromTag = pinnedTagOf(mainToml);
 			if (!fromTag || fromTag === p.tag) return { used: false, summary: null };
-			const intents = Object.entries(mainFiles)
-				.filter(([path]) => path.startsWith(".intent/") && path.endsWith(".json"))
-				.map(([path, text]) => {
-					try {
-						return JSON.parse(text) as BuildTimeIntent;
-					} catch {
-						throw new Error(`intent record ${path} is not valid JSON`);
-					}
-				});
-			const ordered = orderIntents(intents, await intentCommitOrder(ws, "main"));
-			if (!ordered.some(isWish)) return { used: false, summary: null };
-			opened = true;
-			await setFleet(this.env, p.repo, { status: "upgrading", lastRun: { runId: p.runId, kind: "upgrade", tag: p.tag, branch, status: "running", path: "replay" } });
-			await log.step(name, "running", `Rebuilding the fork from stock ${p.tag} by running each wish again`);
+			// A fork with no wishes has nothing to replay; it merges without a replay step (and without fetching stock twice).
+			if (!(await hasWishes(ws, main))) return { used: false, summary: null };
 			const stockCommit = await fetchStockTag(ws, stock, p.tag);
 			const fromCommit = await fetchStockTag(ws, stock, fromTag);
-			const stockFiles = await readTreeFiles(ws, stockCommit);
-			const plan = planReplay({ tag: p.tag, fromTag, stockAtTag: stockFiles, stockAtFrom: await readTreeFiles(ws, fromCommit), mainFiles, intents: ordered });
+			const { plan, mainTree, stockFiles } = await prepareReplay(ws, { main, stockCommit, fromCommit, tag: p.tag, fromTag, safety: p.safety });
+			await setFleet(this.env, p.repo, { status: "upgrading", lastRun: { runId: p.runId, kind: "upgrade", tag: p.tag, branch, status: "running", path: "replay" } });
+			await log.step(name, "running", `Rebuilding the fork from stock ${p.tag} by running each wish again`);
 			if (plan.mode === "merge") {
 				const summary = replaySummary(p.tag, "merge", plan.results, plan.reason);
 				await log.update({ replay: asJson(summary) });
 				await log.step(name, "info", `Upgrading by merge: ${plan.reason}`);
 				return { used: false, summary };
 			}
-			const built = await buildReplayBranch(ws, { branch, tag: p.tag, stockCommit, main, plan, stockFiles });
+			const built = await buildReplayBranch(ws, { branch, tag: p.tag, stockCommit, main, plan, stockFiles, mainTree });
 			await pushBranch(ws, remote, branch, { force: true });
 			const summary = replaySummary(p.tag, "replay", plan.results);
 			await log.update({ replay: asJson(summary), branch, commit: built.commit, fromTag });
 			await log.step(name, "done", `${wishesCarriedText(summary)} on ${branch}. ${plan.results.map((r) => `${r.intentId}: ${r.reason}${r.stockAlsoChanged?.length ? ` (stock ${p.tag} also changed ${r.stockAlsoChanged.join(", ")}; replay needed no merge there)` : ""}`).join("; ")}`);
-			return { used: true, branch, commit: built.commit, autoUpgrade: preferencesOf(parseToml(mainFiles["fluid.toml"] ?? "")).auto_upgrade, summary };
+			return { used: true, branch, commit: built.commit, autoUpgrade: preferencesOf(parseToml(mainToml)).auto_upgrade, summary };
 		} catch (error) {
-			if (opened) await log.step(name, "info", `Replay could not run (${errorText(error)}); upgrading by merge`);
+			// Replay never fails an upgrade by itself: say why it could not run, then merge.
+			await log.step(name, "info", `Replay could not run (${errorText(error)}); upgrading by merge`);
 			return { used: false, summary: null };
 		}
 	}
@@ -332,23 +351,39 @@ export class UpgradeWorkflow extends WorkflowEntrypoint<Env, UpgradeParams> {
 	 * (auto_upgrade) or records a pending one-tap upgrade. If main moved, main
 	 * is merged into the branch and gated again. Returns the failing gate
 	 * otherwise. `prefix` keeps the replay attempt's workflow steps apart from
-	 * the merge path's.
+	 * the merge path's. With `failSoft` (the replay attempt), a gate or apply
+	 * step that gives up after its retries, a moved main that conflicts, or
+	 * too many regates is returned as `error` instead of thrown, so the
+	 * upgrade can fall back to the merge path. main has not moved then.
 	 */
 	private async gateAndLand(
 		step: Steps,
 		p: UpgradeParams,
-		input: { branch: string; commit: string; autoUpgrade: boolean; prefix: string; tiersPrefix: string; extra: Record<string, unknown> },
-	): Promise<{ passed: true; outcome: "applied" | "ready" } | { passed: false; gate: GateResult; commit: string }> {
+		input: { branch: string; commit: string; autoUpgrade: boolean; prefix: string; tiersPrefix: string; extra: Record<string, unknown>; failSoft?: boolean },
+	): Promise<{ passed: true; outcome: "applied" | "ready" } | { passed: false; gate: GateResult | null; commit: string; error?: string }> {
 		const log = runLog(this.env, p.runId);
 		const exports = appExports(this.ctx);
 		const { branch } = input;
 		const lastRun = (extra: Record<string, unknown>) => ({ runId: p.runId, kind: "upgrade", tag: p.tag, branch, ...input.extra, ...extra });
 		let commit = input.commit;
 		let gate: GateResult | null = null;
+		const soft = async <T>(name: string, run: () => Promise<T>): Promise<{ ok: true; value: T } | { ok: false; error: string }> => {
+			if (!input.failSoft) return { ok: true, value: await run() };
+			try {
+				return { ok: true, value: await run() };
+			} catch (error) {
+				const message = errorText(error);
+				await step.do(`${name} stopped`, async () => {
+					await log.step(`Gate ${branch} at ${p.tag}`, "failed", `The replay attempt stopped: ${message}`);
+					return true;
+				});
+				return { ok: false, error: message };
+			}
+		};
 		for (let round = 0; round <= MAX_REGATES; round++) {
 			const at = commit;
 			const suffix = round === 0 ? "" : ` ${round}`;
-			gate = await step.do(`${input.prefix}gate${suffix}`, GATE_STEP, async () => {
+			const gated = await soft(`${input.prefix}gate${suffix}`, () => step.do(`${input.prefix}gate${suffix}`, GATE_STEP, async () => {
 				await setFleet(this.env, p.repo, { status: "gating", lastRun: lastRun({ status: "gating" }) });
 				await log.step(`Gate ${branch} at ${p.tag}${suffix}`, "running", round ? `main moved; gating the merge of main into ${branch} at ${at.slice(0, 7)}` : undefined);
 				const result = await runGate({ env: this.env, exports }, { repo: p.repo, ref: branch, commit: at, mode: "merge" });
@@ -356,17 +391,25 @@ export class UpgradeWorkflow extends WorkflowEntrypoint<Env, UpgradeParams> {
 				await persistGate(this.env, result, p.runId);
 				await log.step(`Gate ${branch} at ${p.tag}${suffix}`, result.passed ? "done" : "failed", result.passed ? "All three tiers passed" : (gateBrief(result).firstFailure ?? "failed"));
 				return result;
-			});
+			}));
+			if (!gated.ok) return { passed: false, gate: null, commit, error: gated.error };
+			gate = gated.value;
 			if (!gate.passed) break;
-			const applied = await step.do(`${input.prefix}apply${suffix}`, GIT_STEP, async () => {
+			const applyStep = await soft(`${input.prefix}apply${suffix}`, () => step.do(`${input.prefix}apply${suffix}`, GIT_STEP, async () => {
 				if (!input.autoUpgrade) {
 					await log.step("Your approval", "waiting", `auto_upgrade is off: one tap fast-forwards main to ${branch}`);
-					return { applied: false, regate: null as string | null };
+					return { applied: false, regate: null as string | null } as Awaited<ReturnType<UpgradeWorkflow["advanceMain"]>>;
 				}
 				return this.advanceMain(p.repo, branch, at, p.tag, p.runId);
-			});
+			}));
+			if (!applyStep.ok) return { passed: false, gate, commit, error: applyStep.error };
+			const applied = applyStep.value;
 			if (applied.regate) {
-				if (round === MAX_REGATES) throw new Error(`main kept moving during the upgrade to ${p.tag}; run the release again`);
+				if (round === MAX_REGATES) {
+					const message = `main kept moving during the upgrade to ${p.tag}; run the release again`;
+					if (!input.failSoft) throw new Error(message);
+					return { passed: false, gate, commit, error: message };
+				}
 				commit = applied.regate;
 				continue;
 			}

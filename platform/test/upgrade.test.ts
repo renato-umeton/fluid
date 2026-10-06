@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { replayEnabled, upgradeInstanceId, upgradeTargets } from "../src/workflows/upgrade.ts";
+import { replayEnabled, replayFirst, upgradeInstanceId, upgradeTargets } from "../src/workflows/upgrade.ts";
 
 const fork = (repo: string, extra: Record<string, unknown> = {}) => ({ repo, status: "pinned", pinnedTag: "v1.1.0", lastRun: null, pendingUpgrade: null, ...extra });
 
@@ -16,6 +16,60 @@ describe("replayEnabled", () => {
 		expect(replayEnabled(undefined)).toBe(true);
 		expect(replayEnabled(true)).toBe(true);
 		expect(replayEnabled(false)).toBe(false);
+	});
+});
+
+describe("replayFirst", () => {
+	const summary = { tag: "v1.2.0", path: "replay" as const, carried: 1, total: 1, wishes: [] };
+	const used = { used: true as const, branch: "replay/v1.2.0", commit: "c".repeat(40), autoUpgrade: true, summary };
+	function deps(land: () => Promise<{ passed: true; outcome: "applied" | "ready" } | { passed: false; why: string }>, attempt: () => Promise<unknown> = async () => used) {
+		const calls: string[] = [];
+		return {
+			calls,
+			deps: {
+				attempt: attempt as never,
+				land: async () => {
+					calls.push("land");
+					return land();
+				},
+				fallback: async (_a: unknown, why: string) => {
+					calls.push(`fallback: ${why}`);
+					return { ...summary, path: "merge" as const, carried: 0, reason: why };
+				},
+				merge: async (s: { reason?: string } | null) => {
+					calls.push(`merge: ${s?.reason ?? "none"}`);
+					return { repo: "user-a", outcome: "pinned" };
+				},
+			},
+		};
+	}
+
+	it("lands a replay that passes and never merges", async () => {
+		const t = deps(async () => ({ passed: true, outcome: "applied" }));
+		expect(await replayFirst(t.deps)).toEqual({ outcome: "applied", path: "replay" });
+		expect(t.calls).toEqual(["land"]);
+	});
+
+	it("falls back to the merge path when the replay gate fails, or the attempt stops (main moved, a step gave up)", async () => {
+		for (const why of ["Tier 1: inv-x failed", "the replay attempt stopped: main kept moving during the upgrade"]) {
+			const t = deps(async () => ({ passed: false, why }));
+			expect(await replayFirst(t.deps)).toEqual({ repo: "user-a", outcome: "pinned" });
+			expect(t.calls).toEqual(["land", `fallback: ${why}`, `merge: ${why}`]);
+		}
+	});
+
+	it("merges straight away when replay did not apply", async () => {
+		const t = deps(async () => ({ passed: true, outcome: "applied" }), async () => ({ used: false, summary: { ...summary, path: "merge", reason: "model change" } }));
+		await replayFirst(t.deps);
+		expect(t.calls).toEqual(["merge: model change"]);
+	});
+
+	it("does not merge on top of a replay that already landed and then failed", async () => {
+		const t = deps(async () => {
+			throw new Error("yellow start failed");
+		});
+		await expect(replayFirst(t.deps)).rejects.toThrow("yellow start failed");
+		expect(t.calls).toEqual(["land"]);
 	});
 });
 

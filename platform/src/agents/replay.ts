@@ -239,6 +239,23 @@ function sameToml(a: string | undefined, b: string | undefined): boolean {
 	}
 }
 
+/**
+ * Replay compares and writes text, so it only runs on plain files. Every
+ * entry of every tree must be a plain file (mode 100644, not executable, not
+ * a link or a submodule), and every file outside the carried folders must be
+ * valid UTF-8 text. Carried files may be binary: they are copied by bytes.
+ * Returns why replay cannot run, or null.
+ */
+export function treeGuard(trees: { name: string; files: Record<string, { mode: string; text: string | null }> }[]): string | null {
+	for (const { name, files } of trees) {
+		for (const [path, entry] of Object.entries(files).sort(([a], [b]) => a.localeCompare(b))) {
+			if (entry.mode !== "100644") return `${name} has ${path} with mode ${entry.mode}; replay writes plain files only`;
+			if (entry.text === null && !isCarriedPath(path)) return `${name} has ${path}, a binary or non-UTF-8 file outside the carried folders; replay compares text only`;
+		}
+	}
+	return null;
+}
+
 /** Paths where a rebuilt tree differs from main (carried paths excluded; fluid.toml compared by value). */
 export function differingPaths(rebuilt: Record<string, string>, main: Record<string, string>): string[] {
 	const paths = [...new Set([...Object.keys(rebuilt), ...Object.keys(main)])].filter((p) => !isCarriedPath(p)).sort();
@@ -253,8 +270,9 @@ export type ReplayPlan =
  * Decides whether an upgrade can rebuild the fork by replay. It can when the
  * fork has at least one wish, every wish is replayable, replaying them on
  * the fork's current tag rebuilds main exactly (so nothing on main is lost),
- * and every wish still applies at the new tag. Otherwise the upgrade merges,
- * and the reason says why.
+ * and every wish still applies at the new tag. On a safety release no wish
+ * may change a file stock also changed. Otherwise the upgrade merges, and
+ * the reason says why.
  */
 export function planReplay(input: {
 	tag: string;
@@ -264,6 +282,8 @@ export function planReplay(input: {
 	mainFiles: Record<string, string>;
 	/** In commit order (orderIntents). */
 	intents: BuildTimeIntent[];
+	/** A safety release: a wish over a file stock also changed takes the merge path, where the merge agent, the gate, and a repair handle it. */
+	safety?: boolean;
 }): ReplayPlan {
 	const wishes = input.intents.filter(isWish);
 	if (wishes.length === 0) return { mode: "merge", reason: "no wishes to carry; a plain merge of stock is enough", results: [] };
@@ -285,6 +305,8 @@ export function planReplay(input: {
 	}
 	const failed = atTag.results.filter((r) => r.status === "failed");
 	if (failed.length) return { mode: "merge", reason: failed.map((r) => `${r.intentId} ${r.reason} on ${input.tag}`).join("; "), results: atTag.results };
+	const overlap = [...new Set(atTag.results.flatMap((r) => r.stockAlsoChanged ?? []))];
+	if (input.safety && overlap.length) return { mode: "merge", reason: `safety release ${input.tag} changes ${overlap.join(", ")}, which wishes also change; the merge path handles it`, results: atTag.results };
 	return { mode: "replay", files: atTag.files, base, results: atTag.results, steps: atTag.steps };
 }
 

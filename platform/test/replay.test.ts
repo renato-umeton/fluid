@@ -7,13 +7,13 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import stockSource from "../src/generated/stock-source.json";
 import synthetic from "../src/generated/synthetic.json";
 import { protocolsFor, tauChange } from "../src/agents/recipes.ts";
-import { isWish, orderIntents, planReplay, replayBase, replayIntents, replayOf, replaySummary, wishesCarriedText, type ReplaySpec } from "../src/agents/replay.ts";
+import { isWish, orderIntents, planReplay, replayBase, replayIntents, replayOf, replaySummary, treeGuard, wishesCarriedText, type ReplaySpec } from "../src/agents/replay.ts";
 import { uiChange } from "../src/agents/ui-recipe.ts";
 import { seedChange } from "../src/fleet/seed-catalog.ts";
 import { onboardingToml, type BuildTimeIntent } from "../src/forks/provision.ts";
 import { checkoutBranch, commitChanges, initRepo, mergeInto, writeFiles } from "../src/git/ops.ts";
 import { summarizeTier, type RunnerManifestResult } from "../src/gate/tiers.ts";
-import { parseToml } from "../src/lib/toml.ts";
+import { parseToml, setTomlValue } from "../src/lib/toml.ts";
 import { APP_MODULE, ENTRY_MODULE, RUNNER_ENTRY_MODULE, buildModuleMap, buildRunnerModuleMap } from "../src/runtime/modules.ts";
 import { demoReleaseFiles } from "../src/stock/releases.ts";
 import { materialize } from "./helpers/materialize.ts";
@@ -273,6 +273,38 @@ describe("planReplay", () => {
 		expect(plan.reason).toMatch(/no longer applies/);
 	});
 
+	it("replays when the new stock deletes a file no wish touches", () => {
+		const { files: main, intents } = build();
+		const { "connectors/calendar.ts": _gone, ...without } = next;
+		const plan = planReplay({ tag: "v1.1.0", fromTag: "v1.0.0", stockAtTag: without, stockAtFrom: stock, mainFiles: main, intents });
+		expect(plan.mode).toBe("replay");
+		if (plan.mode === "replay") expect(plan.files["connectors/calendar.ts"]).toBeUndefined();
+	});
+
+	it("merges when fluid.toml has a change outside [preferences] that no wish records", () => {
+		const { files, intents } = build();
+		const main = { ...files, "fluid.toml": setTomlValue(files["fluid.toml"]!, "thresholds", "floor_note", "mine") };
+		const plan = planReplay({ tag: "v1.1.0", fromTag: "v1.0.0", stockAtTag: next, stockAtFrom: stock, mainFiles: main, intents });
+		expect(plan.mode).toBe("merge");
+		expect(plan.mode === "merge" && plan.reason).toContain("fluid.toml");
+	});
+
+	it("merges when main has an extra file outside the carried folders", () => {
+		const { files, intents } = build();
+		const main = { ...files, "notes/todo.md": "remember\n" };
+		const plan = planReplay({ tag: "v1.1.0", fromTag: "v1.0.0", stockAtTag: next, stockAtFrom: stock, mainFiles: main, intents });
+		expect(plan.mode === "merge" && plan.reason).toContain("notes/todo.md");
+	});
+
+	it("on a safety release, merges when stock changed a file under a wish", () => {
+		const { files: main, intents } = build();
+		const plan = planReplay({ tag: "v1.1.0", fromTag: "v1.0.0", stockAtTag: next, stockAtFrom: stock, mainFiles: main, intents, safety: true });
+		expect(plan.mode).toBe("merge");
+		expect(plan.mode === "merge" && plan.reason).toMatch(/safety release.*app\/cards\.ts/);
+		const tauOnly = forkMain(stock, "v1.0.0", [(f) => tauChange(f["fluid.toml"]!, { kind: "tau", value: 0.9, direction: "set" })]);
+		expect(planReplay({ tag: "v1.1.0", fromTag: "v1.0.0", stockAtTag: next, stockAtFrom: stock, mainFiles: tauOnly.files, intents: tauOnly.intents, safety: true }).mode).toBe("replay");
+	});
+
 	it("merges a fork with no wishes: there is nothing to carry", () => {
 		const { files: main, intents } = forkMain(stock, "v1.0.0", []);
 		const plan = planReplay({ tag: "v1.1.0", fromTag: "v1.0.0", stockAtTag: next, stockAtFrom: stock, mainFiles: main, intents });
@@ -283,6 +315,20 @@ describe("planReplay", () => {
 		const { files: main, intents } = forkMain(stock, "v1.0.0", [(f) => uiChange(f["ui/preferences.json"] ?? null, "use the crimson look"), (f) => seedChange("redcap", f, { personas: synthetic.personas, persona: "research-coordinator" })]);
 		const plan = planReplay({ tag: "v1.1.0", fromTag: "v1.0.0", stockAtTag: next, stockAtFrom: stock, mainFiles: main, intents });
 		expect(plan.mode).toBe("replay");
+	});
+});
+
+describe("treeGuard", () => {
+	const text = (t: string) => ({ mode: "100644", text: t });
+	it("accepts plain text files and binary files in carried folders", () => {
+		expect(treeGuard([{ name: "main", files: { "app/a.ts": text("x"), "tests/user/f.bin": { mode: "100644", text: null } } }])).toBeNull();
+	});
+	it("refuses a binary or non-UTF-8 file outside the carried folders", () => {
+		expect(treeGuard([{ name: "stock v1.1.0", files: { "app/logo.png": { mode: "100644", text: null } } }])).toContain("app/logo.png");
+	});
+	it("refuses any file that is not a plain file, carried or not", () => {
+		expect(treeGuard([{ name: "main", files: { "tests/user/run.sh": { mode: "100755", text: "x" } } }])).toContain("100755");
+		expect(treeGuard([{ name: "main", files: { "app/link": { mode: "120000", text: "a.ts" } } }])).toContain("app/link");
 	});
 });
 

@@ -478,15 +478,56 @@ export async function resolveAnyRef(ws: Workspace, ref: string): Promise<string>
 	throw new Error(`resolveAnyRef: ${ref} not found`);
 }
 
-/** Every file of a commit's tree as text (stock and fork files are text). */
-export async function readTreeFiles(ws: Workspace, commit: string): Promise<Record<string, string>> {
+/** One entry of a commit's tree: its object id, its git mode, and its text when it is valid UTF-8 (null otherwise). */
+export interface TreeFile {
+	oid: string;
+	mode: string;
+	text: string | null;
+}
+
+/**
+ * Every entry of a commit's tree, by path. Text is decoded strictly (an
+ * invalid UTF-8 blob reads as null, and a byte order mark is kept), so a
+ * file's text encodes back to exactly its bytes.
+ */
+export async function readTree(ws: Workspace, commit: string): Promise<Record<string, TreeFile>> {
 	const oid = await peelToCommit(ws, await resolveAnyRef(ws, commit));
-	const decoder = new TextDecoder();
+	const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+	const out: Record<string, TreeFile> = {};
+	const walk = async (treeOid: string, prefix: string): Promise<void> => {
+		const { tree } = await git.readTree({ fs: ws.fs, dir: ws.dir, oid: treeOid });
+		for (const entry of tree) {
+			const path = prefix ? `${prefix}/${entry.path}` : entry.path;
+			if (entry.type === "tree") {
+				await walk(entry.oid, path);
+				continue;
+			}
+			let text: string | null = null;
+			if (entry.type === "blob") {
+				try {
+					text = decoder.decode((await git.readBlob({ fs: ws.fs, dir: ws.dir, oid: entry.oid })).blob);
+				} catch {
+					text = null;
+				}
+			}
+			out[path] = { oid: entry.oid, mode: entry.mode, text };
+		}
+	};
+	const { commit: parsed } = await git.readCommit({ fs: ws.fs, dir: ws.dir, oid });
+	await walk(parsed.tree, "");
+	return out;
+}
+
+/** The text files of a commit's tree (binary and non-UTF-8 blobs are left out). */
+export async function readTreeFiles(ws: Workspace, commit: string): Promise<Record<string, string>> {
 	const files: Record<string, string> = {};
-	for (const path of await git.listFiles({ fs: ws.fs, dir: ws.dir, ref: oid })) {
-		files[path] = decoder.decode((await git.readBlob({ fs: ws.fs, dir: ws.dir, oid, filepath: path })).blob);
-	}
+	for (const [path, entry] of Object.entries(await readTree(ws, commit))) if (entry.text !== null) files[path] = entry.text;
 	return files;
+}
+
+/** A blob's bytes by object id. */
+export async function readBlobBytes(ws: Workspace, oid: string): Promise<Uint8Array> {
+	return (await git.readBlob({ fs: ws.fs, dir: ws.dir, oid })).blob;
 }
 
 /** Intent ids named by Intent-Id trailers in the history of `ref`, oldest first, each once. */
