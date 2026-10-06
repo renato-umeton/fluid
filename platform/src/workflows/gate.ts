@@ -9,11 +9,12 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloud
 import { fnv1a, gateInstanceId } from "../events/filter.ts";
 import { addedIntentIds, draftMessage, draftOutsideIntent, needsIntentCheck, OUTSIDE_SOURCE } from "../agents/outside-intent.ts";
 import { intentJson, intentPath } from "../agents/intent.ts";
-import { changedFiles, checkoutBranch, cloneRepo, commitChanges, commitsBetween, fastForward, fetchBranch, firstParent, headCommit, mergeBase, mergeInto, parseTrailers, pushBranch, readCommitMessage, readWorkspaceFile, writeFiles } from "../git/ops.ts";
+import { changedFiles, checkoutBranch, cloneRepo, commitChanges, commitsBetween, fetchBranch, firstParent, headCommit, mergeBase, parseTrailers, pushBranch, readCommitMessage, readWorkspaceFile, writeFiles } from "../git/ops.ts";
 import { approveMainMove } from "../forks/main-guard.ts";
 import { newIntentId, userIdFromForkRepo } from "../lib/names.ts";
 import { pinnedTagOf } from "../stock/releases.ts";
 import { runGate } from "../gate/run.ts";
+import { mainMovedNote, planMainAdvance } from "../gate/advance.ts";
 import { gateBrief, type GateResult } from "../gate/tiers.ts";
 import { fleetStub } from "../stubs.ts";
 import { landedEarlier } from "../yellow/landing.ts";
@@ -243,37 +244,41 @@ export class GateWorkflow extends WorkflowEntrypoint<Env, GateParams> {
 		const remote = await repoRemote(this.env, p.repo, "write");
 		const ws = await cloneRepo({ ...remote, ref: "main", singleBranch: true });
 		await fetchBranch(ws, remote, p.branch);
-		const previous = await headCommit(ws, "main");
-		const ff = await fastForward(ws, "main", p.commit);
-		if (ff.outcome === "fast-forward") {
-			await approveMainMove(this.env, p.repo, previous, p.commit);
+		const mainBefore = await headCommit(ws, "main");
+		const plan = await planMainAdvance(ws, { branch: p.branch, commit: p.commit, message: `Merge main into ${p.branch}\n\nmain moved to ${mainBefore.slice(0, 7)} while ${p.branch} was gated. main only fast-forwards to a gated commit, so this merge is gated before it can reach main (gate run ${runId}).` });
+		if (plan.outcome === "fast-forward") {
+			await approveMainMove(this.env, p.repo, plan.previous, p.commit);
 			await pushBranch(ws, remote, "main");
 			await log.step("Merge to main", "done", `main fast-forwarded to ${p.commit.slice(0, 7)}`);
-			return { ok: true, oid: p.commit, regate: null, previous, landed: true };
+			return { ok: true, oid: p.commit, regate: null, previous: plan.previous, landed: true };
 		}
-		if (ff.outcome === "already") {
+		if (plan.outcome === "already") {
 			// A retried step after a successful push: main is at the commit but its yellow run never started.
-			if (landedEarlier({ mainHead: ff.oid, commit: p.commit, healthCommit: (await fleetStub(this.env).health(p.repo))?.commit ?? null })) {
+			if (landedEarlier({ mainHead: plan.mainHead, commit: p.commit, healthCommit: (await fleetStub(this.env).health(p.repo))?.commit ?? null })) {
 				await log.step("Merge to main", "done", `main is already at ${p.commit.slice(0, 7)} (an earlier attempt pushed it); its yellow run starts now`);
 				return { ok: true, oid: p.commit, regate: null, previous: await firstParent(ws, p.commit), landed: true };
 			}
 			await log.step("Merge to main", "done", `main already contains ${p.commit.slice(0, 7)}`);
-			return { ok: true, oid: ff.oid, regate: null };
+			return { ok: true, oid: plan.mainHead, regate: null };
 		}
-		const branchHead = await headCommit(ws, `refs/remotes/origin/${p.branch}`);
-		if (branchHead !== p.commit) {
-			await log.step("Merge to main", "failed", `${p.branch} moved on to ${branchHead.slice(0, 7)}; the gate for that push decides`);
+		if (plan.outcome === "branch-moved") {
+			await log.step("Merge to main", "failed", `${p.branch} moved on to ${plan.branchHead.slice(0, 7)}; the gate for that push decides`);
 			return { ok: false, oid: null, regate: null };
 		}
-		await checkoutBranch(ws, p.branch);
-		const outcome = await mergeInto(ws, { ours: p.branch, theirs: "main", message: `Merge main into ${p.branch}\n\nmain moved to ${ff.oid.slice(0, 7)} while ${p.branch} was gated. main only fast-forwards to a gated commit, so this merge is gated before it can reach main (gate run ${runId}).` });
-		if (!outcome.ok) {
-			await log.step("Merge to main", "failed", `main moved and ${outcome.conflicts.filepaths.join(", ")} conflict with ${p.branch}; rerun the change on the new main`);
+		// main moved while this branch was gated; say so on this run and on the run that is waiting for it.
+		const moved = `main moved to ${plan.mainHead.slice(0, 7)}${mainMovedNote({ mainHead: plan.mainHead, health: await fleetStub(this.env).health(p.repo) })}`;
+		const parentLog = parentRunId ? runLog(this.env, parentRunId) : null;
+		if (plan.outcome === "conflict") {
+			const detail = `${moved} and ${plan.files.join(", ")} conflict with ${p.branch}; rerun the change on the new main`;
+			await log.step("Merge to main", "failed", detail);
+			await parentLog?.step("main moved during the gate", "failed", detail).catch(() => undefined);
 			return { ok: false, oid: null, regate: null };
 		}
-		if (parentRunId) await linkGateParent(this.env, p.repo, p.branch, outcome.oid, { parentRunId, source });
+		if (parentRunId) await linkGateParent(this.env, p.repo, p.branch, plan.merge, { parentRunId, source });
 		await pushBranch(ws, remote, p.branch);
-		await log.step("Merge to main", "done", `main moved to ${ff.oid.slice(0, 7)}; merged it into ${p.branch} as ${outcome.oid.slice(0, 7)}, which is gated next. main is unchanged.`);
-		return { ok: false, oid: null, regate: outcome.oid };
+		const detail = `${moved}; merged it into ${p.branch} as ${plan.merge.slice(0, 7)}, which is gated next. main is unchanged.`;
+		await log.step("Merge to main", "done", detail);
+		await parentLog?.step("main moved during the gate", "info", detail).catch(() => undefined);
+		return { ok: false, oid: null, regate: plan.merge };
 	}
 }

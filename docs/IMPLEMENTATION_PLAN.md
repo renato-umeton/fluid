@@ -21,7 +21,7 @@
 ## Stage 4: Concurrency with a customize run
 **Goal**: an outside push that lands while a customize run is in flight is re-merged or rejected cleanly and shown in the timeline.
 **Tests**: disjoint change re-merged and regated; same file conflict rejected; recipe replanned on moved main.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 5: UI, mock mode, docs
 **Goal**: "Connect your own agent" panel, mock token route and simulated outside push, docs.
