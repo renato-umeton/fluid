@@ -14,6 +14,8 @@ export const BEHAVIOR_LIMITS = {
 	maxArray: 8,
 	/** Nesting kept in a card. */
 	maxDepth: 6,
+	/** Keys kept per object in a card (the rest are counted under "(more keys)"). */
+	maxKeys: 40,
 	/** Field changes kept per cell (the total is always counted). */
 	maxChangesPerCell: 12,
 	/** Probe rows kept in a table (rows with changes come first). */
@@ -41,6 +43,8 @@ export interface Observation {
 	passed: boolean | null;
 	question: string | null;
 	card: Json | null;
+	/** The card was dropped to keep the step output small (contest/observe.ts, capObservations): compare by result only. */
+	dropped?: true;
 }
 
 export interface FieldChange {
@@ -124,12 +128,9 @@ export function compactCard(card: unknown, depth = 0): Json {
 	if (Array.isArray(card)) return card.slice(0, BEHAVIOR_LIMITS.maxArray).map((item) => compactCard(item, depth + 1));
 	if (typeof card === "object") {
 		const out: Record<string, Json> = {};
-		for (const key of Object.keys(card as Record<string, unknown>).sort()) {
-			if (VOLATILE_KEYS.has(key)) continue;
-			const value = (card as Record<string, unknown>)[key];
-			if (value === undefined) continue;
-			out[key] = compactCard(value, depth + 1);
-		}
+		const keys = Object.keys(card as Record<string, unknown>).sort().filter((key) => !VOLATILE_KEYS.has(key) && (card as Record<string, unknown>)[key] !== undefined);
+		for (const key of keys.slice(0, BEHAVIOR_LIMITS.maxKeys)) out[key] = compactCard((card as Record<string, unknown>)[key], depth + 1);
+		if (keys.length > BEHAVIOR_LIMITS.maxKeys) out["(more keys)"] = keys.length - BEHAVIOR_LIMITS.maxKeys;
 		return out;
 	}
 	return String(card);
@@ -214,7 +215,7 @@ export function behaviorTable(main: Observation[], candidates: { label: string; 
 				const full = diffCards(null, seen.card, Number.POSITIVE_INFINITY);
 				cell = { passed: seen.passed, changed: true, scope: "own", total: full.total, changes: full.changes.slice(0, BEHAVIOR_LIMITS.maxChangesPerCell) };
 			} else {
-				const full = diffCards(base?.card ?? null, seen.card, Number.POSITIVE_INFINITY);
+				const full = base?.dropped || seen.dropped ? { changes: [], total: 0 } : diffCards(base?.card ?? null, seen.card, Number.POSITIVE_INFINITY);
 				const sameResult = seen.passed === (base?.passed ?? null);
 				cell = { passed: seen.passed, changed: full.total > 0 || !sameResult, total: full.total, changes: full.changes.slice(0, BEHAVIOR_LIMITS.maxChangesPerCell) };
 				if (cell.changed && !wish && sameResult && base && targetModes.includes(modeOf(base.card) ?? "") && full.changes.every((c) => WORDING_PATH.test(c.path))) cell.scope = "target";

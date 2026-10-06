@@ -6,8 +6,8 @@
 import type { RunnerManifestResult } from "../gate/tiers.ts";
 import { compactCard, probeContentKey, requestKey, type Observation, type ProbeTier } from "./behavior.ts";
 
-/** Requests recorded per gate run: the stock suites are a few dozen probes, plus at most 20 user and 12 wish tests. */
-export const MAX_RECORDED_CARDS = 120;
+/** Distinct requests recorded per gate run: the stock suites (about 70 probes today) plus at most 20 user and 12 wish tests, with room to grow. */
+export const MAX_RECORDED_CARDS = 200;
 /** Wish tests run against main and every candidate. */
 export const MAX_WISH_TESTS = 12;
 
@@ -21,15 +21,33 @@ export interface ManifestProbeLike {
 	[key: string]: unknown;
 }
 
-/** Wraps the gate's ask callback: every card passes through unchanged, and the first card per request is kept. */
-export function cardRecorder(ask: (request: unknown) => Promise<unknown>, max = MAX_RECORDED_CARDS): { ask: (request: unknown) => Promise<unknown>; cards: Map<string, unknown> } {
+/**
+ * The requests a gate run records, chosen before it runs: the first `max`
+ * distinct requests of its probes in manifest order (invariant, functional,
+ * user, wish tests). The runner sends requests in no fixed order, so choosing
+ * up front makes main and every candidate record the same set.
+ */
+export function recordedKeys(lists: ManifestProbeLike[][], max = MAX_RECORDED_CARDS): Set<string> {
+	const keys = new Set<string>();
+	for (const list of lists) {
+		for (const probe of list) {
+			if (probe.kind === "config" || probe.request === undefined) continue;
+			if (keys.size >= max) return keys;
+			keys.add(requestKey(probe.request));
+		}
+	}
+	return keys;
+}
+
+/** Wraps the gate's ask callback: every card passes through unchanged, and the first card per chosen request is kept. */
+export function cardRecorder(ask: (request: unknown) => Promise<unknown>, allowed?: Set<string>): { ask: (request: unknown) => Promise<unknown>; cards: Map<string, unknown> } {
 	const cards = new Map<string, unknown>();
 	return {
 		cards,
 		ask: async (request) => {
 			const card = await ask(request);
 			const key = requestKey(request);
-			if (!cards.has(key) && cards.size < max) cards.set(key, card);
+			if (!cards.has(key) && (allowed ? allowed.has(key) : cards.size < MAX_RECORDED_CARDS)) cards.set(key, card);
 			return card;
 		},
 	};
@@ -66,6 +84,32 @@ export function buildObservations(runs: { tier: Exclude<ProbeTier, "wish">; prob
 			const card = config ? undefined : cards.get(requestKey(probe.request));
 			out.push({ id: probe.id, key: wish ?? `${run.tier}:${probe.id}`, tier: wish ? "wish" : run.tier, passed: results.get(probe.id) ?? null, question, card: card === undefined ? null : compactCard(card) });
 		}
+	}
+	return out;
+}
+
+/** A workflow step's output is limited, so an evaluate step's observations stay under this size. */
+export const MAX_OBSERVATION_CHARS = 700_000;
+
+/**
+ * Keeps observations under `max` characters by dropping cards: probes outside
+ * the wish first, last probe first, then wish tests. Every probe keeps its
+ * result, and a dropped card is marked, so the behavior diff compares that
+ * probe by its result only instead of reading the missing card as a change.
+ */
+export function capObservations(observations: Observation[], max = MAX_OBSERVATION_CHARS): Observation[] {
+	let size = JSON.stringify(observations).length;
+	if (size <= max) return observations;
+	const out = observations.map((o) => ({ ...o }));
+	const order = [...out.keys()].reverse().sort((a, b) => Number(out[a]!.tier === "wish") - Number(out[b]!.tier === "wish"));
+	for (const i of order) {
+		if (size <= max) break;
+		const o = out[i]!;
+		if (o.card === null) continue;
+		size -= JSON.stringify(o.card).length - 4;
+		o.card = null;
+		o.dropped = true;
+		size += 15;
 	}
 	return out;
 }

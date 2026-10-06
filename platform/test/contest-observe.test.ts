@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { requestKey } from "../src/contest/behavior.ts";
-import { buildObservations, cardRecorder, wishTestSet } from "../src/contest/observe.ts";
+import { buildObservations, capObservations, cardRecorder, MAX_RECORDED_CARDS, recordedKeys, wishTestSet } from "../src/contest/observe.ts";
 
 const ask = (question: string, extra: Record<string, unknown> = {}) => ({ question, context: {}, ...extra });
 
@@ -15,8 +15,22 @@ describe("cardRecorder", () => {
 		expect(recorder.cards.get(requestKey(ask("q")))).toEqual({ answer_id: "a1", mode: "clinical" });
 	});
 
-	it("stops recording past the cap but still answers", async () => {
-		const recorder = cardRecorder(async (r) => r, 2);
+	it("records only the requests chosen up front, whatever order they arrive in", async () => {
+		const allowed = recordedKeys([[{ id: "a", request: ask("a"), assert: [] }, { id: "b", request: ask("b"), assert: [] }], [{ id: "c", request: ask("c"), assert: [] }, { id: "cfg", kind: "config", assert: [] }]], 2);
+		expect([...allowed]).toEqual([requestKey(ask("a")), requestKey(ask("b"))]);
+		const recorder = cardRecorder(async (r) => r, allowed);
+		for (const q of ["c", "b", "a"]) await recorder.ask(ask(q));
+		expect([...recorder.cards.keys()].sort()).toEqual([requestKey(ask("a")), requestKey(ask("b"))].sort());
+	});
+
+	it("chooses the same requests for main and every candidate when they run the same probes", () => {
+		const probes = [[{ id: "x", request: ask("x"), assert: [] }, { id: "x2", request: ask("x"), assert: [] }, { id: "y", request: ask("y"), assert: [] }]];
+		expect([...recordedKeys(probes, MAX_RECORDED_CARDS)]).toEqual([requestKey(ask("x")), requestKey(ask("y"))]);
+		expect(MAX_RECORDED_CARDS).toBeGreaterThanOrEqual(200);
+	});
+
+	it("still answers requests it does not record", async () => {
+		const recorder = cardRecorder(async (r) => r, new Set([requestKey(ask("a")), requestKey(ask("b"))]));
 		for (const q of ["a", "b", "c"]) await recorder.ask(ask(q));
 		expect(recorder.cards.size).toBe(2);
 		expect(await recorder.ask(ask("d"))).toEqual(ask("d"));
@@ -35,6 +49,18 @@ describe("wishTestSet", () => {
 	it("caps the number of wish tests", () => {
 		const many = Array.from({ length: 30 }, (_, i) => ({ id: `t-x-${i}`, request: ask(`q${i}`), assert: [{ path: "mode", exists: true }] }));
 		expect(wishTestSet([many], 5).probes).toHaveLength(5);
+	});
+});
+
+describe("capObservations", () => {
+	it("drops cards from the last probes until the list fits, keeping every result", () => {
+		const obs = Array.from({ length: 10 }, (_, i) => ({ id: `p${i}`, key: `p${i}`, tier: "invariant" as const, passed: true, question: "q", card: { body: "x".repeat(1000) } }));
+		const out = capObservations(obs, 6000);
+		expect(JSON.stringify(out).length).toBeLessThanOrEqual(6000);
+		expect(out).toHaveLength(10);
+		expect(out[0]!.card).not.toBeNull();
+		expect(out[9]).toMatchObject({ card: null, dropped: true, passed: true });
+		expect(capObservations(obs, 1_000_000)).toBe(obs);
 	});
 });
 

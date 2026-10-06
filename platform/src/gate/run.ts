@@ -14,7 +14,7 @@ import { checkPin, isForkCaused } from "./pins.ts";
 import { mergeUserResults, runUiConfigProbes, splitUserManifest, uiInvariant } from "./ui-check.ts";
 import { UI_PREFERENCES_PATH } from "../ui/preferences.ts";
 import type { Observation } from "../contest/behavior.ts";
-import { buildObservations, cardRecorder, type ManifestProbeLike } from "../contest/observe.ts";
+import { buildObservations, cardRecorder, recordedKeys, type ManifestProbeLike } from "../contest/observe.ts";
 import {
 	capFailures,
 	emptyUserTier,
@@ -155,11 +155,13 @@ async function gateCore(deps: RuntimeDeps, input: GateInput, observe: ObserveOpt
 
 	let ask: (request: unknown) => Promise<unknown>;
 	let cards: Map<string, unknown> | null = null;
+	// Filled once the manifests are known, before the runner sends any request.
+	const recorded = new Set<string>();
 	try {
 		const loaded = await loadForkRuntime(deps, input.repo, commit, { variant: gateVariant() });
 		ask = (request) => withTimeout(askCard(loaded.fork, request, { useModel: false }), FORK_CALL_TIMEOUT_MS, "fork did not answer");
 		if (observe) {
-			const recorder = cardRecorder(ask);
+			const recorder = cardRecorder(ask, recorded);
 			ask = recorder.ask;
 			cards = recorder.cards;
 		}
@@ -180,6 +182,10 @@ async function gateCore(deps: RuntimeDeps, input: GateInput, observe: ObserveOpt
 	// every tier finish, then a rejection is thrown for the step to retry.
 	// Contest wish tests run on the side, as tier 3 probes whose results never enter the verdict.
 	const extra = observe?.extraProbes.length ? splitUserManifest({ tier: "user" as const, probes: observe.extraProbes as Record<string, unknown>[] }) : null;
+	if (observe) {
+		const probesOf = (m: unknown) => ((m as { probes?: ManifestProbeLike[] } | null)?.probes ?? []) as ManifestProbeLike[];
+		for (const key of recordedKeys([probesOf(suite.manifests.invariant), probesOf(suite.manifests.functional), probesOf(user.manifest), observe.extraProbes])) recorded.add(key);
+	}
 	const [invariant, functional, userResult, extraResult] = await Promise.allSettled([
 		run(suite.manifests.invariant),
 		run(suite.manifests.functional),

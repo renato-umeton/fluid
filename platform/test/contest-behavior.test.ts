@@ -40,6 +40,13 @@ describe("compactCard", () => {
 		expect((out.ledger as Record<string, unknown>).stock_tag).toBe("v1.0.0");
 	});
 
+	it("keeps at most a fixed number of keys per object", () => {
+		const wide = Object.fromEntries(Array.from({ length: 500 }, (_, i) => [`k${String(i).padStart(3, "0")}`, i]));
+		const out = compactCard({ mode: "research", extra: wide }) as Record<string, Record<string, unknown>>;
+		expect(Object.keys(out.extra!)).toHaveLength(BEHAVIOR_LIMITS.maxKeys + 1);
+		expect(out.extra!["(more keys)"]).toBe(500 - BEHAVIOR_LIMITS.maxKeys);
+	});
+
 	it("clips long text and long lists", () => {
 		const out = compactCard(card({ body: "x".repeat(2000), signals: Array.from({ length: 30 }, (_, i) => `s${i}`) })) as Record<string, unknown>;
 		expect(String(out.body).length).toBeLessThanOrEqual(BEHAVIOR_LIMITS.maxString + 20);
@@ -121,6 +128,12 @@ describe("behaviorTable", () => {
 		expect(row.cells["model-a"]!.scope).toBeUndefined();
 		expect(table.counts.agent).toMatchObject({ outside: 0, own: 2 });
 		expect(table.counts["model-a"]).toMatchObject({ outside: 0, own: 0 });
+	});
+
+	it("compares a probe whose card was dropped by its result only", () => {
+		const dropped = { ...obs("inv-a", true, null), dropped: true as const };
+		const table = behaviorTable(main, [{ label: "x", observations: [dropped, main[1]!, main[2]!] }]);
+		expect(table.rows[0]!.cells.x).toMatchObject({ changed: false, total: 0 });
 	});
 
 	it("counts a probe a candidate no longer runs as a change", () => {
