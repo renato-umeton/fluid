@@ -775,7 +775,11 @@ route("POST", "/api/forks/:repo/token", async (rc, { repo }) => {
 		const minted = await mintOutsideToken(handle, { fork: name, inbox }, null);
 		const at = new Date().toISOString();
 		const grant: OutsideGrant = { repo: name, inbox, userId: session.userId, tokenId: minted.tokenId, firstAt: previous?.firstAt ?? at, mintedAt: at, expiresAt: minted.access.expiresAt };
-		await fleet.setValue(key, grant as unknown as Json);
+		// A slow mint can outlive its 30 second lease; if another request took it, that request owns the inbox now.
+		if (!(await fleet.setValueIfHeld(lock, owner, key, grant as unknown as Json))) {
+			await abandonMint(rc.env, { lock, key, inbox, tokenId: minted.tokenId });
+			throw new HttpError(409, "another token request for this fork took over while this one was minting; get a new token");
+		}
 		try {
 			await appExports(rc.ctx).InboxCleanupWorkflow.create({ id: `inboxgc-${fnv1a(name)}-${fnv1a(minted.tokenId)}`, params: { fork: name, inbox, tokenId: minted.tokenId, expiresAt: minted.access.expiresAt } });
 		} catch (error) {
@@ -788,6 +792,26 @@ route("POST", "/api/forks/:repo/token", async (rc, { repo }) => {
 		await fleet.unlock(lock, owner);
 	}
 });
+
+/**
+ * A mint that lost its lease before writing its grant: its token is revoked
+ * (always safe). The inbox is deleted only when no request holds the lease
+ * and no grant names it, because the inbox name is shared and a request that
+ * took over is building, or has built, its own inbox under that name.
+ * Best effort: failures are logged, never thrown.
+ */
+async function abandonMint(env: Env, m: { lock: string; key: string; inbox: string; tokenId: string }): Promise<void> {
+	await revokePreviousToken(env, m.inbox, m.tokenId);
+	try {
+		const fleet = fleetStub(env);
+		const holder = (await fleet.getValue(m.lock)) as { until?: number } | null;
+		const held = holder !== null && (holder.until ?? 0) > Date.now();
+		if (held || (await fleet.getValue(m.key)) !== null) return;
+		await deleteRepoIfPresent(env, m.inbox);
+	} catch (error) {
+		console.warn(`inbox ${m.inbox} left after a lost mint lease: ${scrubText(error instanceof Error ? error.message : String(error))}`);
+	}
+}
 
 /** Revokes the previous outside token on the inbox it was made for. Best effort: a failure is logged, never thrown. */
 async function revokePreviousToken(env: Env, inbox: string, tokenId: string): Promise<void> {

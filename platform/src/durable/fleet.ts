@@ -420,6 +420,18 @@ export class Fleet extends DurableObject<Env> {
 		return true;
 	}
 
+	/**
+	 * Sets `key` only while `owner` still holds the lease on `lock`; returns
+	 * whether it did. One call, so no other holder can take the lease between
+	 * the check and the write.
+	 */
+	setValueIfHeld(lock: string, owner: string, key: string, value: Json): boolean {
+		const row = this.ctx.storage.sql.exec("SELECT v FROM kv WHERE k = ?", lock).toArray()[0];
+		if (!row || (JSON.parse(row.v as string) as { owner?: string }).owner !== owner) return false;
+		this.setValue(key, value);
+		return true;
+	}
+
 	/** Several values in one call (missing keys are left out). */
 	getValues(keys: string[]): Record<string, Json> {
 		const out: Record<string, Json> = {};
