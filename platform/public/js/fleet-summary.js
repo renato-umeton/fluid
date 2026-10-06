@@ -1,4 +1,5 @@
-// One-line status summary for a fork in the Fleet view's Fork detail. Pure, so it is unit tested.
+// One-line status summary for a fork in the Fleet view's Fork detail, and the
+// intent replay texts and counts. Pure, so it is unit tested.
 
 /** True when the fork's last failure came from a work branch (a customization), not an upgrade. */
 function failedOnWorkBranch(f) {
@@ -6,8 +7,31 @@ function failedOnWorkBranch(f) {
   return typeof branch === "string" && branch.startsWith("work/");
 }
 
+/** "Wishes carried to v1.11.0: 2 of 2" for an intent replay, or why the upgrade merged; null without a replay summary. */
+export function wishesHeading(replay) {
+  if (!replay) return null;
+  if (replay.path === "replay") return `Wishes carried to ${replay.tag}: ${replay.carried} of ${replay.total}`;
+  return `Upgrade to ${replay.tag} took the merge path${replay.reason ? `: ${replay.reason}` : ""}`;
+}
+
+/** Forks whose upgrade to `tag` passed, by how: intent replay or merge (an upgrade with no path merged). */
+export function upgradePathCounts(forks, tag) {
+  const out = { replay: 0, merge: 0 };
+  for (const f of forks) {
+    const r = f.lastRun;
+    if (!r || r.kind !== "upgrade" || r.tag !== tag || r.status !== "passed") continue;
+    out[r.path === "replay" ? "replay" : "merge"] += 1;
+  }
+  return out;
+}
+
 export function forkSummaryText(f, latestTag, hasRun) {
   const tag = f.lastRun?.tag || latestTag;
+  const replay = f.lastRun?.path === "replay" ? f.lastRun.replay : null;
+  if (f.status === "passed" && replay) {
+    const rebuilt = `Upgrade to ${tag} rebuilt this fork from fresh stock by replaying ${replay.carried} of ${replay.total} wish${replay.total === 1 ? "" : "es"}.`;
+    return f.lastRun.applied === false ? `${rebuilt} All three tiers passed. Waiting for the user's one-tap approval (auto_upgrade is off).` : `${rebuilt} All three tiers passed and it was applied.`;
+  }
   if ((f.status === "repair_open" || f.status === "failed") && failedOnWorkBranch(f)) {
     const opened = f.status === "repair_open" ? "A repair branch is open for review" : "The repair agent is reading the fork's intent records";
     return `A change on ${f.lastRun.failedBranch} failed the gate. ${opened}; main is unchanged and stays pinned to ${f.pinnedTag}.`;

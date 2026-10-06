@@ -542,6 +542,69 @@ export async function resolveAnyRef(ws: Workspace, ref: string): Promise<string>
 	throw new Error(`resolveAnyRef: ${ref} not found`);
 }
 
+/** One entry of a commit's tree: its object id, its git mode, and its text when it is valid UTF-8 (null otherwise). */
+export interface TreeFile {
+	oid: string;
+	mode: string;
+	text: string | null;
+}
+
+/**
+ * Every entry of a commit's tree, by path. Text is decoded strictly (an
+ * invalid UTF-8 blob reads as null, and a byte order mark is kept), so a
+ * file's text encodes back to exactly its bytes.
+ */
+export async function readTree(ws: Workspace, commit: string): Promise<Record<string, TreeFile>> {
+	const oid = await peelToCommit(ws, await resolveAnyRef(ws, commit));
+	const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+	const out: Record<string, TreeFile> = {};
+	const walk = async (treeOid: string, prefix: string): Promise<void> => {
+		const { tree } = await git.readTree({ fs: ws.fs, dir: ws.dir, oid: treeOid });
+		for (const entry of tree) {
+			const path = prefix ? `${prefix}/${entry.path}` : entry.path;
+			if (entry.type === "tree") {
+				await walk(entry.oid, path);
+				continue;
+			}
+			let text: string | null = null;
+			if (entry.type === "blob") {
+				try {
+					text = decoder.decode((await git.readBlob({ fs: ws.fs, dir: ws.dir, oid: entry.oid })).blob);
+				} catch {
+					text = null;
+				}
+			}
+			out[path] = { oid: entry.oid, mode: entry.mode, text };
+		}
+	};
+	const { commit: parsed } = await git.readCommit({ fs: ws.fs, dir: ws.dir, oid });
+	await walk(parsed.tree, "");
+	return out;
+}
+
+/** The text files of a commit's tree (binary and non-UTF-8 blobs are left out). */
+export async function readTreeFiles(ws: Workspace, commit: string): Promise<Record<string, string>> {
+	const files: Record<string, string> = {};
+	for (const [path, entry] of Object.entries(await readTree(ws, commit))) if (entry.text !== null) files[path] = entry.text;
+	return files;
+}
+
+/** A blob's bytes by object id. */
+export async function readBlobBytes(ws: Workspace, oid: string): Promise<Uint8Array> {
+	return (await git.readBlob({ fs: ws.fs, dir: ws.dir, oid })).blob;
+}
+
+/** Intent ids named by Intent-Id trailers in the history of `ref`, oldest first, each once. */
+export async function intentCommitOrder(ws: Workspace, ref: string, depth = 1000): Promise<string[]> {
+	const entries = await git.log({ fs: ws.fs, dir: ws.dir, ref, depth });
+	const ids: string[] = [];
+	for (const entry of [...entries].reverse()) {
+		const id = parseTrailers(entry.commit.message)["Intent-Id"];
+		if (id && !ids.includes(id)) ids.push(id);
+	}
+	return ids;
+}
+
 /** Reads a commit message, e.g. to find its Intent-Id trailer. */
 export async function readCommitMessage(ws: Workspace, oid: string): Promise<string> {
 	const { commit } = await git.readCommit({ fs: ws.fs, dir: ws.dir, oid });

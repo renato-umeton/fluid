@@ -2,11 +2,15 @@
 // platform is unreachable. Answers come from the real stock engine when the
 // platform build has copied it to vendor/stock-app.js; otherwise from canned
 // cards. Customize, gate, fleet upgrade, repair, and harvest runs are simulated
-// with timers so every demo scene works without a backend.
+// with timers so every demo scene works without a backend. A mock release
+// upgrades forks whose wishes are all replayable by intent replay (including
+// forks that reworded the card line the release also rewords, which would
+// conflict under a merge) and the rest by merge.
 import { SYNTHETIC } from "./synthetic.js";
 import { cannedCard } from "./mock-canned.js";
 import { sanitizePreferences } from "./ui-prefs.js";
 import { mappedLines, matchRecipe, mergeUiRequest, parseUiRequest, tauTarget } from "./ui-recipe.js";
+import { mockReplayPlan } from "./mock-replay.js";
 
 const STOCK_MIN_TAU = 0.85;
 const STOCK_TAG = "v1.0.0";
@@ -589,7 +593,7 @@ const MOCK_EXAMPLES = [
   'fonts ("Use Palatino fonts", "a monospace font")',
   'density ("Make the layout compact")',
   'accent colors ("Make the buttons teal", "make the look red")',
-  'looks ("I want the St. Jude look and feel" for crimson, "make it look like Windows XP" for luna-xp, "reset the look")',
+  'looks ("give the app a crimson look and feel" for crimson, "make it look like Windows XP" for luna-xp, "reset the look")',
   'chart tabs ("add a page of charts", "add a dashboard tab showing my override rate")',
   'REDCap ("Add a REDCap connector so research mode reports enrollment for my protocols")',
   'tau ("Lower my confidence threshold to 0.6")',
@@ -722,7 +726,16 @@ function chartData() {
 // ---------- fleet ----------
 
 const CATALOG = [
-  { key: "redcap", who: ["research-coordinator", "hospitalist-researcher"], p: [0.55, 0.12], request: "Add a REDCap connector so research mode reports enrollment for my protocols", purpose: "Research mode can answer protocol enrollment questions", modes: ["research"], files: ["connectors/redcap.js", "policies/research.js"] },
+  { key: "redcap", who: ["research-coordinator", "hospitalist-researcher"], p: [0.55, 0.12], request: "Add a REDCap connector so research mode reports enrollment for my protocols", purpose: "Research mode can answer protocol enrollment questions", modes: ["research"], files: ["connectors/redcap.js", "policies/research.js"],
+    replay: "redcap", replayReason: "REDCap connector for IRB-2026-0142, IRB-2026-0219; app/index.ts patched again on the new stock" },
+  // Replayable wishes (intent replay). plain-wording rewords the same card line every demo release rewords,
+  // so under a merge it conflicts; replay grants it again on the new code.
+  { key: "plain-wording", who: ["hospitalist-researcher", "department-administrator"], p: [0.3, 0.25], request: "Use plainer wording when the assistant is not sure which role I am in", purpose: "The multi-intent view explains itself in plain words", modes: [], files: ["app/cards.ts"],
+    replay: "framing", sameLine: true, replayReason: "multi-intent framing line set to this fork's wording in app/cards.ts" },
+  { key: "raise-tau", who: ["research-coordinator", "hospitalist-researcher"], p: [0.15, 0.1], request: "Raise my confidence threshold to 0.9", purpose: "Answer in a single mode only at higher confidence", modes: ["clinical", "research", "administrative"], files: ["fluid.toml"],
+    replay: "tau", replayReason: "thresholds.tau set to 0.9 in fluid.toml" },
+  { key: "ui-look", who: ["research-coordinator", "hospitalist-researcher", "department-administrator"], p: [0.12, 0.1, 0.15], request: "Use the crimson look and add a tab with charts", purpose: "Change how this fork's control plane looks for its owner", modes: [], files: ["ui/preferences.json"],
+    replay: "ui", replayReason: "ui/preferences.json: look crimson, tab \"Charts\"" },
   { key: "budget-variance", who: ["department-administrator"], p: [0.5], request: "Flag budget lines over 5 percent projected variance in administrative answers", purpose: "Administrative answers point out lines that need a written justification", modes: ["administrative"], files: ["policies/administrative.js"] },
   { key: "signout", who: ["hospitalist-researcher"], p: [0.3], request: "Draft my sign-out list from the call schedule at 12:30", purpose: "Prepare sign-out without leaving the assistant", modes: ["clinical"], files: ["app/signout.js", "connectors/call-schedule.js"] },
   { key: "crosscheck-first", who: ["hospitalist-researcher"], p: [0.22], request: "Put the cross-check table above the computed dose", purpose: "Reviewers see source agreement before the number", modes: ["research"], files: ["policies/research.js"] },
@@ -773,7 +786,7 @@ function fleetFork(repo, personaId, rand, isDemo) {
         n += 1;
         const day = 1 + Math.floor(rand() * 28);
         const id = `int_2026_09_${String(day).padStart(2, "0")}_${String(Math.floor(rand() * 9000) + 1000)}`;
-        customizations.push({ key: c.key, record: { id, author: `user:${repo.slice(5)}`, agent: "customization-agent", request: c.request, purpose: c.purpose, modes_affected: c.modes, files: c.files, tests_added: [`tests/user/${c.key.replace(/-/g, "_")}.json`], stock_tag: STOCK_TAG, commit: hex(7) } });
+        customizations.push({ key: c.key, record: { id, author: `user:${repo.slice(5)}`, agent: "customization-agent", request: c.request, purpose: c.purpose, modes_affected: c.modes, files: c.files, tests_added: [`tests/user/${c.key.replace(/-/g, "_")}.json`], stock_tag: STOCK_TAG, commit: hex(7), replay: c.replay ? { kind: c.replay, params: {} } : { kind: "model", request: c.request } } });
       }
     }
     if (n === 0 && rand() < 0.1) customizations.push(CATALOG_PICK_REDCAP(repo, rand));
@@ -788,7 +801,7 @@ function fleetFork(repo, personaId, rand, isDemo) {
 
 function CATALOG_PICK_REDCAP(repo, rand) {
   const c = CATALOG[0];
-  return { key: c.key, record: { id: `int_2026_09_${String(1 + Math.floor(rand() * 28)).padStart(2, "0")}_${Math.floor(rand() * 9000) + 1000}`, author: `user:${repo.slice(5)}`, agent: "customization-agent", request: c.request, purpose: c.purpose, modes_affected: c.modes, files: c.files, tests_added: ["tests/user/redcap.json"], stock_tag: STOCK_TAG, commit: hex(7) } };
+  return { key: c.key, record: { id: `int_2026_09_${String(1 + Math.floor(rand() * 28)).padStart(2, "0")}_${Math.floor(rand() * 9000) + 1000}`, author: `user:${repo.slice(5)}`, agent: "customization-agent", request: c.request, purpose: c.purpose, modes_affected: c.modes, files: c.files, tests_added: ["tests/user/redcap.json"], stock_tag: STOCK_TAG, commit: hex(7), replay: { kind: "redcap", params: {} } } };
 }
 
 function fleetView() {
@@ -822,20 +835,25 @@ function release(body) {
     const t2 = t1 + 900 + rand() * 2200;
     const t3 = t2 + 1200 + rand() * 2800;
     const conflict = fork.customizations.find((c) => CATALOG.find((k) => k.key === c.key)?.conflict);
-    const upgradeRun = { runId: `run_${hex(10)}`, kind: "upgrade", tag, branch: `upgrade/${tag}` };
-    setTimeout(() => setStatus(fork, "upgrading", upgradeRun), t1);
-    setTimeout(() => setStatus(fork, "gating", upgradeRun), t2);
+    // Intent replay first: a fork whose wishes are all replayable is rebuilt from fresh stock on replay/<tag>.
+    const replay = mockReplayPlan(fork.customizations, CATALOG, tag);
+    const path = replay?.path === "replay" ? "replay" : "merge";
+    const upgradeRun = { runId: `run_${hex(10)}`, kind: "upgrade", tag, branch: path === "replay" ? `replay/${tag}` : `upgrade/${tag}`, path, ...(replay ? { replay } : {}) };
+    setTimeout(() => setStatus(fork, "upgrading", { ...upgradeRun, status: "running" }), t1);
+    setTimeout(() => setStatus(fork, "gating", { ...upgradeRun, status: "gating" }), t2);
     setTimeout(() => {
       if (!conflict) {
+        const commit = hex(40);
         if (fork.autoUpgrade) fork.pinnedTag = tag;
         // An applied upgrade is live on main in yellow until three end-to-end passes turn it green.
-        if (fork.autoUpgrade) fork.health = { ...yellowHealth(hex(40), fork.health), source: "upgrade" };
-        setStatus(fork, "passed", { ...upgradeRun, applied: fork.autoUpgrade });
+        if (fork.autoUpgrade) fork.health = { ...yellowHealth(commit, fork.health), source: "upgrade" };
+        db.runs[upgradeRun.runId] = mockUpgradeRun(fork, upgradeRun, commit);
+        setStatus(fork, "passed", { ...upgradeRun, status: "passed", applied: fork.autoUpgrade, commit });
         if (fork.autoUpgrade) soakFleetFork(fork, rand);
         if (--remaining === 0) db.fleet.releasing = null;
         return;
       }
-      setStatus(fork, "failed", upgradeRun);
+      setStatus(fork, "failed", { ...upgradeRun, status: "failed" });
       setTimeout(() => {
         const repair = createRepairRun(fork, conflict, tag, Boolean(body.safety), rand() < 0.15);
         setStatus(fork, repair.status === "open" ? "repair_open" : "failed", { runId: repair.id, kind: "repair", tag, branch: repair.branch });
@@ -844,6 +862,32 @@ function release(body) {
     }, t3);
   }
   return { tag, upgradeRuns: db.fleet.forks.length };
+}
+
+/** The run record behind a passed mock upgrade: replay steps (or why it merged), the gate, and main moving. */
+function mockUpgradeRun(fork, upgradeRun, commit) {
+  const { tag, branch, replay } = upgradeRun;
+  const steps = [];
+  if (replay?.path === "replay") {
+    steps.push({ name: `Replay wishes on stock ${tag}`, status: "done", detail: `${replay.carried} of ${replay.total} wish${replay.total === 1 ? "" : "es"} carried to ${tag} on ${branch}. ${replay.wishes.map((w) => `${w.intentId}: ${w.reason}${w.stockAlsoChanged.length ? ` (stock ${tag} also changed ${w.stockAlsoChanged.join(", ")}; replay needed no merge there)` : ""}`).join("; ")}` });
+  } else {
+    if (replay) steps.push({ name: `Replay wishes on stock ${tag}`, status: "info", detail: `Upgrading by merge: ${replay.reason}` });
+    steps.push({ name: `Merge stock ${tag} into ${branch}`, status: "done", detail: "No textual conflicts" });
+  }
+  const prefix = replay?.path === "replay" ? "Replay: " : "";
+  const userTests = fork.customizations.length;
+  steps.push(
+    { name: `${prefix}Tier 1: invariants at ${tag}`, status: "done", detail: `${INVARIANT_PROBES} of ${INVARIANT_PROBES} probes passed` },
+    { name: `${prefix}Tier 2: functional at ${tag}`, status: "done", detail: `${FUNCTIONAL_PROBES} of ${FUNCTIONAL_PROBES} probes passed` },
+    { name: `${prefix}Tier 3: user tests`, status: "done", detail: userTests ? `${userTests} of ${userTests} passed: each wish's accepted tests` : "No user tests" },
+    { name: `Gate ${branch} at ${tag}`, status: "done", detail: "All three tiers passed" },
+    fork.autoUpgrade
+      ? { name: "Merge to main", status: "done", detail: `main fast-forwarded to ${commit.slice(0, 7)} on ${tag}` }
+      : { name: "Your approval", status: "waiting", detail: `auto_upgrade is off: one tap fast-forwards main to ${branch}` },
+  );
+  const gate = gateResult({ commit, ref: branch, userTests });
+  gate.stockTag = tag;
+  return { id: upgradeRun.runId, kind: "upgrade", repo: fork.repo, status: "passed", tag, branch, commit, replay: replay ?? null, steps, gate, createdAt: now(), updatedAt: now() };
 }
 
 function createRepairRun(fork, conflict, tag, safety, stuck) {

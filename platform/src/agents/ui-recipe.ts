@@ -193,12 +193,21 @@ export function parseUiRequest(request: string): UiRequestMapping | null {
 	return out;
 }
 
-/** The ui recipe's change: the current preferences (if readable) with the request applied. */
-export function uiChange(currentText: string | null, request: string): PlannedChange {
-	const mapping = parseUiRequest(request);
-	if (!mapping) throw new Error("the request names no look, font, density, accent color, or chart tab that UI preferences support");
-	const current = parseUiPreferences(currentText);
-	const base: UiPreferences = current.ok ? structuredClone(current.preferences) : {};
+/** The preferences a mapping sets, without the notes: what an intent record keeps to replay the change. */
+export type UiReplayParams = Omit<UiRequestMapping, "notes">;
+
+export function uiReplayParams(mapping: UiRequestMapping): UiReplayParams {
+	const out: UiReplayParams = {};
+	if (mapping.look) out.look = mapping.look;
+	if (mapping.font) out.font = mapping.font;
+	if (mapping.density) out.density = mapping.density;
+	if (mapping.accent) out.accent = mapping.accent;
+	if (mapping.tab) out.tab = { title: mapping.tab.title, widgets: [...mapping.tab.widgets] };
+	return out;
+}
+
+/** Applies mapped preferences to the current ones. A tab with the same title is replaced; a fifth tab is refused. */
+export function applyUiMapping(base: UiPreferences, mapping: UiReplayParams): UiPreferences {
 	const next: UiPreferences = { ...base };
 	// "standard" is the same as no look, so a fork without a look keeps its file as it is.
 	if (mapping.look && !(mapping.look === "standard" && !base.look)) next.look = mapping.look;
@@ -213,6 +222,16 @@ export function uiChange(currentText: string | null, request: string): PlannedCh
 		else tabs.push(mapping.tab);
 		next.tabs = tabs;
 	}
+	return next;
+}
+
+/** The ui recipe's change: the current preferences (if readable) with the request applied. */
+export function uiChange(currentText: string | null, request: string): PlannedChange {
+	const mapping = parseUiRequest(request);
+	if (!mapping) throw new Error("the request names no look, font, density, accent color, or chart tab that UI preferences support");
+	const current = parseUiPreferences(currentText);
+	const base: UiPreferences = current.ok ? structuredClone(current.preferences) : {};
+	const next = applyUiMapping(base, mapping);
 	const text = uiPreferencesJson(next);
 	if (current.ok && text === uiPreferencesJson(base)) throw new Error("your fork already has these UI preferences; nothing to change");
 	const mapped = mappedLines(mapping.notes);
@@ -225,5 +244,6 @@ export function uiChange(currentText: string | null, request: string): PlannedCh
 		notes: { [UI_PREFERENCES_PATH]: `Mapped: ${mapped.join("; ")}${current.ok ? "" : " (the previous file was invalid and is replaced)"}` },
 		recipe: "ui",
 		mapped,
+		replay: { kind: "ui", params: uiReplayParams(mapping) },
 	};
 }

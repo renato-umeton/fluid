@@ -10,6 +10,7 @@ import { uiChange } from "../agents/ui-recipe.ts";
 import { buildIntent, cleanText, intentJson, intentPath, slugify } from "../agents/intent.ts";
 import { breakLedgerCommitChange, matchAdminTestRecipe } from "../agents/test-recipe.ts";
 import { matchRecipe, protocolsFor, redcapChange, replanOnMovedMain, tauChange, type PlannedChange } from "../agents/recipes.ts";
+import { replayExtra, replayRecordFor } from "../agents/replay.ts";
 import { fallbackSuggestion, mergeUserE2E, mergeUserManifest, suggestionsFromModel, suggestScenarios, suggestTests, SUGGESTION_SCHEMA, USER_E2E, USER_MANIFEST, type Probe, type Suggestion } from "../agents/suggester.ts";
 import { parseToml } from "../lib/toml.ts";
 import { fnv1a, gateInstanceId } from "../events/filter.ts";
@@ -156,7 +157,7 @@ export class CustomizeWorkflow extends WorkflowEntrypoint<Env, CustomizeParams> 
 		const recorded = await step.do("record intent", async () => {
 			await log.step("Record build-time intent", "running");
 			const intentId = newIntentId();
-			const intent = buildIntent({ id: intentId, userId: p.userId, agent: "customization-agent", request, purpose: change.purpose, modes: change.modes_affected, files: [...Object.keys(change.files), intentPath(intentId)], stockTag: fork.stockTag, extra: { recipe: change.recipe, ...(change.mapped?.length ? { mapped: change.mapped } : {}) } });
+			const intent = buildIntent({ id: intentId, userId: p.userId, agent: "customization-agent", request, purpose: change.purpose, modes: change.modes_affected, files: [...Object.keys(change.files), intentPath(intentId)], stockTag: fork.stockTag, extra: { recipe: change.recipe, ...(change.mapped?.length ? { mapped: change.mapped } : {}), ...replayExtra(replayRecordFor(change, request)) } });
 			const before = Object.fromEntries(Object.keys(change.files).map((path) => [path, fork.files[path] ?? null]));
 			const diff = diffEntries({ ...before, [intentPath(intentId)]: null }, { ...change.files, [intentPath(intentId)]: intentJson(intent) }, { ...change.notes, [intentPath(intentId)]: "Why this change exists; the commit carries Intent-Id" });
 			const branch = `work/${slugify(request)}-${fnv1a(p.runId).slice(0, 4)}`;
@@ -237,7 +238,8 @@ export class CustomizeWorkflow extends WorkflowEntrypoint<Env, CustomizeParams> 
 
 			await checkoutBranch(ws, recorded.branch, { create: true, from: "main" });
 			const testsAdded = [...probes.map((pr) => `${USER_MANIFEST}#${pr.id}`), ...scenarios.map((sc) => `${USER_E2E}#${sc.id}`)];
-			const intent = { ...recorded.intent, tests_added: testsAdded };
+			// A recipe applied again on a moved main may write a different value (tau): the record replays what was committed.
+			const intent = { ...recorded.intent, tests_added: testsAdded, ...replayExtra(rebased.replay ?? null) };
 			await writeFiles(ws, { ...rebased.files, [intentPath(recorded.intentId)]: intentJson(intent) });
 			await commitChanges(ws, { message: `${change.summary}\n\nRequested: ${cleanText(request, 200)}`, intentId: recorded.intentId, author: { name: `user:${p.userId}`, email: `${p.userId}@users.fluid.invalid` } });
 			let diffAdd: { path: string; status: string; additions: number; deletions: number; summary: string }[] = [];

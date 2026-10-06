@@ -12,9 +12,9 @@ Live demo: https://fluid.renato83.workers.dev (synthetic data only). To deploy y
 
 The demo above is mock mode (`/?mock=1`): Dr. Rowan Ellery asks the same dosing question at the bedside, attests to see the research answer, asks again while writing a manuscript, and gets labeled answers on an ambiguous screen.
 
-![Customizing a fork in plain words: a St. Jude look and feel, a Windows XP look, and a page of charts](docs/screenshots/demo-customize.gif)
+![Customizing a fork in plain words: a crimson look and feel, a Windows XP look, and a page of charts](docs/screenshots/demo-customize.gif)
 
-The second demo, also in mock mode, customizes the fork in plain words. "I want the St. Jude Children's Research Hospital look and feel" applies the Crimson look (red and white colors, no logos or names). "Make the look and feel like it is 2001 and we run on windows xp" applies the Luna XP look. "Add a page of charts" adds a Charts tab and opens it. Each change is written to `ui/preferences.json`, gated, and merged; see [docs/UI.md](docs/UI.md).
+The second demo, also in mock mode, customizes the fork in plain words. "Give the app a crimson look and feel" applies the Crimson look (bold red and white institutional colors). "Make the look and feel like it is 2001 and we run on windows xp" applies the Luna XP look. "Add a page of charts" adds a Charts tab and opens it. Each change is written to `ui/preferences.json`, gated, and merged; see [docs/UI.md](docs/UI.md).
 
 ## Three proposals
 
@@ -41,9 +41,9 @@ flowchart LR
 ## How concurrency shows up
 
 - Each user's customization agent works in its own fork, at the same time as every other user's.
-- One stock release fans out one upgrade Workflow per fork. Each upgrade merges the new tag, runs a merge agent on conflicts, and gates the result.
+- One stock release fans out one upgrade Workflow per fork. Each upgrade first tries intent replay (below); otherwise it merges the new tag, runs a merge agent on conflicts, and gates the result.
 - Every push starts its own gate. Every failed gate starts its own repair agent.
-- In local testing, one release upgraded 202 forks in 159 seconds, with up to 110 forks upgrading or gating at once. 193 passed (39 after the merge agent resolved a conflict) and 9 stayed pinned with repair branches open.
+- In local testing, one release upgraded 202 forks in 159 seconds, with up to 110 forks upgrading or gating at once. 193 passed (39 after the merge agent resolved a conflict) and 9 stayed pinned with repair branches open. These numbers predate intent replay.
 - The fleet view streams every status change live.
 - A change imported from your inbox and a customization can race on the same fork. Whichever passes its gate first lands; the other finds main moved, merges main into its branch, and is gated again (or stops on a conflict). The run timeline says so.
 
@@ -60,6 +60,10 @@ git push origin work/my-change
 ```
 
 The platform imports each new `work/*` branch head from the inbox into your fork (at most 50 commits, 200 files, 1 MB per file, and 8 MB to download), and the gate decides what reaches main, exactly as for changes made in the app. Pushes to the inbox's main, tags, and other branches are ignored. If your branch adds no `.intent/<id>.json`, the gate drafts one from your commit messages and the files you touched; existing records may only be added to. After a change lands, `git pull origin main` gets the new main. Details and limits in [docs/GATE_AND_AGENTS.md](docs/GATE_AND_AGENTS.md#outside-pushes). With `/?mock=1`, the panel can simulate a push from the inbox to green.
+
+## Intent replay
+
+A Fluid fork is a list of wishes and the tests that prove them. On every release we grant your wishes again on fresh code. When every wish in a fork's intent records came from a recipe (a tau change, a look or chart tab, a REDCap connector, the seeded plain wording), the upgrade rebuilds the fork from the new stock tag by running each wish again in order, gates it with all tiers including the user's own tests, and shows "N of N wishes carried to vX". A fork that reworded the card line a release also rewords would conflict under a merge; replay simply sets its wording again on the new file. Forks with a model change, or anything replay cannot rebuild exactly, take the merge path, and so does a replay that fails its gate. Try it in mock mode: Fleet, then "Tag release and upgrade the fleet". Details: [docs/GATE_AND_AGENTS.md](docs/GATE_AND_AGENTS.md).
 
 ## Quick start (local)
 

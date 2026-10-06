@@ -24,6 +24,7 @@ describe("filterPushEvent", () => {
 		["the gate's own push to main", push({ ref: "refs/heads/main" }), /production branch/],
 		["a tag push", push({ ref: "refs/tags/v1.2.0" }), /tag push/],
 		["an upgrade branch", push({ ref: "refs/heads/upgrade/v1.2.0" }), /Upgrade workflow/],
+		["a replay branch", push({ ref: "refs/heads/replay/v1.2.0" }), /Upgrade workflow/],
 		["a deleted branch", push({ after: "0".repeat(40) }), /deleted/],
 		["a repair branch (the repair workflow gates it; applying it is explicit)", push({ ref: "refs/heads/repair/51e4fce" }), /repair workflow/],
 		["another event type", push({ type: "cf.artifacts.repo.created" }), /event type/],

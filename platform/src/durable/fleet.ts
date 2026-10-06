@@ -46,6 +46,8 @@ export interface PendingUpgrade {
 	tag: string;
 	commit: string;
 	runId: string;
+	/** The branch the upgrade gated: upgrade/<tag> or replay/<tag>. Rows written before it was recorded mean upgrade/<tag>. */
+	branch?: string;
 }
 
 /** Stock release a fork is served from after a safety grace period ends (spec 7). */

@@ -9,6 +9,7 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { clusterRecords, deterministicLabel, draftFilesFor, floorKey, harvestable, LABEL_SCHEMA, labelPrompt, proposalOf, type HarvestProposal, type HarvestRecord } from "../agents/harvest-cluster.ts";
 import { buildIntent, intentJson, intentPath, cleanText } from "../agents/intent.ts";
+import { replayExtra } from "../agents/replay.ts";
 import { cloneRepo, commitChanges, checkoutBranch, deleteRemoteBranch, headCommit, listRemoteRefs, pushBranch, readWorkspaceFile, writeFiles } from "../git/ops.ts";
 import synthetic from "../generated/synthetic.json";
 import { currentStockTag, findPersona, preferencesOf, provisionFork, readIntents } from "../forks/provision.ts";
@@ -143,7 +144,7 @@ async function commitSeedChange(ws: Awaited<ReturnType<typeof cloneRepo>>, kind:
 	for (const path of ["app/index.ts", "app/cards.ts", "fluid.toml"]) files[path] = (await readWorkspaceFile(ws, path)) ?? "";
 	const change = seedChange(kind, files, { personas, persona: spec.persona });
 	const intentId = newIntentId();
-	const intent = buildIntent({ id: intentId, userId: spec.userId, agent: "seed-customization", request: requestFor(kind, spec.index), purpose: change.purpose, modes: change.modes_affected, files: [...Object.keys(change.files), intentPath(intentId)], stockTag: stockTag ?? "unknown", extra: { seeded: true, kind } });
+	const intent = buildIntent({ id: intentId, userId: spec.userId, agent: "seed-customization", request: requestFor(kind, spec.index), purpose: change.purpose, modes: change.modes_affected, files: [...Object.keys(change.files), intentPath(intentId)], stockTag: stockTag ?? "unknown", extra: { seeded: true, kind, ...replayExtra(change.replay) } });
 	await writeFiles(ws, { ...change.files, [intentPath(intentId)]: intentJson(intent) });
 	await commitChanges(ws, { message: `${change.summary}\n\nSeeded customization for the demo fleet (${kind}).`, intentId, author: { name: `user:${spec.userId}`, email: `${spec.userId}@users.fluid.invalid` } });
 }

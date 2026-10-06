@@ -19,7 +19,7 @@ Related documents: `docs/GATE_AND_AGENTS.md` (workflows and gate details), `docs
 flowchart TB
   subgraph NS["Artifacts namespace fluid, US jurisdiction"]
     S[("stock: tags v1.x.y, harvest/* drafts")]
-    F[("user-*: main, work/*, upgrade/*, repair/*")]
+    F[("user-*: main, work/*, replay/*, upgrade/*, repair/*")]
     LG[("ledger-*: daily JSONL")]
   end
   UI["UI, static assets"] --> W["platform Worker: API routes"]
@@ -72,7 +72,7 @@ flowchart TB
   3. Load stock's runner in its own isolate, built only from stock files. Load the fork in a separate isolate. The runner reaches the fork only through a time-boxed `ask` callback.
   4. Run tier 1 (invariants, every sample must pass), tier 2 (functional, majority of samples), and tier 3 (the fork's `tests/user/manifest.json`, with disabled probes logged).
   5. On a pass, fast-forward `main` to exactly the gated commit and push. If `main` moved in the meantime, merge `main` into the work branch, push it there, and gate that new commit. On a fail, leave `main` alone and start a `RepairWorkflow`.
-- **Merge rules.** Only the gate moves `main`, and only by fast-forward to a gated commit. `repair/*` branches are gated in check mode and never merged automatically. `upgrade/*` branches are gated by their own upgrade workflow. A fork's pinned stock tag only moves forward: a change that pins an older tag than the one on `main` cannot merge.
+- **Merge rules.** Only the gate moves `main`, and only by fast-forward to a gated commit. `repair/*` branches are gated in check mode and never merged automatically. `upgrade/*` and `replay/*` branches are gated by their own upgrade workflow. A fork's pinned stock tag only moves forward: a change that pins an older tag than the one on `main` cannot merge.
 - **Primitives.** Artifacts event subscriptions, Queues, Workflows, Worker Loader, isomorphic-git over an in-memory filesystem (`platform/src/git/ops.ts`, `platform/src/git/memory-fs.ts`) with repo-scoped tokens.
 
 ### Yellow to green regression (extends spec 4.3 and 6)
@@ -93,7 +93,7 @@ flowchart TB
 
 ### Build-time intent ledger (spec 3, 8)
 
-- **Code.** `platform/src/agents/intent.ts` builds records. Every agent commit writes `.intent/<id>.json` and adds an `Intent-Id:` trailer (`withIntentTrailer` in `platform/src/git/ops.ts`). `readIntents` in `platform/src/forks/provision.ts` serves `GET /api/intents/:repo`.
+- **Code.** `platform/src/agents/intent.ts` builds records. Every agent commit writes `.intent/<id>.json` and adds an `Intent-Id:` trailer (`withIntentTrailer` in `platform/src/git/ops.ts`). `readIntents` in `platform/src/forks/provision.ts` serves `GET /api/intents/:repo`. Recipe records also carry `replay` (how to run the change again on fresh stock), which intent replay uses on upgrades.
 - **Primitive.** Plain files in the fork's Artifacts repository, versioned with the code they explain.
 
 ### Run-time ledger (spec 8)
@@ -114,7 +114,8 @@ flowchart TB
 
 ### Upgrades, merge agent, and pinning (spec 7)
 
-- **Code.** `platform/src/workflows/upgrade.ts`. `ReleaseWorkflow` starts one `UpgradeWorkflow` per fork, in batches of 20. Each upgrade creates `upgrade/<tag>`, fetches the stock tag, peels it to a commit, and merges. On conflicts, `platform/src/agents/merge-resolve.ts` resolves them with the agent model (up to 3 conflicted files, within a model call budget) or with a fixed rule: keep the fork's version of files an intent record lists, take stock's version of the rest, and keep the fork's `fluid.toml` with `stock_tag` moved to the new tag. The gate then runs at the new tag. On a pass the fork merges automatically if `auto_upgrade` is set, or waits for a one-tap approval (`POST /api/forks/:repo/upgrade`). On a fail the fork stays pinned and a repair opens.
+- **Intent replay first.** A Fluid fork is a list of wishes and the tests that prove them. On every release we grant your wishes again on fresh code. Each upgrade first asks `planReplay` (`platform/src/agents/replay.ts`) whether the fork can be rebuilt from its wishes: every wish's intent record must carry a replayable `replay` field (tau, ui, REDCap, or the seeded framing wording), replaying them on the fork's current tag must rebuild `main` exactly, and each must still apply at the new tag. If so, `platform/src/forks/replay-branch.ts` commits `replay/<tag>` (stock at the tag, one commit per wish with its `Intent-Id` trailer, and a merge commit whose first parent is `main`), and the normal gate decides. If replay does not apply or fails the gate, the upgrade takes the merge path below, unchanged. Details in `docs/GATE_AND_AGENTS.md`, "Intent replay".
+- **Code.** `platform/src/workflows/upgrade.ts`. `ReleaseWorkflow` starts one `UpgradeWorkflow` per fork, in batches of 20. On the merge path, each upgrade creates `upgrade/<tag>`, fetches the stock tag, peels it to a commit, and merges. On conflicts, `platform/src/agents/merge-resolve.ts` resolves them with the agent model (up to 3 conflicted files, within a model call budget) or with a fixed rule: keep the fork's version of files an intent record lists, take stock's version of the rest, and keep the fork's `fluid.toml` with `stock_tag` moved to the new tag. The gate then runs at the new tag. On a pass the fork merges automatically if `auto_upgrade` is set, or waits for a one-tap approval (`POST /api/forks/:repo/upgrade`). On a fail the fork stays pinned and a repair opens.
 - **Fleet state.** `platform/src/durable/fleet.ts` keeps each fork's persona, pinned tag, status, and last run, and streams changes over Server-Sent Events (`GET /api/fleet/stream`). The Fleet view draws one square per fork.
 - **Primitives.** Workflows, Durable Objects, isomorphic-git, Worker Loader, Workers AI.
 
