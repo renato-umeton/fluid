@@ -68,6 +68,8 @@ export interface UpgradeParams {
 	safety: boolean;
 	graceUntil: string | null;
 	releaseRunId?: string;
+	/** Intent replay first (default true); false goes straight to the merge path. */
+	replay?: boolean;
 }
 
 export interface ReleaseParams {
@@ -78,6 +80,8 @@ export interface ReleaseParams {
 	repos: string[];
 	/** Forks whose upgrade to the tag was rolled back: their upgrade runs again under a new instance id. */
 	rerun?: string[];
+	/** Passed to every upgrade: false turns intent replay off for this release. */
+	replay?: boolean;
 }
 
 export interface SeedFleetParams {

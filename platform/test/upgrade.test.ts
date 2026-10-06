@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { upgradeInstanceId, upgradeTargets } from "../src/workflows/upgrade.ts";
+import { replayEnabled, upgradeInstanceId, upgradeTargets } from "../src/workflows/upgrade.ts";
 
 const fork = (repo: string, extra: Record<string, unknown> = {}) => ({ repo, status: "pinned", pinnedTag: "v1.1.0", lastRun: null, pendingUpgrade: null, ...extra });
 
@@ -8,6 +8,14 @@ describe("upgradeInstanceId", () => {
 		expect(upgradeInstanceId("v1.2.0", "user-a")).toBe(upgradeInstanceId("v1.2.0", "user-a"));
 		expect(upgradeInstanceId("v1.2.0", "user-a")).not.toBe(upgradeInstanceId("v1.3.0", "user-a"));
 		expect(upgradeInstanceId("v1.2.0", "user-a")).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
+	});
+});
+
+describe("replayEnabled", () => {
+	it("tries intent replay first unless the release turns it off", () => {
+		expect(replayEnabled(undefined)).toBe(true);
+		expect(replayEnabled(true)).toBe(true);
+		expect(replayEnabled(false)).toBe(false);
 	});
 });
 

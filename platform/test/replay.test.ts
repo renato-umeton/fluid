@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import stockSource from "../src/generated/stock-source.json";
 import synthetic from "../src/generated/synthetic.json";
 import { protocolsFor, tauChange } from "../src/agents/recipes.ts";
-import { isWish, orderIntents, planReplay, replayBase, replayIntents, replayOf, replaySummary, type ReplaySpec } from "../src/agents/replay.ts";
+import { isWish, orderIntents, planReplay, replayBase, replayIntents, replayOf, replaySummary, wishesCarriedText, type ReplaySpec } from "../src/agents/replay.ts";
 import { uiChange } from "../src/agents/ui-recipe.ts";
 import { seedChange } from "../src/fleet/seed-catalog.ts";
 import { onboardingToml, type BuildTimeIntent } from "../src/forks/provision.ts";
@@ -284,6 +284,13 @@ describe("replaySummary", () => {
 		const results = replayIntents(stock, [wish(tau(0.9)), wish({ kind: "model", request: "x" })]).results;
 		expect(replaySummary("v1.1.0", "replay", results)).toEqual(expect.objectContaining({ tag: "v1.1.0", path: "replay", carried: 1, total: 2 }));
 		expect(replaySummary("v1.1.0", "replay", results).wishes[1]).toEqual(expect.objectContaining({ status: "fallback", kind: "model" }));
+	});
+
+	it("reads as one line for the run timeline", () => {
+		const one = replayIntents(stock, [wish(tau(0.9))]).results;
+		expect(wishesCarriedText(replaySummary("v1.1.0", "replay", [...one, ...one, ...one]))).toBe("3 of 3 wishes carried to v1.1.0");
+		expect(wishesCarriedText(replaySummary("v1.1.0", "replay", one))).toBe("1 of 1 wish carried to v1.1.0");
+		expect(wishesCarriedText(replaySummary("v1.1.0", "merge", one, "the gate failed"))).toBe("Upgraded to v1.1.0 by merge: the gate failed");
 	});
 });
 

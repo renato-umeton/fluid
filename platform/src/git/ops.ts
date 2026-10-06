@@ -478,6 +478,28 @@ export async function resolveAnyRef(ws: Workspace, ref: string): Promise<string>
 	throw new Error(`resolveAnyRef: ${ref} not found`);
 }
 
+/** Every file of a commit's tree as text (stock and fork files are text). */
+export async function readTreeFiles(ws: Workspace, commit: string): Promise<Record<string, string>> {
+	const oid = await peelToCommit(ws, await resolveAnyRef(ws, commit));
+	const decoder = new TextDecoder();
+	const files: Record<string, string> = {};
+	for (const path of await git.listFiles({ fs: ws.fs, dir: ws.dir, ref: oid })) {
+		files[path] = decoder.decode((await git.readBlob({ fs: ws.fs, dir: ws.dir, oid, filepath: path })).blob);
+	}
+	return files;
+}
+
+/** Intent ids named by Intent-Id trailers in the history of `ref`, oldest first, each once. */
+export async function intentCommitOrder(ws: Workspace, ref: string, depth = 1000): Promise<string[]> {
+	const entries = await git.log({ fs: ws.fs, dir: ws.dir, ref, depth });
+	const ids: string[] = [];
+	for (const entry of [...entries].reverse()) {
+		const id = parseTrailers(entry.commit.message)["Intent-Id"];
+		if (id && !ids.includes(id)) ids.push(id);
+	}
+	return ids;
+}
+
 /** Reads a commit message, e.g. to find its Intent-Id trailer. */
 export async function readCommitMessage(ws: Workspace, oid: string): Promise<string> {
 	const { commit } = await git.readCommit({ fs: ws.fs, dir: ws.dir, oid });

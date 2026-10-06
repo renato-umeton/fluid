@@ -651,7 +651,9 @@ route("POST", "/api/admin/release", async (rc) => {
 	const rerun = rerunTargets(tag, forks);
 	const runId = newRunId("release");
 	await runsStub(rc.env, runId).create({ id: runId, kind: "release", status: "running", fields: { tag, safety, forks: repos.length, rerun: rerun.length } });
-	await appExports(rc.ctx).ReleaseWorkflow.create({ id: runId, params: { runId, tag, safety: result.release?.safety ?? safety, graceUntil: result.release?.graceUntil ?? null, repos, rerun } });
+	// Intent replay is on unless the request turns it off with replay: false.
+	const replay = body.replay !== false;
+	await appExports(rc.ctx).ReleaseWorkflow.create({ id: runId, params: { runId, tag, safety: result.release?.safety ?? safety, graceUntil: result.release?.graceUntil ?? null, repos, rerun, ...(replay ? {} : { replay: false }) } });
 	return json({ tag, upgradeRuns: repos.length, runId, commit: result.commit, alreadyPublished: result.alreadyPublished, release: result.release }, 202);
 });
 
