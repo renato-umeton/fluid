@@ -32,7 +32,7 @@ import { logTiers, persistGate, repairRunId } from "./gate.ts";
 import { appExports, asJson, ensureRun, errorText, GATE_STEP, GIT_STEP, mainBeforePush, recordMainBeforePush, repoRemote, runLog, setFleet, startInstance, startOrRetryInstance, startYellowRun, guarded, steps, type ReleaseParams, type Steps, type UpgradeParams } from "./common.ts";
 
 /** Upgrades created per batch, and the pause between batches. */
-export const FAN_OUT = { batchSize: 20, pause: "1 second" };
+export const FAN_OUT = { batchSize: 20, pause: "2 seconds" };
 export const MERGE_MODEL_LIMIT = { maxFiles: 3, maxChars: 40_000, perMinute: 30 };
 
 /**
@@ -58,6 +58,11 @@ export function replayEnabled(flag: boolean | undefined): boolean {
 	return flag ?? REPLAY_BY_DEFAULT;
 }
 
+/** The run log's step for the replay attempt. */
+function replayStepName(tag: string): string {
+	return `Replay wishes on stock ${tag}`;
+}
+
 export type ReplayAttempt = { used: false; summary: ReplaySummary | null } | { used: true; branch: string; commit: string; autoUpgrade: boolean; summary: ReplaySummary };
 type UsedReplay = Extract<ReplayAttempt, { used: true }>;
 
@@ -80,6 +85,27 @@ export async function replayFirst<T>(deps: {
 	const landed = await deps.land(replay);
 	if (landed.passed) return { outcome: landed.outcome, path: "replay" };
 	return deps.merge(await deps.fallback(replay, landed.why));
+}
+
+/**
+ * Runs the replay attempt as the "replay wishes" step. `run` throws on
+ * errors (an Artifacts 500 during a fan-out burst, a dropped connection),
+ * so GIT_STEP retries them; a replay that does not apply is a normal
+ * return value and is not retried. Only after the retries give up is the
+ * reason logged, in its own step, and the upgrade merges: replay never
+ * fails an upgrade by itself.
+ */
+export async function attemptReplay(step: Steps, run: () => Promise<ReplayAttempt>, logFailure: (reason: string) => Promise<unknown>): Promise<ReplayAttempt> {
+	try {
+		return await step.do("replay wishes", GIT_STEP, run);
+	} catch (error) {
+		const reason = errorText(error);
+		await step.do("replay could not run", async () => {
+			await logFailure(reason);
+			return true;
+		});
+		return { used: false, summary: null };
+	}
 }
 
 /**
@@ -184,7 +210,11 @@ export class UpgradeWorkflow extends WorkflowEntrypoint<Env, UpgradeParams> {
 		const log = runLog(this.env, p.runId);
 		const result = await replayFirst({
 			// First attempt: rebuild the fork from fresh stock by replaying its wishes (intent replay).
-			attempt: () => step.do("replay wishes", GIT_STEP, () => this.replayWishes(p)),
+			attempt: () =>
+				attemptReplay(step, () => this.replayWishes(p), async (reason) => {
+					await ensureRun(this.env, { id: p.runId, kind: "upgrade", repo: p.repo, fields: { tag: p.tag, branch: `upgrade/${p.tag}`, safety: p.safety, graceUntil: p.graceUntil } });
+					await log.step(replayStepName(p.tag), "info", `Replay could not run (${reason}); upgrading by merge`);
+				}),
 			land: async (replay) => {
 				const landed = await this.gateAndLand(step, p, { branch: replay.branch, commit: replay.commit, autoUpgrade: replay.autoUpgrade, prefix: "replay ", tiersPrefix: "Replay: ", extra: { path: "replay", replay: replay.summary }, failSoft: true });
 				if (landed.passed) return landed;
@@ -322,47 +352,42 @@ export class UpgradeWorkflow extends WorkflowEntrypoint<Env, UpgradeParams> {
 	 * Intent replay, the first attempt of every upgrade (unless the release
 	 * turned it off). Builds replay/<tag> from stock at the tag plus the
 	 * fork's wishes, run again in commit order, when planReplay allows it.
-	 * Anything that keeps replay from running returns used: false, and the
-	 * upgrade merges as before; replay never fails an upgrade by itself.
+	 * A replay that does not apply returns used: false and the upgrade
+	 * merges as before. Git and platform errors are thrown, so the "replay
+	 * wishes" step retries them; attemptReplay merges once it gives up.
 	 */
 	private async replayWishes(p: UpgradeParams): Promise<ReplayAttempt> {
 		await ensureRun(this.env, { id: p.runId, kind: "upgrade", repo: p.repo, fields: { tag: p.tag, branch: `upgrade/${p.tag}`, safety: p.safety, graceUntil: p.graceUntil } });
 		if (!replayEnabled(p.replay)) return { used: false, summary: null };
 		const log = runLog(this.env, p.runId);
 		const branch = replayBranchName(p.tag);
-		const name = `Replay wishes on stock ${p.tag}`;
-		try {
-			const remote = await repoRemote(this.env, p.repo, "write");
-			const stock = await repoRemote(this.env, STOCK_REPO, "read");
-			const ws = await cloneRepo({ ...remote, ref: "main", singleBranch: true });
-			const main = await headCommit(ws, "main");
-			const mainToml = (await readWorkspaceFile(ws, "fluid.toml")) ?? "";
-			const fromTag = pinnedTagOf(mainToml);
-			if (!fromTag || fromTag === p.tag) return { used: false, summary: null };
-			// A fork with no wishes has nothing to replay; it merges without a replay step (and without fetching stock twice).
-			if (!(await hasWishes(ws, main))) return { used: false, summary: null };
-			const stockCommit = await fetchStockTag(ws, stock, p.tag);
-			const fromCommit = await fetchStockTag(ws, stock, fromTag);
-			const { plan, mainTree, stockFiles } = await prepareReplay(ws, { main, stockCommit, fromCommit, tag: p.tag, fromTag, safety: p.safety });
-			await setFleet(this.env, p.repo, { status: "upgrading", lastRun: { runId: p.runId, kind: "upgrade", tag: p.tag, branch, status: "running", path: "replay" } });
-			await log.step(name, "running", `Rebuilding the fork from stock ${p.tag} by running each wish again`);
-			if (plan.mode === "merge") {
-				const summary = replaySummary(p.tag, "merge", plan.results, plan.reason);
-				await log.update({ replay: asJson(summary) });
-				await log.step(name, "info", `Upgrading by merge: ${plan.reason}`);
-				return { used: false, summary };
-			}
-			const built = await buildReplayBranch(ws, { branch, tag: p.tag, stockCommit, main, plan, stockFiles, mainTree });
-			await pushBranch(ws, remote, branch, { force: true });
-			const summary = replaySummary(p.tag, "replay", plan.results);
-			await log.update({ replay: asJson(summary), branch, commit: built.commit, fromTag });
-			await log.step(name, "done", `${wishesCarriedText(summary)} on ${branch}. ${plan.results.map((r) => `${r.intentId}: ${r.reason}${r.stockAlsoChanged?.length ? ` (stock ${p.tag} also changed ${r.stockAlsoChanged.join(", ")}; replay needed no merge there)` : ""}`).join("; ")}`);
-			return { used: true, branch, commit: built.commit, autoUpgrade: preferencesOf(parseToml(mainToml)).auto_upgrade, summary };
-		} catch (error) {
-			// Replay never fails an upgrade by itself: say why it could not run, then merge.
-			await log.step(name, "info", `Replay could not run (${errorText(error)}); upgrading by merge`);
-			return { used: false, summary: null };
+		const name = replayStepName(p.tag);
+		const remote = await repoRemote(this.env, p.repo, "write");
+		const stock = await repoRemote(this.env, STOCK_REPO, "read");
+		const ws = await cloneRepo({ ...remote, ref: "main", singleBranch: true });
+		const main = await headCommit(ws, "main");
+		const mainToml = (await readWorkspaceFile(ws, "fluid.toml")) ?? "";
+		const fromTag = pinnedTagOf(mainToml);
+		if (!fromTag || fromTag === p.tag) return { used: false, summary: null };
+		// A fork with no wishes has nothing to replay; it merges without a replay step (and without fetching stock twice).
+		if (!(await hasWishes(ws, main))) return { used: false, summary: null };
+		const stockCommit = await fetchStockTag(ws, stock, p.tag);
+		const fromCommit = await fetchStockTag(ws, stock, fromTag);
+		const { plan, mainTree, stockFiles } = await prepareReplay(ws, { main, stockCommit, fromCommit, tag: p.tag, fromTag, safety: p.safety });
+		await setFleet(this.env, p.repo, { status: "upgrading", lastRun: { runId: p.runId, kind: "upgrade", tag: p.tag, branch, status: "running", path: "replay" } });
+		await log.step(name, "running", `Rebuilding the fork from stock ${p.tag} by running each wish again`);
+		if (plan.mode === "merge") {
+			const summary = replaySummary(p.tag, "merge", plan.results, plan.reason);
+			await log.update({ replay: asJson(summary) });
+			await log.step(name, "info", `Upgrading by merge: ${plan.reason}`);
+			return { used: false, summary };
 		}
+		const built = await buildReplayBranch(ws, { branch, tag: p.tag, stockCommit, main, plan, stockFiles, mainTree });
+		await pushBranch(ws, remote, branch, { force: true });
+		const summary = replaySummary(p.tag, "replay", plan.results);
+		await log.update({ replay: asJson(summary), branch, commit: built.commit, fromTag });
+		await log.step(name, "done", `${wishesCarriedText(summary)} on ${branch}. ${plan.results.map((r) => `${r.intentId}: ${r.reason}${r.stockAlsoChanged?.length ? ` (stock ${p.tag} also changed ${r.stockAlsoChanged.join(", ")}; replay needed no merge there)` : ""}`).join("; ")}`);
+		return { used: true, branch, commit: built.commit, autoUpgrade: preferencesOf(parseToml(mainToml)).auto_upgrade, summary };
 	}
 
 	/**

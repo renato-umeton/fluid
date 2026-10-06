@@ -402,9 +402,15 @@ export function errorText(error: unknown): string {
 	return (error instanceof Error ? error.message : String(error)).replace(/art_v\d+_[A-Za-z0-9_-]+(\?expires=\d+)?/g, "<redacted-token>").slice(0, 500);
 }
 
-/** Retry policy for steps that talk to Artifacts over git. */
-export const GIT_STEP = { retries: { limit: 4, delay: "3 seconds" as const, backoff: "exponential" as const }, timeout: "5 minutes" as const };
-export const GATE_STEP = { retries: { limit: 2, delay: "5 seconds" as const, backoff: "exponential" as const }, timeout: "5 minutes" as const };
+/**
+ * Retry policies for steps that talk to Artifacts over git (GIT_STEP) and
+ * that run the gate (GATE_STEP). During a release fan-out Artifacts can
+ * return 500s for about 30 seconds, so both keep retrying for well over a
+ * minute: 3 + 6 + 12 + 24 + 48 = 93 seconds of waits for a git step, and
+ * 5 + 10 + 20 + 40 = 75 seconds for a gate step.
+ */
+export const GIT_STEP = { retries: { limit: 5, delay: "3 seconds" as const, backoff: "exponential" as const }, timeout: "5 minutes" as const };
+export const GATE_STEP = { retries: { limit: 4, delay: "5 seconds" as const, backoff: "exponential" as const }, timeout: "5 minutes" as const };
 
 /**
  * The workflow step API with plain generics. The runtime types constrain
