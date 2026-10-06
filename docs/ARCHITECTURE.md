@@ -167,7 +167,7 @@ Models (named only because the code pins them): `@cf/meta/llama-3.3-70b-instruct
 | Fleet health from Artifacts metrics. | Fleet health from the `Fleet` Durable Object and its event stream. | The demo needs per-fork status changes in real time. |
 | Stock tests read with `refs/tags/<tag>`. | Short tag names or SHAs. | The binding returns null for `refs/...` names. |
 | Each fork's `app/` serves its own chat UI. | The control plane serves one UI; a fork changes its look only through `ui/preferences.json`, which the platform validates and the UI maps to fixed styles and platform-computed charts. | No fork code runs in the browser of the public demo, and answer cards stay the stock JSON contract. |
-| Run-time records give a tamper-evident audit trail. | Run-time records are committed daily to `ledger-<id>` as plain git history. | Signing or anchoring the commits is not built. |
+| The run-time ledger is protected against tampering. | Run-time records are committed daily to `ledger-<id>` as plain git history. | Signing or anchoring the commits is not built. |
 | When a harvested feature ships in stock, upgrade agents retire the duplicate custom code in each fork. | Harvest drafts `harvest/<slug>` branches in stock for maintainers to review. | Retiring fork code is not built. |
 | Repair agent proposes a fix for every failure. | A fix is proposed when a rule applies. Otherwise the branch carries the explanation only. | Fixes to safety-critical behavior should come from fixed rules or the user, never from free model output. |
 
