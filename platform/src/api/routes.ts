@@ -4,6 +4,7 @@ import { currentStockTag, getForkInfo, findPersona, fleetStub, ForkNotFoundError
 import { serveAsk } from "./ask.ts";
 import { clientKey } from "../lib/client.ts";
 import { scrubText } from "../git/tokens.ts";
+import { mintOutsideToken, outsideGrantKey, type OutsideGrant } from "../forks/outside.ts";
 import { forkRepoName, isValidRepoName, newIntentId, newSandboxUserId, STOCK_REPO, userIdFromForkRepo } from "../lib/names.ts";
 import { readCookie, safeEqual, SESSION_COOKIE, sessionCookieHeader, signSession, switchPersona, verifySession, type Session } from "../lib/session.ts";
 import type { PlatformExports } from "../runtime/loader.ts";
@@ -47,6 +48,9 @@ export const LIMITS = {
 	readsPerClientPerMinute: 60,
 	ledgerCommitsPerUserPerHour: 6,
 	customizationsPerUserPerHour: 10,
+	outsideTokensPerUserPerHour: 3,
+	outsideTokensPerClientPerHour: 6,
+	outsideTokensGlobalPerHour: 60,
 };
 
 /** Fork info is read from Artifacts; repeated reads within this window share one result. */
@@ -600,6 +604,32 @@ route("POST", "/api/forks/:repo/upgrade", async (rc, { repo }) => {
 	const updated = await fleet.update(name, { status: "passed", pendingUpgrade: null, lastRun });
 	forkInfoCache.delete(name);
 	return json({ repo: name, tag: pending.tag, commit: pending.commit, fork: updated, yellowRunId: yellow?.runId ?? null });
+});
+
+// Bring your own agent: a one hour write token for the session's own fork. The grant is recorded
+// before the token exists, so main protection (main-guard.ts) is on before any outside push can land.
+route("POST", "/api/forks/:repo/token", async (rc, { repo }) => {
+	const name = repoParam(repo!);
+	const session = await requireSession(rc);
+	refuseTestSession(session, "get a git token");
+	if (name !== forkRepoName(session.userId)) throw new HttpError(403, "you can get a token only for your own fork");
+	const fleet = fleetStub(rc.env);
+	const entry = await fleet.get(name);
+	if (!entry) throw new HttpError(404, "you have no fork yet: POST /api/forks first");
+	if (entry.status === "provisioning") throw new HttpError(409, "your fork is still being provisioned; try again in a few seconds");
+	await takeQuota(rc.env, `user:${session.userId}`, "outside-token", LIMITS.outsideTokensPerUserPerHour, 3600);
+	await takeClientQuota(rc, "outside-token", LIMITS.outsideTokensPerClientPerHour, 3600);
+	await takeQuota(rc.env, "global", "outside-token", LIMITS.outsideTokensGlobalPerHour, 3600);
+	const key = outsideGrantKey(name);
+	const previous = (await fleet.getValue(key)) as OutsideGrant | null;
+	const at = new Date().toISOString();
+	const grant: OutsideGrant = { repo: name, userId: session.userId, tokenId: previous?.tokenId ?? null, firstAt: previous?.firstAt ?? at, mintedAt: at, expiresAt: previous?.expiresAt ?? null };
+	await fleet.setValue(key, grant as unknown as Json);
+	using handle = await openRepo(rc.env.ARTIFACTS, name);
+	const minted = await mintOutsideToken(handle, name, previous?.tokenId ?? null);
+	await fleet.setValue(key, { ...grant, tokenId: minted.tokenId, expiresAt: minted.access.expiresAt } as unknown as Json);
+	console.log(`outside token minted for ${name} (token id ${minted.tokenId}, expires ${minted.access.expiresAt})${minted.revokeError ? `; previous token not revoked: ${minted.revokeError}` : ""}`);
+	return json(minted.access, 201);
 });
 
 // Apply a repair branch: gate repair/<sha> in merge mode; main fast-forwards to it only if it passes.
