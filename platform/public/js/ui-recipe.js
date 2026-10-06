@@ -12,8 +12,9 @@ const LOOK_NOTES = {
   crimson: "bold red and white institutional colors; no logos, names, or trademarks",
   "luna-xp": "a Windows XP style from about 2001: blue title bars, a blue rail, bevelled buttons with a green primary, Tahoma-style web-safe fonts",
 };
+// "red and white" names the crimson look only when a look, feel, or theme word follows in the same sentence.
 const LOOK_RULES = [
-  ["crimson", /\b(?:st\.?\s*|saint\s+)jude\b|\bcrimson\b/i],
+  ["crimson", /\b(?:st\.?\s*|saint\s+)jude\b|\bcrimson\b|\b(?:red\s+(?:and|&)\s+white|white\s+(?:and|&)\s+red)\b(?=[^.;!?]*?\b(?:looks?|feel|themes?)\b)/i],
   ["luna-xp", /\bwindows\s*xp\b|\bxp\b|\b2001\b|\bluna\b|\by2k\b|\bretro\b|\bearly\s*2000s\b/i],
   ["standard", /\b(?:default|standard|original|stock|normal|plain)\s+(?:look|theme|style|skin|ui|design|appearance)\b(?!\s+guides?\b)|\breset\s+(?:the\s+|my\s+)?(?:look|theme|style|skin|ui|design|appearance)\b(?!\s+guides?\b)/i],
 ];

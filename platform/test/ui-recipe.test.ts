@@ -5,6 +5,14 @@ import { suggestTests, validateProbe } from "../src/agents/suggester.ts";
 import { UI_LIMITS, WIDGETS, parseUiPreferences } from "../src/ui/preferences.ts";
 
 const USER_REQUEST = "Always use palatino lino type kind of fonts and add a tab with charts";
+/** A red and white look, named by its colors instead of by the word crimson. */
+const RED_AND_WHITE_LOOKS = [
+	"a red and white children's hospital look",
+	"Give my fork a red and white children's hospital look and feel",
+	"Use a red and white theme",
+	"I want a white and red look",
+	"red & white look please",
+];
 
 describe("parseUiRequest", () => {
 	it("maps the exact user request to the palatino stack and a default chart tab", () => {
@@ -146,6 +154,19 @@ describe("look requests", () => {
 		["Reset the look", "standard"],
 	])("%s", (request, look) => {
 		expect(parseUiRequest(request)).toMatchObject({ look });
+	});
+
+	it.each(RED_AND_WHITE_LOOKS)("%s maps to the crimson look, colors only", (request) => {
+		const m = parseUiRequest(request)!;
+		expect(m).toMatchObject({ look: "crimson" });
+		expect(m.accent).toBeUndefined();
+		expect(matchRecipe(request)).toEqual({ kind: "ui" });
+	});
+
+	it("keeps red and white without a look word as colors, not the crimson look", () => {
+		expect(parseUiRequest("Make the buttons red and white")?.look).toBeUndefined();
+		expect(parseUiRequest("Show red and white blood cell counts in answers")).toBeNull();
+		expect(parseUiRequest("List red and white blood cell counts in clinical answers with a clean look")?.look).toBeUndefined();
 	});
 
 	it("does not read xp inside another word as Windows XP", () => {
@@ -327,7 +348,8 @@ const MOCK_SAME = [ST_JUDE, CHART_PAGE, XP, USER_REQUEST, "Use a serif font", "M
 	"Make it feel like 2001", "Use crimson buttons", "Use a compact serif font", ...NOT_LOOKS, ...LOOK_AND_TAB.map(([r]) => r),
 	"Give the UI a St. Jude look and feel for my answers view", "Use St Jude colors", "A retro palette please", "Use St. Jude colors in clinical answers", "Cite St. Jude protocols in a retro color scheme for answers",
 	...OTHER_CLAUSE, ...MIXED, "Add the 2001 cutoff to the formulary lookup; use a blue theme", "Add a tab with charts, citations and answers", "add a tab with charts of answers by intent",
-	...UI_ON_ANSWERS.map(([r]) => r), "Make the answer text larger and use Palatino"];
+	...UI_ON_ANSWERS.map(([r]) => r), "Make the answer text larger and use Palatino",
+	...RED_AND_WHITE_LOOKS, "Make the buttons red and white", "Show red and white blood cell counts in answers", "List red and white blood cell counts in clinical answers with a clean look"];
 
 describe("mock mode recipe", () => {
 	const SAME = MOCK_SAME;
