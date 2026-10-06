@@ -130,4 +130,12 @@ describe("prepareReplay over git trees", () => {
 		expect(prepared.plan.mode).toBe("merge");
 		if (prepared.plan.mode === "merge") expect(prepared.plan.reason).toContain("run.sh");
 	});
+
+	// A broken record never heals on a retry, so it is a merge plan, not an error the replay step would retry.
+	it("merges, without throwing, when an intent record is not valid JSON", async () => {
+		const f = await fork({ main: { ".intent/int_broken.json": "{ not json" } });
+		const prepared = await prepareReplay(f.ws, input(f));
+		expect(prepared.plan.mode).toBe("merge");
+		if (prepared.plan.mode === "merge") expect(prepared.plan.reason).toContain("intent record .intent/int_broken.json is not valid JSON");
+	});
 });

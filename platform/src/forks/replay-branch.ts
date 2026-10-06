@@ -31,8 +31,9 @@ function textOf(tree: Record<string, TreeFile>): Record<string, string> {
 /**
  * Reads main and stock at both tags from the working copy and plans the
  * replay. Trees with anything but plain files, or with binary files outside
- * the carried folders, take the merge path. Throws on an intent record that
- * is not valid JSON (the caller falls back to merge and logs why).
+ * the carried folders, take the merge path, as do an intent record that is
+ * not valid JSON and a stock tag with no fluid.toml. These never change on
+ * a retry, so they are merge plans; only git and platform errors throw.
  */
 export async function prepareReplay(
 	ws: Workspace,
@@ -41,15 +42,18 @@ export async function prepareReplay(
 	const [mainTree, stockTree, fromTree] = await Promise.all([readTree(ws, input.main), readTree(ws, input.stockCommit), readTree(ws, input.fromCommit)]);
 	const mainFiles = textOf(mainTree);
 	const stockFiles = textOf(stockTree);
-	const intents = Object.entries(mainTree)
-		.filter(([path]) => path.startsWith(".intent/") && path.endsWith(".json"))
-		.map(([path, entry]) => {
-			try {
-				return JSON.parse(entry.text ?? "") as BuildTimeIntent;
-			} catch {
-				throw new Error(`intent record ${path} is not valid JSON`);
-			}
-		});
+	const intents: BuildTimeIntent[] = [];
+	for (const [path, entry] of Object.entries(mainTree)) {
+		if (!path.startsWith(".intent/") || !path.endsWith(".json")) continue;
+		try {
+			intents.push(JSON.parse(entry.text ?? "") as BuildTimeIntent);
+		} catch {
+			return { plan: { mode: "merge", reason: `intent record ${path} is not valid JSON`, results: [] }, mainTree, stockFiles, wishes: 0 };
+		}
+	}
+	for (const [name, files] of [[input.tag, stockFiles], [input.fromTag, textOf(fromTree)]] as const) {
+		if (files["fluid.toml"] === undefined) return { plan: { mode: "merge", reason: `stock ${name} has no fluid.toml`, results: [] }, mainTree, stockFiles, wishes: 0 };
+	}
 	const ordered = orderIntents(intents, await intentCommitOrder(ws, input.main));
 	const wishes = ordered.filter(isWish).length;
 	const guard = treeGuard([
