@@ -886,17 +886,20 @@ function mintToken(repo) {
   if (!fork || repo !== persona.forkRepo) throw new HttpError(403, "you can get a token only for your own fork");
   const secret = `art_v2_mock${hex(40)}`;
   const expires = Date.now() + 3600 * 1000;
-  const authed = fork.remote.replace("https://", `https://x:${secret}@`);
+  const inbox = `inbox-${repo}`;
+  const remote = `${REMOTE_HOST}/${inbox}.git`;
+  const authed = remote.replace("https://", `https://x:${secret}@`);
   return {
-    repo, remote: fork.remote, token: `${secret}?expires=${Math.floor(expires / 1000)}`, expiresAt: new Date(expires).toISOString(), branchPrefix: "work/",
-    commands: [`git clone ${authed} ${repo}`, `cd ${repo}`, "git checkout -b work/my-change", 'git add -A && git commit -m "Describe the change"', "git push origin work/my-change"],
+    repo, inbox, remote, token: `${secret}?expires=${Math.floor(expires / 1000)}`, expiresAt: new Date(expires).toISOString(), branchPrefix: "work/",
+    commands: [`git clone ${authed} ${inbox}`, `cd ${inbox}`, "git checkout -b work/my-change", 'git add -A && git commit -m "Describe the change"', "git push origin work/my-change"],
   };
 }
 
 /**
- * Mock only: an outside agent pushes two commits with no intent record, to work/my-change or straight to
- * main. A push to main is undone by the main guard and kept on work/outside-main-<sha>. Then the gate
- * drafts the intent record, runs the three tiers, fast-forwards main, and the change soaks in yellow.
+ * Mock only: an outside agent pushes two commits with no intent record to its inbox, on work/my-change
+ * or on the inbox's main. A push to inbox main is ignored (only work/* is imported). A work branch is
+ * imported into the fork; the gate drafts the intent record, runs the three tiers, fast-forwards main,
+ * and the change soaks in yellow.
  */
 function startOutsidePush(body) {
   const persona = requireSession();
@@ -904,10 +907,10 @@ function startOutsidePush(body) {
   if (!fork) throw new HttpError(404, `Fork ${body?.repo} not found`);
   const target = body?.target === "main" ? "main" : "work";
   const pushed = hex(40);
-  const branch = target === "main" ? `work/outside-main-${pushed.slice(0, 7)}` : "work/my-change";
-  const id = `run_${hex(10)}`;
+  const branch = target === "main" ? "main" : "work/my-change";
+  const id = `run_import_${hex(10)}`;
   const run = {
-    id, kind: "gate", status: "running", repo: fork.repo, branch, commit: pushed, source: "outside-push", startedAt: now(), intent: null, gate: null,
+    id, kind: "import", status: "running", repo: fork.repo, inbox: `inbox-${fork.repo}`, branch, commit: pushed, source: "import", startedAt: now(), intent: null, gate: null,
     steps: [], _ctx: { persona, fork, branch, pushed, target, intentId: nextIntentId() }, _script: null, _idx: 0, _until: 0,
   };
   run._script = outsidePushScript(run);
@@ -921,30 +924,34 @@ const OUTSIDE_COMMITS = ["Add a plain-language summary line to research answers"
 
 function outsidePushScript(run) {
   const { fork, branch, pushed, target, intentId, persona } = run._ctx;
-  const guard = target === "main"
-    ? [{
-        name: "Outside push to main", ms: 1000,
-        done: (r, v) => { v.detail = `main moved to ${pushed.slice(0, 7)} outside the gate. main only moves through the gate, so the main guard pushed it back to ${fork.head.slice(0, 7)} and kept the commits on ${branch}.`; },
-      }]
-    : [];
+  const inbox = `inbox-${fork.repo}`;
+  if (target === "main") {
+    return [{
+      name: `Push received in ${inbox} on main`, ms: 900,
+      done: (r, v) => { v.detail = `Ignored: only work/* branches are imported from the inbox. ${pushed.slice(0, 7)} stays in the inbox; your fork's main is still ${fork.head.slice(0, 7)}.`; },
+    }];
+  }
   return [
-    ...guard,
     {
-      name: `Push received on ${branch}`, ms: 800,
+      name: `Push received in ${inbox} on ${branch}`, ms: 800,
+      done: (r, v) => { v.detail = `${pushed.slice(0, 7)} from an outside agent: ${OUTSIDE_COMMITS.length} commits (${OUTSIDE_COMMITS.join("; ")})`; },
+    },
+    {
+      name: "Import from your inbox", ms: 900,
       done: (r, v) => {
         fork.branches = fork.branches.filter((b) => b.name !== branch);
-        fork.branches.push({ name: branch, commit: pushed, role: "outside", gate: "pending" });
-        v.detail = `${pushed.slice(0, 7)} from an outside agent: ${OUTSIDE_COMMITS.length} commits (${OUTSIDE_COMMITS.join("; ")})`;
+        fork.branches.push({ name: branch, commit: pushed, role: "imported", gate: "pending" });
+        v.detail = `${OUTSIDE_COMMITS.length} commits, 2 files, within the caps (50 commits, 200 files, 1 MB per file, 8 MB download); pushed to ${branch} in ${fork.repo}`;
       },
     },
     {
-      name: "Check the intent record", ms: 1100,
+      name: "Check the change", ms: 1100,
       done: (r, v) => {
         run.commit = hex(40);
         run.intent = {
           id: intentId, author: "outside agent", agent: "outside-agent", source: "outside-push", pushed_by: `user:${persona.id}`, branch,
           request: OUTSIDE_COMMITS.join("; "),
-          purpose: `Pushed to ${branch} from outside the platform; this record was drafted by the gate from the commit messages and the files touched. Edit it to say why the change exists.`,
+          purpose: `Pushed to ${branch} from outside the platform; this record was drafted by the gate from the commit messages and the files touched. Records are append-only: to say why, add your own .intent record in a later push.`,
           modes_affected: ["research"], files: [`.intent/${intentId}.json`, "app/cards.ts", "tests/user/manifest.json"], tests_added: ["tests/user/manifest.json"], stock_tag: fork.stockTag,
         };
         const entry = fork.branches.find((b) => b.name === branch);
@@ -980,7 +987,7 @@ function outsidePushScript(run) {
         for (const other of Object.values(db.runs)) {
           if (other.kind === "customize" && other.repo === fork.repo && (other.status === "running" || other.status === "waiting")) other._ctx.mainMoved = { commit: fork.head, runId: run.id };
         }
-        v.detail = `main fast-forwarded to ${fork.head.slice(0, 7)}`;
+        v.detail = `main fast-forwarded to ${fork.head.slice(0, 7)}; inbox-${fork.repo} main now matches it, so git pull origin main gets the change`;
         startMockYellow(fork, run, "outside-push");
       },
     },

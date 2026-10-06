@@ -86,13 +86,13 @@ function outsidePanel(fork) {
   });
   const simulate = apiState.mock
     ? [
-        h("button", { type: "button", class: "btn", onclick: () => startSimulatedPush(fork, "work", pushOut) }, "Simulate an outside push"),
-        h("button", { type: "button", class: "btn btn-quiet", onclick: () => startSimulatedPush(fork, "main", pushOut) }, "Simulate a push to main"),
+        h("button", { type: "button", class: "btn", onclick: () => startSimulatedPush(fork, "work", pushOut) }, "Simulate a push to the inbox"),
+        h("button", { type: "button", class: "btn btn-quiet", onclick: () => startSimulatedPush(fork, "main", pushOut) }, "Simulate a push to inbox main"),
       ]
     : null;
   return h("section", { class: "panel wide", "aria-labelledby": "outside-heading" },
     h("div", { class: "panel-head" }, h("div", {}, h("h2", { id: "outside-heading" }, "Connect your own agent"),
-      h("p", {}, "Work on this fork with your own agent or editor over plain git. Push to a work/ branch: the gate decides what reaches main, exactly as for changes made here. A push straight to main is undone, and its commits are kept on a work/ branch for the gate."))),
+      h("p", {}, "Work on this fork with your own agent or editor over plain git. Your token writes only to your inbox, a separate copy of your fork. Push a work/ branch there: the platform imports it into your fork, and the gate decides what reaches main, exactly as for changes made here. Pushes to main, tags, and other branches in the inbox are ignored."))),
     h("div", { class: "panel-body stack" },
       h("div", { class: "row" }, getToken, simulate),
       status, access, pushOut));
@@ -117,9 +117,9 @@ function showAccess(el, minted) {
     reveal.textContent = revealed ? "Hide token" : "Show token";
   });
   mount(el,
-    h("div", { class: "row" }, expiry, h("span", { class: "small muted" }, `Write access to ${minted.repo} only. Push to branches that start with ${minted.branchPrefix}.`), reveal),
+    h("div", { class: "row" }, expiry, h("span", { class: "small muted" }, `Write access to your inbox ${minted.inbox} only, never to ${minted.repo}. Branches that start with ${minted.branchPrefix} are imported.`), reveal),
     h("ol", { class: "cmd-list" }, lines.map((l) => l.row)),
-    h("p", { class: "xsmall muted" }, "The token is part of the clone URL, so git stores it in the clone's .git/config until it expires. Getting a new token stops the old one. A branch with no .intent/<id>.json gets one drafted from your commit messages before it is gated."));
+    h("p", { class: "xsmall muted" }, "The token is part of the clone URL, so git stores it in the clone's .git/config until it expires. Getting a new token stops the old one. After a change lands, the inbox main is updated, so git pull origin main gets the latest. An import takes at most 50 commits, 200 files, 1 MB per file, and 8 MB to download. A branch with no .intent/<id>.json gets one drafted from your commit messages before it is gated."));
   expiryTimer = setInterval(() => {
     if (!expiry.isConnected) { clearInterval(expiryTimer); expiryTimer = null; return; }
     expiry.textContent = expiryText(minted.expiresAt);
