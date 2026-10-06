@@ -319,7 +319,7 @@ export class UpgradeWorkflow extends WorkflowEntrypoint<Env, UpgradeParams> {
 			await pushBranch(ws, remote, branch, { force: true });
 			const summary = replaySummary(p.tag, "replay", plan.results);
 			await log.update({ replay: asJson(summary), branch, commit: built.commit, fromTag });
-			await log.step(name, "done", `${wishesCarriedText(summary)} on ${branch}. ${plan.results.map((r) => `${r.intentId}: ${r.reason}`).join("; ")}`);
+			await log.step(name, "done", `${wishesCarriedText(summary)} on ${branch}. ${plan.results.map((r) => `${r.intentId}: ${r.reason}${r.stockAlsoChanged?.length ? ` (stock ${p.tag} also changed ${r.stockAlsoChanged.join(", ")}; replay needed no merge there)` : ""}`).join("; ")}`);
 			return { used: true, branch, commit: built.commit, autoUpgrade: preferencesOf(parseToml(mainFiles["fluid.toml"] ?? "")).auto_upgrade, summary };
 		} catch (error) {
 			if (opened) await log.step(name, "info", `Replay could not run (${errorText(error)}); upgrading by merge`);

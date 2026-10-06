@@ -45,6 +45,8 @@ export interface WishResult {
 	request: string;
 	/** Paths this wish changed on the new base. */
 	changed: string[];
+	/** Of those, the ones stock also changed between the two tags (fluid.toml aside): where a merge would have had to resolve text. Set by planReplay. */
+	stockAlsoChanged?: string[];
 }
 
 /** The files one replayed wish wrote, for its own commit. */
@@ -266,7 +268,9 @@ export function planReplay(input: {
 	const wishes = input.intents.filter(isWish);
 	if (wishes.length === 0) return { mode: "merge", reason: "no wishes to carry; a plain merge of stock is enough", results: [] };
 	const base = replayBase(input.stockAtTag, input.mainFiles, input.tag);
-	const atTag = replayIntents(base, input.intents);
+	const replayed = replayIntents(base, input.intents);
+	const stockChanged = (path: string) => path !== "fluid.toml" && input.stockAtFrom[path] !== input.stockAtTag[path];
+	const atTag = { ...replayed, results: replayed.results.map((r) => ({ ...r, stockAlsoChanged: r.changed.filter(stockChanged) })) };
 	const fallback = atTag.results.filter((r) => r.status === "fallback");
 	if (fallback.length) {
 		return { mode: "merge", reason: `${wishes.length - fallback.length} of ${wishes.length} wishes can be replayed; ${fallback.map((r) => r.intentId).join(", ")} cannot, so this fork upgrades by merge`, results: atTag.results };
@@ -290,7 +294,7 @@ export interface ReplaySummary {
 	carried: number;
 	total: number;
 	reason?: string;
-	wishes: { intentId: string; status: WishStatus; kind: ReplayKind | null; request: string; reason: string }[];
+	wishes: { intentId: string; status: WishStatus; kind: ReplayKind | null; request: string; reason: string; stockAlsoChanged: string[] }[];
 }
 
 /** "3 of 3 wishes carried to v1.11.0" (replay), or why the upgrade merged instead. */
@@ -307,6 +311,6 @@ export function replaySummary(tag: string, path: "replay" | "merge", results: Wi
 		carried: path === "replay" ? results.filter((r) => r.status === "replayed").length : 0,
 		total: results.length,
 		...(reason ? { reason: reason.slice(0, 500) } : {}),
-		wishes: results.slice(0, 50).map((r) => ({ intentId: r.intentId, status: r.status, kind: r.kind, request: r.request, reason: r.reason.slice(0, 300) })),
+		wishes: results.slice(0, 50).map((r) => ({ intentId: r.intentId, status: r.status, kind: r.kind, request: r.request, reason: r.reason.slice(0, 300), stockAlsoChanged: r.stockAlsoChanged ?? [] })),
 	};
 }

@@ -241,6 +241,13 @@ describe("planReplay", () => {
 		expect(plan.base["app/cards.ts"]).toBe(next["app/cards.ts"]);
 	});
 
+	it("names the files stock also changed under a wish, where a merge would have had to resolve them", () => {
+		const { files: main, intents } = build();
+		const plan = planReplay({ tag: "v1.1.0", fromTag: "v1.0.0", stockAtTag: next, stockAtFrom: stock, mainFiles: main, intents });
+		expect(plan.results.map((r) => r.stockAlsoChanged)).toEqual([["app/cards.ts"], []]);
+		expect(replaySummary("v1.1.0", "replay", plan.results).wishes[0]!.stockAlsoChanged).toEqual(["app/cards.ts"]);
+	});
+
 	it("merges when a wish was written by the model", () => {
 		const { files: main, intents } = forkMain(stock, "v1.0.0", [(f) => seedChange("budget-summary", f, seedCtx)]);
 		const plan = planReplay({ tag: "v1.1.0", fromTag: "v1.0.0", stockAtTag: next, stockAtFrom: stock, mainFiles: main, intents });
