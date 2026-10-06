@@ -1,4 +1,4 @@
-// Platform HTTP API (docs/IMPLEMENTATION_PLAN.md, "Platform HTTP API").
+// Platform HTTP API (route table in docs/API.md).
 // Write routes need the demo session cookie; admin routes need x-fluid-admin.
 import { currentStockTag, getForkInfo, findPersona, fleetStub, ForkNotFoundError, personas, provisionFork, readIntents, type ForkInfo } from "../forks/provision.ts";
 import { serveAsk } from "./ask.ts";
