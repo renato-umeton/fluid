@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { Fleet } from "../src/durable/fleet.ts";
 import { Runs } from "../src/durable/runs.ts";
 import { listWishes, upsertWishNote, WISH_LIMITS, type WishNote } from "../src/contest/wishes.ts";
+import { pickBranches, wishBranchCache } from "../src/contest/read-wishes.ts";
 import { construct } from "./helpers/durable.ts";
 
 const AT = Date.parse("2026-10-06T12:00:00Z");
@@ -58,6 +59,33 @@ describe("listWishes", () => {
 	it("says a branch is open when nothing gated its head yet", () => {
 		const [w] = listWishes({ branches: [{ branch: "work/x", head: "c".repeat(40), records: [] }], notes: [], gates: [{ ref: "work/x", commit: "d".repeat(40), passed: true, at: "t" }] });
 		expect(w!.status).toBe("open");
+	});
+});
+
+describe("pickBranches", () => {
+	it("keeps the newest branches, so old contest losers do not crowd out new work", () => {
+		const list = [
+			{ branch: "work/contest-aaaaaaaaaaaa-model-b", head: "a", at: 100 },
+			{ branch: "work/raise-tau", head: "b", at: 300 },
+			{ branch: "work/inbox/mine", head: "c", at: 200 },
+			{ branch: "work/zzz", head: "d", at: null },
+		];
+		const out = pickBranches(list, 2);
+		expect(out.kept.map((b) => b.branch)).toEqual(["work/raise-tau", "work/inbox/mine"]);
+		expect(out.leftOut).toBe(2);
+	});
+});
+
+describe("wish branch cache", () => {
+	it("reads a fork once within the cache window", async () => {
+		let reads = 0;
+		const read = async () => (reads++, { main: "m", branches: [], scanned: 0, leftOut: 0 });
+		const cache = wishBranchCache(5000);
+		await cache.get("user-a", read, 1000);
+		await cache.get("user-a", read, 4000);
+		await cache.get("user-b", read, 4000);
+		await cache.get("user-a", read, 7000);
+		expect(reads).toBe(3);
 	});
 });
 

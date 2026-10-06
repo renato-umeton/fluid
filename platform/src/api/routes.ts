@@ -53,6 +53,7 @@ export const LIMITS = {
 	readsPerClientPerMinute: 60,
 	ledgerCommitsPerUserPerHour: 6,
 	customizationsPerUserPerHour: 10,
+	wishReadsGlobalPerMinute: 300,
 	outsideTokensPerUserPerHour: 3,
 	outsideTokensPerClientPerHour: 6,
 	outsideTokensGlobalPerHour: 60,
@@ -271,14 +272,18 @@ route("GET", "/api/forks/:repo/health", async (rc, { repo }) => {
 	return json({ repo: name, health: entry.health, baseline: entry.baseline, history: await fleet.healthHistory(name, 30) });
 });
 
-// Wishes in flight: every work/* branch with the intent record it adds and its status, plus runs that
-// have not pushed yet. Any agent or the UI can read it before starting, to see what else is in progress.
+// Wishes in flight: every work/* branch with the intent record it adds and its status. Branches and their
+// records are public, like /api/intents; the notes of runs that have not pushed yet (their request text)
+// go only to the fork's owner and the admin. The branch read is cached per fork for a few seconds.
 route("GET", "/api/forks/:repo/wishes", async (rc, { repo }) => {
 	const name = repoParam(repo!);
 	if (name === STOCK_REPO) throw new HttpError(404, "stock has no wishes in flight");
 	await takeReadQuota(rc);
+	await takeQuota(rc.env, "global", "wishes", LIMITS.wishReadsGlobalPerMinute, 60);
 	await requirePublicRepo(rc.env, name);
-	return json(await readWishes(rc.env, name));
+	const session = await sessionOf(rc);
+	const owner = isAdmin(rc) || (session !== null && !session.e2e && forkRepoName(session.userId) === name);
+	return json(await readWishes(rc.env, name, { includeNotes: owner }));
 });
 
 // Fork-owned UI preferences (ui/preferences.json on main), validated against the platform schema.

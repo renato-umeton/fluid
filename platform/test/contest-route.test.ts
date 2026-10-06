@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import worker from "../src/index.ts";
 import { contestLockKey } from "../src/contest/plan.ts";
+import { WISH_BRANCHES } from "../src/contest/read-wishes.ts";
 import { runsStub } from "../src/stubs.ts";
 import { apiEnv, cookieFor, post, workerContext } from "./helpers/api-env.ts";
 
@@ -72,6 +73,30 @@ describe("POST /api/contests", () => {
 		expect(refused.status).toBe(429);
 		expect(((await refused.json()) as { error: string }).error).toMatch(/counts as 2 customizations/);
 		expect(t.fleet.tryLock(contestLockKey(FORK), 1000, "next")).toBe(true);
+	});
+});
+
+describe("GET /api/forks/:repo/wishes", () => {
+	const get = (cookie?: string) => new Request(`https://fluid.test/api/forks/${FORK}/wishes`, { headers: { "cf-connecting-ip": "203.0.113.9", ...(cookie ? { cookie } : {}) } });
+
+	function primed() {
+		const t = setup();
+		WISH_BRANCHES.prime(FORK, { main: "m".repeat(40), branches: [{ branch: "work/raise-tau-1a2b", head: "a".repeat(40), records: [] }], leftOut: 0, scanned: 1 });
+		t.fleet.noteWish(FORK, { id: "run_customize_x", runId: "run_customize_x", kind: "customize", branch: "work/secret-plan-9f9f", intentId: "int_x", request: "Something private I am still deciding", status: "planned; waiting for your test decisions", at: new Date().toISOString() });
+		return t;
+	}
+
+	it("shows branches to anyone, but the notes of runs not pushed yet only to the owner", async () => {
+		const t = primed();
+		const anon = (await (await worker.fetch(get(), t.env, t.ctx)).json()) as { wishes: { branch: string; request: string | null }[]; notesIncluded: boolean };
+		expect(anon.notesIncluded).toBe(false);
+		expect(anon.wishes.map((w) => w.branch)).toEqual(["work/raise-tau-1a2b"]);
+		expect(JSON.stringify(anon)).not.toContain("Something private");
+		const own = (await (await worker.fetch(get(await cookieFor({ userId: USER })), t.env, t.ctx)).json()) as { wishes: { branch: string; request: string | null }[]; notesIncluded: boolean };
+		expect(own.notesIncluded).toBe(true);
+		expect(own.wishes.map((w) => w.request)).toContain("Something private I am still deciding");
+		const other = (await (await worker.fetch(get(await cookieFor({ userId: "s-other" })), t.env, t.ctx)).json()) as { notesIncluded: boolean };
+		expect(other.notesIncluded).toBe(false);
 	});
 });
 
