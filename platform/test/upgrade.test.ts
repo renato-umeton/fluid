@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { GIT_STEP } from "../src/workflows/common.ts";
-import { attemptReplay, replayEnabled, replayFirst, upgradeInstanceId, upgradeTargets } from "../src/workflows/upgrade.ts";
+import { GATE_STEP, GIT_STEP } from "../src/workflows/common.ts";
+import { attemptReplay, FAN_OUT, replayEnabled, replayFirst, upgradeInstanceId, upgradeTargets } from "../src/workflows/upgrade.ts";
 
 const fork = (repo: string, extra: Record<string, unknown> = {}) => ({ repo, status: "pinned", pinnedTag: "v1.1.0", lastRun: null, pendingUpgrade: null, ...extra });
 
@@ -85,6 +85,30 @@ describe("upgradeTargets", () => {
 			fork("user-prov", { status: "provisioning" }),
 		]);
 		expect(targets).toEqual(["user-new", "user-older-repair"]);
+	});
+});
+
+// The v1.12.0 rehearsal saw Artifacts return 500s for about 30 seconds while
+// 211 upgrades started. Every git or gate step in the upgrade must keep
+// retrying well past such a burst before it gives up.
+describe("retry budgets for the upgrade fan-out", () => {
+	function totalWaitSeconds(config: { retries: { limit: number; delay: string; backoff: string } }): number {
+		const delay = Number(/^(\d+) seconds?$/.exec(config.retries.delay)![1]);
+		let total = 0;
+		for (let attempt = 0; attempt < config.retries.limit; attempt++) total += config.retries.backoff === "exponential" ? delay * 2 ** attempt : delay;
+		return total;
+	}
+
+	it("gives git steps more than a minute of retries", () => {
+		expect(totalWaitSeconds(GIT_STEP)).toBeGreaterThan(60);
+	});
+
+	it("gives gate steps more than a minute of retries", () => {
+		expect(totalWaitSeconds(GATE_STEP)).toBeGreaterThan(60);
+	});
+
+	it("pauses at least two seconds between batches of new upgrades", () => {
+		expect(Number(/^(\d+) seconds?$/.exec(FAN_OUT.pause)![1])).toBeGreaterThanOrEqual(2);
 	});
 });
 

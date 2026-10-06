@@ -32,7 +32,7 @@ import { logTiers, persistGate, repairRunId } from "./gate.ts";
 import { appExports, asJson, ensureRun, errorText, GATE_STEP, GIT_STEP, mainBeforePush, recordMainBeforePush, repoRemote, runLog, setFleet, startInstance, startOrRetryInstance, startYellowRun, guarded, steps, type ReleaseParams, type Steps, type UpgradeParams } from "./common.ts";
 
 /** Upgrades created per batch, and the pause between batches. */
-export const FAN_OUT = { batchSize: 20, pause: "1 second" };
+export const FAN_OUT = { batchSize: 20, pause: "2 seconds" };
 export const MERGE_MODEL_LIMIT = { maxFiles: 3, maxChars: 40_000, perMinute: 30 };
 
 /**
