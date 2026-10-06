@@ -46,7 +46,10 @@ export function explainStartFailure(error) {
   return { ...out, mockNote: MOCK_NOTE };
 }
 
-/** The same page in mock mode, keeping the current view (the hash). */
+/**
+ * The app in mock mode, keeping the current view (the hash). Always the site
+ * root: a path such as "//evil.example/" would make a link to another site.
+ */
 export function mockDemoHref(loc) {
-  return `${loc.pathname || "/"}?mock=1${loc.hash || ""}`;
+  return `/?mock=1${loc.hash || ""}`;
 }

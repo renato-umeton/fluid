@@ -74,4 +74,9 @@ describe("mockDemoHref", () => {
 	it("defaults the path to the root", () => {
 		expect(mockDemoHref({ pathname: "", search: "", hash: "#fork" })).toBe("/?mock=1#fork");
 	});
+
+	it("never builds a link to another site from the path", () => {
+		expect(mockDemoHref({ pathname: "//evil.example/", search: "", hash: "#fork" })).toBe("/?mock=1#fork");
+		expect(mockDemoHref({ pathname: "/some/page", search: "", hash: "" })).toBe("/?mock=1");
+	});
 });
