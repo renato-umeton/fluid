@@ -45,7 +45,7 @@ export function toHttpError(error: unknown): unknown {
 	if (error instanceof RefNotFoundError || error instanceof RepoNotFoundError) return new HttpError(404, "not found");
 	if (error instanceof ForkNotFoundError) return new HttpError(404, "fork not found");
 	if (error instanceof InvalidRefError) return new HttpError(400, "invalid ref: use a branch or tag name");
-	if (error instanceof ProvisioningBusyError) return new HttpError(409, "this fork is already being provisioned; try again shortly");
-	if (error instanceof FleetFullError) return new HttpError(429, "the demo fleet is full; try again later");
+	if (error instanceof ProvisioningBusyError) return new HttpError(409, "this fork is already being provisioned; try again shortly", { reason: "busy" });
+	if (error instanceof FleetFullError) return new HttpError(429, "the demo fleet is full; try again later", { reason: "fleet-full" });
 	return error;
 }

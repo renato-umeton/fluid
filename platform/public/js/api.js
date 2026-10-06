@@ -48,7 +48,8 @@ async function call(method, path, body, { admin = false } = {}) {
   try { data = text ? JSON.parse(text) : null; } catch { data = { error: text }; }
   if (!res.ok) {
     const message = data?.error || data?.message || res.statusText;
-    throw new Error(`${method} ${path} failed (${res.status}): ${message}`);
+    // status and body let the UI explain a refusal (public/js/start-failure.js).
+    throw Object.assign(new Error(`${method} ${path} failed (${res.status}): ${message}`), { status: res.status, body: data });
   }
   return data;
 }

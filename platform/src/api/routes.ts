@@ -140,8 +140,16 @@ function requireAdmin(rc: RouteContext): void {
 async function takeQuota(env: Env, subject: string, bucket: string, limit: number, windowSeconds: number): Promise<void> {
 	const decision = await quotaStub(env, subject).take(bucket, limit, windowSeconds);
 	if (!decision.allowed) {
-		throw new HttpError(429, `rate limit for ${bucket} reached; retry in ${decision.retryAfterSeconds}s`, { retryAfterSeconds: decision.retryAfterSeconds }, { "retry-after": String(decision.retryAfterSeconds) });
+		const extra = { reason: "rate-limit", bucket, scope: quotaScope(subject), limit, windowSeconds, retryAfterSeconds: decision.retryAfterSeconds };
+		throw new HttpError(429, `rate limit for ${bucket} reached; retry in ${decision.retryAfterSeconds}s`, extra, { "retry-after": String(decision.retryAfterSeconds) });
 	}
+}
+
+/** Whose quota ran out, so the UI can say why: this client, this user, or the whole platform. */
+function quotaScope(subject: string): "client" | "user" | "global" {
+	if (subject.startsWith("client:")) return "client";
+	if (subject.startsWith("user:")) return "user";
+	return "global";
 }
 
 function clientId(rc: RouteContext): string {

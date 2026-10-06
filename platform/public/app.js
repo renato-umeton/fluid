@@ -11,6 +11,7 @@ import * as about from "./js/views/about.js";
 import * as tab from "./js/views/tab.js";
 import { applyUiPreferences, describePreferences } from "./js/ui-prefs.js";
 import { healthBadge } from "./js/health.js";
+import { explainStartFailure, mockDemoHref } from "./js/start-failure.js";
 
 const VIEWS = { workspace, fork: forkView, customize, contest, fleet, harvest, about, tab };
 const STOCK_MIN_TAU = 0.85;
@@ -26,6 +27,8 @@ const app = {
   /** The active fork's validated UI preferences (font, density, accent, extra tabs). */
   ui: {},
   view: null,
+  /** Set when the live platform refused a session or fork: every view shows why, with a link to mock mode. */
+  blocked: null,
   get mock() { return apiState.mock; },
   stockMinTau: STOCK_MIN_TAU,
   effectiveTau() {
@@ -60,9 +63,7 @@ async function boot() {
     if (!first) throw new Error("GET /api/personas returned no personas");
     await switchPersona(first.id);
   } catch (err) {
-    console.error(err);
-    mount(document.getElementById("view-workspace"), h("div", { class: "card-error", role: "alert" }, `Fluid could not start: ${err.message}. Reload, or add ?mock=1 to the address to run without the platform.`));
-    return;
+    blockStart(err);
   }
   document.getElementById("nav-list").addEventListener("click", (e) => {
     const btn = e.target.closest("[data-view]");
@@ -78,7 +79,7 @@ async function boot() {
 
 function renderPersonas() {
   mount(document.getElementById("persona-list"), app.personas.map((p) => h("li", {},
-    h("button", { type: "button", class: "persona-btn", "aria-pressed": "false", dataset: { persona: p.id }, onclick: () => switchPersona(p.id) },
+    h("button", { type: "button", class: "persona-btn", "aria-pressed": "false", dataset: { persona: p.id }, onclick: () => switchPersona(p.id).catch((err) => { blockStart(err); route(); }) },
       h("span", { class: "avatar", dataset: { p: p.id }, "aria-hidden": "true" }, initials(p.displayName)),
       h("span", { class: "persona-text" },
         h("span", { class: "persona-name" }, p.displayName.replace(/\s*\(fictional\)/, "")),
@@ -97,9 +98,36 @@ async function switchPersona(id) {
   const me = await api.me();
   app.fork = me.fork ?? (await api.createFork());
   document.querySelectorAll(".persona-btn").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.persona === id)));
+  app.blocked = null;
   renderForkPill();
   await loadUi();
   if (app.view) route();
+}
+
+/**
+ * The live platform refused a session or a fork (fork cap, hourly limits, or
+ * any provisioning error). Instead of an empty screen, every view says why and
+ * offers the same demo in mock mode, keeping the current view. There is no
+ * automatic switch to mock mode, so nobody mistakes mock data for the live platform.
+ */
+function blockStart(err) {
+  console.error(err);
+  app.blocked = explainStartFailure(err);
+  if (app.view) VIEWS[app.view].leave?.();
+  clearTimeout(healthTimer);
+  document.getElementById("fork-pill").replaceChildren();
+}
+
+function renderBlocked(el) {
+  const b = app.blocked;
+  const mockLink = h("a", { class: "btn btn-primary", href: mockDemoHref(location) }, "Explore the full demo in mock mode");
+  mount(el, h("div", { class: "start-refusal", role: "alert" },
+    h("h2", {}, b.title),
+    h("p", {}, b.message),
+    apiState.mock ? null : h("p", {}, b.mockNote),
+    h("div", { class: "start-refusal-actions" },
+      apiState.mock ? null : mockLink,
+      b.retry || apiState.mock ? h("button", { type: "button", class: "btn", onclick: () => location.reload() }, "Try again") : null)));
 }
 
 /**
@@ -183,6 +211,13 @@ function route() {
   for (const k of Object.keys(VIEWS)) document.getElementById(`view-${k}`).hidden = k !== key;
   markCurrent();
   const view = VIEWS[key];
+  if (app.blocked) {
+    document.getElementById("view-title").textContent = "Fluid could not start on the live platform";
+    document.getElementById("view-sub").textContent = "";
+    document.title = "Fluid";
+    renderBlocked(document.getElementById(`view-${key}`));
+    return;
+  }
   const title = typeof view.title === "function" ? view.title(app, params) : view.title;
   document.getElementById("view-title").textContent = title;
   document.getElementById("view-sub").textContent = typeof view.sub === "function" ? view.sub(app) : view.sub;
