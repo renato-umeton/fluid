@@ -24,7 +24,7 @@ import { AGENT_MODEL, callModel } from "../runtime/llm.ts";
 import { askCard, FORK_CALL_TIMEOUT_MS, loadForkRuntime, withTimeout } from "../runtime/loader.ts";
 import { isRuntimePath, transformTs } from "../runtime/modules.ts";
 import { headOf, openRepo, readCommitFiles } from "../runtime/repo-files.ts";
-import { runsStub } from "../stubs.ts";
+import { fleetStub, runsStub } from "../stubs.ts";
 import { parseUiPreferences, UI_PREFERENCES_PATH, uiPreferencesJson } from "../ui/preferences.ts";
 import { appExports, ensureRun, errorText, GIT_STEP, linkGateParent, repoRemote, runLog, startGateInstance, guarded, steps, type CustomizeParams, type Steps } from "./common.ts";
 
@@ -162,6 +162,7 @@ export class CustomizeWorkflow extends WorkflowEntrypoint<Env, CustomizeParams> 
 			const diff = diffEntries({ ...before, [intentPath(intentId)]: null }, { ...change.files, [intentPath(intentId)]: intentJson(intent) }, { ...change.notes, [intentPath(intentId)]: "Why this change exists; the commit carries Intent-Id" });
 			const branch = `work/${slugify(request)}-${fnv1a(p.runId).slice(0, 4)}`;
 			await log.update({ intent, diff, branch });
+			await noteWish(this.env, p, { branch, intentId, status: "planned; waiting for your test decisions" });
 			await log.step("Record build-time intent", "done", intentPath(intentId));
 			return { intentId, intent, branch };
 		});
@@ -269,6 +270,7 @@ export class CustomizeWorkflow extends WorkflowEntrypoint<Env, CustomizeParams> 
 		if (pushed.error || !pushed.commit) {
 			await step.do("finish without a push", async () => {
 				await log.status("failed", { error: pushed.error ?? "nothing was pushed" });
+				await noteWish(this.env, p, { branch: recorded.branch, intentId: recorded.intentId, status: "not pushed", final: true });
 				return true;
 			});
 			return { passed: false, branch: recorded.branch, commit: null };
@@ -278,6 +280,7 @@ export class CustomizeWorkflow extends WorkflowEntrypoint<Env, CustomizeParams> 
 		const gate = await step.do("start the gate", async () => {
 			const started = await startGateInstance(exports.GateWorkflow, gateInstanceId(p.repo, recorded.branch, commit), { repo: p.repo, branch: recorded.branch, commit, mode: "merge", source: "customize", parentRunId: p.runId });
 			await log.step("Gate", "running", `${started.runId}${started.created ? "" : " (already started by the push event)"}`);
+			await noteWish(this.env, p, { branch: recorded.branch, intentId: recorded.intentId, status: "gating" });
 			return { runId: started.runId };
 		});
 
@@ -296,6 +299,7 @@ export class CustomizeWorkflow extends WorkflowEntrypoint<Env, CustomizeParams> 
 			if (final.passed) await log.step("Merge to main", gateRun?.mergedCommit ? "done" : "failed", gateRun?.mergedCommit ? `main is now ${String(gateRun.mergedCommit).slice(0, 7)}` : "The gate passed but main could not be fast-forwarded");
 			else await log.step("Merge blocked", "failed", `${recorded.branch} stays unmerged; main is untouched`);
 			await log.status(passed ? "passed" : "failed", { gate: (gateRun?.gate ?? null) as never, gateRunId: final.runId });
+			await noteWish(this.env, p, { branch: recorded.branch, intentId: recorded.intentId, status: passed ? "merged to main" : "not merged", final: true });
 			return true;
 		});
 		return { passed: final.passed, branch: recorded.branch, commit };
@@ -356,6 +360,15 @@ export class CustomizeWorkflow extends WorkflowEntrypoint<Env, CustomizeParams> 
 			notes: Object.fromEntries(list.map((f) => [f.path, files[f.path] === undefined ? "New file written by the customization agent" : "Edited by the customization agent"])),
 			recipe: "model",
 		};
+	}
+}
+
+/** Records this run's wish in flight (contest/wishes.ts). Best effort: a note never fails the run. */
+async function noteWish(env: Env, p: CustomizeParams, patch: { branch: string; intentId: string; status: string; final?: boolean }): Promise<void> {
+	try {
+		await fleetStub(env).noteWish(p.repo, { id: p.runId, runId: p.runId, kind: "customize", request: cleanText(p.request, 500), at: new Date().toISOString(), ...patch });
+	} catch (error) {
+		console.warn(`wish note for ${p.runId} failed: ${errorText(error)}`);
 	}
 }
 

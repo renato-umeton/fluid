@@ -36,6 +36,7 @@ import { appExports, ensureRun, repoRemote, startGateInstance, startYellowRun } 
 import { rerunTargets, upgradeTargets } from "../workflows/upgrade.ts";
 import { decodeParam, HttpError, json, readJson, requireJsonPost, requireString } from "./http.ts";
 import { askRef, parsePreferences } from "./validate.ts";
+import { readWishes } from "../contest/read-wishes.ts";
 
 export const LIMITS = {
 	sessionsPerClientPerHour: 20,
@@ -265,6 +266,16 @@ route("GET", "/api/forks/:repo/health", async (rc, { repo }) => {
 	const entry = await fleet.get(name);
 	if (!entry) throw new HttpError(404, "fork not found");
 	return json({ repo: name, health: entry.health, baseline: entry.baseline, history: await fleet.healthHistory(name, 30) });
+});
+
+// Wishes in flight: every work/* branch with the intent record it adds and its status, plus runs that
+// have not pushed yet. Any agent or the UI can read it before starting, to see what else is in progress.
+route("GET", "/api/forks/:repo/wishes", async (rc, { repo }) => {
+	const name = repoParam(repo!);
+	if (name === STOCK_REPO) throw new HttpError(404, "stock has no wishes in flight");
+	await takeReadQuota(rc);
+	await requirePublicRepo(rc.env, name);
+	return json(await readWishes(rc.env, name));
 });
 
 // Fork-owned UI preferences (ui/preferences.json on main), validated against the platform schema.

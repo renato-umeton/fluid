@@ -27,6 +27,8 @@ describe("filterPushEvent", () => {
 		["a replay branch", push({ ref: "refs/heads/replay/v1.2.0" }), /Upgrade workflow/],
 		["a deleted branch", push({ after: "0".repeat(40) }), /deleted/],
 		["a repair branch (the repair workflow gates it; applying it is explicit)", push({ ref: "refs/heads/repair/51e4fce" }), /repair workflow/],
+		["a contest branch (the contest gates it)", push({ ref: "refs/heads/work/contest-1a2b3c4d5e6f-model-a" }), /contest/],
+		["a contest import from the inbox (the contest gates it)", push({ ref: "refs/heads/work/inbox/contest-1a2b3c4d5e6f/mine" }), /contest/],
 		["another event type", push({ type: "cf.artifacts.repo.created" }), /event type/],
 		["garbage", null, /not an object/],
 	])("ignores %s", (_label, body, reason) => {
@@ -38,6 +40,14 @@ describe("filterPushEvent", () => {
 	it("keeps repair branches in check mode when gated directly", () => {
 		expect(gateModeFor("repair/51e4fce")).toBe("check");
 		expect(gateModeFor("work/x")).toBe("merge");
+	});
+});
+
+describe("contest branches in an inbox", () => {
+	it("still imports work/contest-<id>/<name> from the inbox", () => {
+		const result = filterPushEvent(push({ repoName: "inbox-user-s-1a2b", ref: "refs/heads/work/contest-1a2b3c4d5e6f/mine" }));
+		expect(result.gate).toBe(false);
+		if (!result.gate) expect(result.import).toEqual({ inbox: "inbox-user-s-1a2b", fork: "user-s-1a2b", branch: "work/contest-1a2b3c4d5e6f/mine", commit: SHA });
 	});
 });
 

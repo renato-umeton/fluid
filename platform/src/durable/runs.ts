@@ -4,7 +4,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Json } from "../lib/json.ts";
 
-export type RunKind = "customize" | "gate" | "upgrade" | "repair" | "harvest" | "onboarding" | "release" | "seed" | "yellow" | "import";
+export type RunKind = "customize" | "gate" | "upgrade" | "repair" | "harvest" | "onboarding" | "release" | "seed" | "yellow" | "import" | "contest";
 /** Final statuses are passed, failed, and cancelled (the UI polls until it sees one). A yellow run is cancelled when a newer change supersedes it. */
 export type RunStatus = "queued" | "running" | "waiting" | "passed" | "failed" | "cancelled";
 export type StepStatus = "pending" | "running" | "waiting" | "done" | "failed" | "info";
@@ -97,6 +97,22 @@ export class Runs extends DurableObject<Env> {
 		if (decision === "edit" && edited !== undefined) target.edited = edited;
 		const updated = this.touch({ suggestions });
 		return { run: updated, allDecided: suggestions.every((s) => Boolean(s.decision)) };
+	}
+
+	/**
+	 * Merges a patch into the entry of list `listKey` whose `matchKey` equals
+	 * `matchValue`, or appends it. One call at a time, so concurrent writers
+	 * (the contestants of one contest) never overwrite each other's entries.
+	 */
+	updateEntry(listKey: string, matchKey: string, matchValue: string, patch: Record<string, Json>): Run {
+		const run = this.read();
+		if (!run) throw new Error("updateEntry: run does not exist");
+		if (RESERVED.has(listKey)) throw new Error(`updateEntry: ${listKey} cannot be changed`);
+		const list = Array.isArray(run[listKey]) ? [...(run[listKey] as Record<string, Json>[])] : [];
+		const index = list.findIndex((entry) => entry?.[matchKey] === matchValue);
+		if (index >= 0) list[index] = { ...list[index], ...patch };
+		else list.push({ [matchKey]: matchValue, ...patch });
+		return this.touch({ [listKey]: list });
 	}
 
 	/** Merges fields into the run (status, branch, commit, suggestions, gate, ...). */

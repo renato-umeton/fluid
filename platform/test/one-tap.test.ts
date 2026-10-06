@@ -38,5 +38,8 @@ describe("directGateRefusal", () => {
 		expect(directGateRefusal("upgrade/v1.2.0")).toMatch(/own workflows/);
 		expect(directGateRefusal("replay/v1.2.0")).toMatch(/own workflows/);
 		expect(directGateRefusal("work/redcap")).toBeNull();
+		expect(directGateRefusal("work/contest-1a2b3c4d5e6f-model-a")).toMatch(/contest/);
+		expect(directGateRefusal("work/inbox/contest-1a2b3c4d5e6f/mine")).toMatch(/contest/);
+		expect(directGateRefusal("work/inbox/my-change")).toBeNull();
 	});
 });

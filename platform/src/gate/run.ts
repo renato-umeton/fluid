@@ -13,6 +13,8 @@ import { fleetStub } from "../stubs.ts";
 import { checkPin, isForkCaused } from "./pins.ts";
 import { mergeUserResults, runUiConfigProbes, splitUserManifest, uiInvariant } from "./ui-check.ts";
 import { UI_PREFERENCES_PATH } from "../ui/preferences.ts";
+import type { Observation } from "../contest/behavior.ts";
+import { buildObservations, cardRecorder, type ManifestProbeLike } from "../contest/observe.ts";
 import {
 	capFailures,
 	emptyUserTier,
@@ -62,12 +64,35 @@ export function gateVariant(): string {
  * repair opens for an infrastructure problem.
  */
 export async function runGate(deps: RuntimeDeps, input: GateInput): Promise<GateResult> {
+	return (await gateCore(deps, input, null)).gate;
+}
+
+/** What a contest asks of a gate run besides the verdict. */
+export interface ObserveOptions {
+	/** Wish tests to run too, as tier 3 probes that never count toward the verdict (the fork's own copies are left out by the caller). */
+	extraProbes: ManifestProbeLike[];
+	/** Content key of each wish test (contest/observe.ts, wishTestSet). */
+	wishKeys: Map<string, string>;
+}
+
+/**
+ * A gate run that also records the card the fork answered for every probe,
+ * in the platform's ask callback, and runs the contest's wish tests on the
+ * side. The runner and its isolate are the same as for any gate; the verdict
+ * is the same as runGate's.
+ */
+export async function runGateObserved(deps: RuntimeDeps, input: GateInput, observe: ObserveOptions): Promise<{ gate: GateResult; observations: Observation[] }> {
+	const out = await gateCore(deps, input, observe);
+	return { gate: out.gate, observations: out.observations ?? [] };
+}
+
+async function gateCore(deps: RuntimeDeps, input: GateInput, observe: ObserveOptions | null): Promise<{ gate: GateResult; observations?: Observation[] }> {
 	const started = Date.now();
 	const ref = shortRef(input.ref);
 	let commit = input.commit ?? ref;
 	const tiers: Record<TierName, TierSummary | null> = { invariant: null, functional: null, user: null };
 	const failures: GateFailure[] = [];
-	const finish = (stockTag: string | null, stockCommit: string | null, error?: string): GateResult => {
+	const finish = (stockTag: string | null, stockCommit: string | null, error?: string): { gate: GateResult } => {
 		const result: GateResult = {
 			repo: input.repo,
 			ref,
@@ -81,7 +106,7 @@ export async function runGate(deps: RuntimeDeps, input: GateInput): Promise<Gate
 			durationMs: Date.now() - started,
 		};
 		if (error) result.error = error;
-		return result;
+		return { gate: result };
 	};
 	const record = (tier: TierName, part: { summary: TierSummary; failures: GateFailure[] }) => {
 		tiers[tier] = part.summary;
@@ -129,9 +154,15 @@ export async function runGate(deps: RuntimeDeps, input: GateInput): Promise<Gate
 	const pin = input.mode === "merge" ? checkPin({ pinned, mainPin: pinnedTagOf(mainToml), releases: await fleetStub(deps.env).releases() }) : null;
 
 	let ask: (request: unknown) => Promise<unknown>;
+	let cards: Map<string, unknown> | null = null;
 	try {
 		const loaded = await loadForkRuntime(deps, input.repo, commit, { variant: gateVariant() });
 		ask = (request) => withTimeout(askCard(loaded.fork, request, { useModel: false }), FORK_CALL_TIMEOUT_MS, "fork did not answer");
+		if (observe) {
+			const recorder = cardRecorder(ask);
+			ask = recorder.ask;
+			cards = recorder.cards;
+		}
 	} catch (error) {
 		if (!isForkCaused(error)) throw error;
 		record("invariant", erroredTier("invariant", "fork-runtime-loads", "load", "the fork runtime builds and loads", message(error)));
@@ -147,12 +178,15 @@ export async function runGate(deps: RuntimeDeps, input: GateInput): Promise<Gate
 	const split = splitUserManifest(user.manifest);
 	// The stock suites and a validated tier 3 manifest only reject for infrastructure reasons: allSettled lets
 	// every tier finish, then a rejection is thrown for the step to retry.
-	const [invariant, functional, userResult] = await Promise.allSettled([
+	// Contest wish tests run on the side, as tier 3 probes whose results never enter the verdict.
+	const extra = observe?.extraProbes.length ? splitUserManifest({ tier: "user" as const, probes: observe.extraProbes as Record<string, unknown>[] }) : null;
+	const [invariant, functional, userResult, extraResult] = await Promise.allSettled([
 		run(suite.manifests.invariant),
 		run(suite.manifests.functional),
 		split.runner ? run(split.runner, "user") : Promise.resolve(null),
+		extra?.runner ? run(extra.runner, "user") : Promise.resolve(null),
 	]);
-	for (const settled of [invariant, functional, userResult]) if (settled.status === "rejected") throw settled.reason;
+	for (const settled of [invariant, functional, userResult, extraResult]) if (settled.status === "rejected") throw settled.reason;
 	record("invariant", summarizeTier("invariant", (invariant as PromiseFulfilledResult<RunnerManifestResult>).value));
 	record("functional", summarizeTier("functional", (functional as PromiseFulfilledResult<RunnerManifestResult>).value));
 	const userValue = mergeUserResults((userResult as PromiseFulfilledResult<RunnerManifestResult | null>).value, runUiConfigProbes(split.platform, uiText, user.manifest?.samples));
@@ -168,7 +202,21 @@ export async function runGate(deps: RuntimeDeps, input: GateInput): Promise<Gate
 	if (pin && !pin.ok) addPinFailure(tiers, failures, pin.reason, pinned, pin.floor);
 	if (input.intentViolations?.length) addAppendOnlyFailure(tiers, failures, input.intentViolations);
 	if (input.platformClaims?.length) addPlatformClaimFailure(tiers, failures, input.platformClaims);
-	return finish(pinned, suite.sha);
+	const done = finish(pinned, suite.sha);
+	if (!observe || !cards) return done;
+	const value = <T>(settled: PromiseSettledResult<T>) => (settled as PromiseFulfilledResult<T>).value;
+	const manifestProbes = (m: unknown) => ((m as { probes?: ManifestProbeLike[] } | null)?.probes ?? []) as ManifestProbeLike[];
+	const observations = buildObservations(
+		[
+			{ tier: "invariant", probes: manifestProbes(suite.manifests.invariant), result: value(invariant) },
+			{ tier: "functional", probes: manifestProbes(suite.manifests.functional), result: value(functional) },
+			{ tier: "user", probes: user.error ? [] : manifestProbes(user.manifest), result: userValue },
+			{ tier: "user", probes: extra ? [...manifestProbes(extra.runner), ...(extra.platform as unknown as ManifestProbeLike[])] : [], result: mergeUserResults(value(extraResult), extra ? runUiConfigProbes(extra.platform, uiText) : []) },
+		],
+		cards,
+		observe.wishKeys,
+	);
+	return { ...done, observations };
 }
 
 /**

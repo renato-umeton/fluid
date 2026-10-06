@@ -12,7 +12,7 @@ Best-of-N agents compete to grant one wish. A behavior diff replaces the pull re
 **Goal**: `runGate` can record the fork's card for every probe in the host ask callback (runner and stock unchanged), and run extra probes that do not count toward the verdict. Contest branches are never gated by push events or the direct trigger. Customize and contest runs note their wishes; `GET /api/forks/:repo/wishes` lists them with the work branches and their intent records.
 **Success Criteria**: Observations map each probe to its card and result; the consumer and direct trigger ignore `work/contest-*` and `work/inbox/contest-*`; wish notes are atomic and capped.
 **Tests**: `test/contest-observe.test.ts`, `test/events.test.ts` additions, `test/contest-wishes.test.ts`.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Contest workflow and routes
 **Goal**: `ContestWorkflow` runs N contestants at once (recipe, model plans with different prompts and temperatures, and optionally the user's own agent through the inbox), checks each one, gates each in check mode with capture, diffs against main, picks a winner, waits for the user's pick, and ships the pick through the normal merge gate.

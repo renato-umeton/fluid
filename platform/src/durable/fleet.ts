@@ -3,6 +3,7 @@
 // changes are broadcast to Server-Sent Events subscribers (the fleet view).
 import { DurableObject } from "cloudflare:workers";
 import type { Json } from "../lib/json.ts";
+import { upsertWishNote, wishNotesKey, type WishNote } from "../contest/wishes.ts";
 import type { BaselineRecord } from "../yellow/baseline.ts";
 import { cancelRun, initialHealth, recordBrowser, recordFailure, recordPass, startYellow, type BrowserSummary, type HealthEvent, type HealthFailure, type HealthState, type Transition } from "../yellow/state.ts";
 
@@ -351,6 +352,18 @@ export class Fleet extends DurableObject<Env> {
 		if (row && (JSON.parse(row.v as string) as { until: number }).until > now) return false;
 		this.setValue(key, { until: now + ttlMs });
 		return true;
+	}
+
+	/** Adds or replaces one wish-in-flight note for a fork (contest/wishes.ts). One call at a time, so concurrent runs never lose a note. */
+	noteWish(repo: string, note: WishNote, now = Date.now()): WishNote[] {
+		const list = upsertWishNote(this.wishNotes(repo), note, now);
+		this.setValue(wishNotesKey(repo), list as unknown as Json);
+		return list;
+	}
+
+	wishNotes(repo: string): WishNote[] {
+		const value = this.getValue(wishNotesKey(repo));
+		return Array.isArray(value) ? (value as unknown as WishNote[]) : [];
 	}
 
 	deleteValue(key: string): void {

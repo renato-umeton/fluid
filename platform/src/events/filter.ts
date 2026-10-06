@@ -8,6 +8,9 @@
 // Pushes to an inbox repo (inbox-<fork>, written by the owner's own agent)
 // are never gated there: only new heads of work/* branches are imported into
 // the fork (forks/inbox.ts); main, tags, other refs, and deletions are ignored.
+// Contest branches (work/contest-<id>-<label>, and imports of an outside
+// agent's entry under work/inbox/contest-<id>/) are gated by their contest in
+// check mode; only the pick is gated in merge mode, started by the contest.
 import { forkOfInbox, INBOX_PREFIX } from "../forks/outside.ts";
 
 export const PUSH_EVENT_TYPE = "cf.artifacts.repo.pushed";
@@ -36,6 +39,11 @@ export type FilterResult = { gate: true; trigger: GateTrigger } | { gate: false;
 
 const MAX_IMPORT_BRANCH = 100;
 const BRANCH_PART = /^[A-Za-z0-9_-][A-Za-z0-9._-]*$/;
+
+/** A contestant's branch in a fork: gated by its contest (workflows/contest.ts), never by a push event or the direct trigger. */
+export function isContestBranch(branch: string): boolean {
+	return /^work\/(inbox\/)?contest-/.test(branch);
+}
 
 /** work/<name>, with plain path parts only (no "..", hidden parts, or ".lock"), at most 100 characters. */
 export function isImportableBranch(branch: string): boolean {
@@ -76,6 +84,7 @@ export function filterPushEvent(body: unknown): FilterResult {
 	if (branch === PRODUCTION_BRANCH) return { gate: false, reason: "push to the production branch (made by the gate)" };
 	if (branch.startsWith("upgrade/") || branch.startsWith("replay/")) return { gate: false, reason: "upgrade and replay branches are gated by their Upgrade workflow" };
 	if (branch.startsWith("repair/")) return { gate: false, reason: "repair branches are gated by the repair workflow; applying one is an explicit request" };
+	if (isContestBranch(branch)) return { gate: false, reason: "contest branches are gated by their contest; the pick is gated in merge mode" };
 	if (typeof after !== "string" || !/^[0-9a-f]{40}$/.test(after)) return { gate: false, reason: "no commit" };
 	if (ZERO_SHA.test(after)) return { gate: false, reason: "branch deleted" };
 	return { gate: true, trigger: { repo, branch, commit: after, mode: gateModeFor(branch) } };
@@ -84,6 +93,7 @@ export function filterPushEvent(body: unknown): FilterResult {
 /** Why POST /api/gates/:repo refuses a branch, or null when it may be gated directly. */
 export function directGateRefusal(branch: string): string | null {
 	if (branch === PRODUCTION_BRANCH || branch.startsWith("upgrade/") || branch.startsWith("replay/")) return "main, upgrade, and replay branches are gated by their own workflows";
+	if (isContestBranch(branch)) return "contest branches are gated by their contest; ship one from the contest instead";
 	return null;
 }
 
