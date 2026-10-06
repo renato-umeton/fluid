@@ -4,6 +4,7 @@
 import synthetic from "../generated/synthetic.json";
 import { cloneRepo, commitChanges, deleteRemoteBranch, listRemoteRefs, pushBranch, readWorkspaceFile, resetBranch, writeFiles, type Remote } from "../git/ops.ts";
 import { forkRepoName, newIntentId, STOCK_REPO } from "../lib/names.ts";
+import { parseIntentRecord } from "../agents/intent.ts";
 import { parseToml, setTomlValue } from "../lib/toml.ts";
 import { headOf, isNotFound, openRepo, readCommitFiles, readTextFile } from "../runtime/repo-files.ts";
 import { listStockTags } from "../stock/publish.ts";
@@ -236,19 +237,17 @@ export class ForkNotFoundError extends Error {
 	}
 }
 
-/** Build-time intent records at a ref (files under .intent/). */
+/** Build-time intent records at a ref (files under .intent/). A record with the wrong shape is skipped and logged. */
 export async function readIntents(env: Env, repoName: string, ref = "main"): Promise<BuildTimeIntent[]> {
 	using repo = await openRepo(env.ARTIFACTS, repoName);
 	const sha = await headOf(repo, ref);
 	if (!sha) throw new ForkNotFoundError(`${repoName}@${ref}`);
 	const files = await readCommitFiles(repo, sha, { file: (p) => p.startsWith(".intent/") && p.endsWith(".json"), dir: (p) => p === ".intent" });
-	return Object.entries(files)
-		.map(([path, text]) => {
-			try {
-				return JSON.parse(text) as BuildTimeIntent;
-			} catch {
-				throw new Error(`invalid intent record ${path} in ${repoName}@${ref}`);
-			}
-		})
-		.sort((a, b) => a.id.localeCompare(b.id));
+	const records: BuildTimeIntent[] = [];
+	for (const [path, text] of Object.entries(files)) {
+		const record = parseIntentRecord(path, text);
+		if (record) records.push(record);
+		else console.warn(`skipped invalid intent record ${path} in ${repoName}@${ref}`);
+	}
+	return records.sort((a, b) => a.id.localeCompare(b.id));
 }

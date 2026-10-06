@@ -43,8 +43,12 @@ describe("git helpers for outside pushes", () => {
 });
 
 describe("addedIntentIds", () => {
-	it("accepts an added record whose id matches its file name", () => {
-		expect(addedIntentIds([{ path: ".intent/int_1.json", status: "added" }], { ".intent/int_1.json": '{"id":"int_1","request":"x"}' })).toEqual(["int_1"]);
+	it("accepts an added record that passes the record schema", () => {
+		expect(addedIntentIds([{ path: ".intent/int_1.json", status: "added" }], { ".intent/int_1.json": '{"id":"int_1","author":"me","request":"x","files":["app/x.ts"]}' })).toEqual(["int_1"]);
+	});
+
+	it("does not count a record with the wrong shape (the gate drafts one)", () => {
+		expect(addedIntentIds([{ path: ".intent/int_1.json", status: "added" }], { ".intent/int_1.json": '{"id":"int_1","request":"x"}' })).toEqual([]);
 	});
 
 	it("ignores modified records, other files, bad JSON, and mismatched ids", () => {

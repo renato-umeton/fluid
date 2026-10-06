@@ -8,6 +8,13 @@ import { slugify } from "./intent.ts";
 export interface HarvestRecord {
 	repo: string;
 	intent: BuildTimeIntent;
+	/** Floor files the gate saw in the real diff of the change that added this record (see floorKey). */
+	floor?: string[];
+}
+
+/** Fleet value the gate writes for each record a change adds: the floor files that change really touched. */
+export function floorKey(repo: string, intentId: string): string {
+	return `floor:${repo}:${intentId}`;
 }
 
 export interface Cluster {
@@ -47,7 +54,7 @@ const SIMILARITY = 0.3;
  * tests/user/ is not floor), and the research numeric path the invariants
  * check.
  */
-const FLOOR_FILES = /^(fluid\.toml|intent\/|policies\/contracts\.ts|policies\/clinical|policies\/dose\.ts|policies\/research|policies\/registry|app\/toml\.ts|app\/types\.ts|tests\/(?!user\/))/;
+export const FLOOR_FILES = /^(fluid\.toml|intent\/|policies\/contracts\.ts|policies\/clinical|policies\/dose\.ts|policies\/research|policies\/registry|app\/toml\.ts|app\/types\.ts|tests\/(?!user\/))/;
 
 export function harvestable(intent: BuildTimeIntent): boolean {
 	return intent.agent !== null && HARVESTABLE_AGENTS.has(intent.agent);
@@ -136,9 +143,13 @@ export function proposedFilesOf(cluster: Cluster): string[] {
 	return [...counts.entries()].filter(([, n]) => n * 2 >= cluster.records.length).map(([f]) => f).sort();
 }
 
-/** Floor files any member touched (a single fork touching the floor is enough to keep the cluster out). */
+/**
+ * Floor files any member touched (a single fork touching the floor is enough
+ * to keep the cluster out): the files a record lists, plus the floor files
+ * the gate saw in the real diff, so a record cannot hide floor contact.
+ */
 export function floorFilesOf(cluster: Cluster): string[] {
-	return [...new Set(cluster.records.flatMap((r) => r.intent.files).filter((f) => FLOOR_FILES.test(f)))].sort();
+	return [...new Set(cluster.records.flatMap((r) => [...r.intent.files, ...(r.floor ?? [])]).filter((f) => FLOOR_FILES.test(f)))].sort();
 }
 
 export function eligibility(cluster: Cluster): { eligible: boolean; reason: string } {

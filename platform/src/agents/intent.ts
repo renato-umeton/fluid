@@ -44,6 +44,42 @@ export function buildIntent(input: IntentInput): BuildTimeIntent {
 	};
 }
 
+const isStringList = (value: unknown): value is string[] => Array.isArray(value) && value.every((x) => typeof x === "string");
+
+/**
+ * Reads one .intent/<id>.json. Records can come from outside the platform,
+ * so a record that does not parse, names another id, or has the wrong shape
+ * is refused (null) instead of breaking every reader of the fork. Optional
+ * fields get their empty values.
+ */
+export function parseIntentRecord(path: string, text: string): BuildTimeIntent | null {
+	const id = /^\.intent\/([A-Za-z0-9._-]+)\.json$/.exec(path)?.[1];
+	if (!id) return null;
+	let record: Record<string, unknown>;
+	try {
+		record = JSON.parse(text) as Record<string, unknown>;
+	} catch {
+		return null;
+	}
+	if (!record || typeof record !== "object" || Array.isArray(record) || record.id !== id) return null;
+	if (typeof record.author !== "string" || typeof record.request !== "string" || !isStringList(record.files)) return null;
+	if (record.agent !== undefined && record.agent !== null && typeof record.agent !== "string") return null;
+	for (const key of ["modes_affected", "tests_added"]) if (record[key] !== undefined && !isStringList(record[key])) return null;
+	for (const key of ["purpose", "stock_tag"]) if (record[key] !== undefined && typeof record[key] !== "string") return null;
+	return {
+		...record,
+		id,
+		author: record.author,
+		agent: (record.agent as string | null | undefined) ?? null,
+		request: record.request,
+		purpose: (record.purpose as string | undefined) ?? "",
+		modes_affected: (record.modes_affected as string[] | undefined) ?? [],
+		files: record.files,
+		tests_added: (record.tests_added as string[] | undefined) ?? [],
+		stock_tag: (record.stock_tag as string | undefined) ?? "unknown",
+	};
+}
+
 export function intentPath(id: string): string {
 	if (!/^[A-Za-z0-9._-]+$/.test(id)) throw new Error(`invalid intent id ${JSON.stringify(id)}`);
 	return `.intent/${id}.json`;

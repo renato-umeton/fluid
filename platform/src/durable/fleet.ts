@@ -355,6 +355,16 @@ export class Fleet extends DurableObject<Env> {
 		this.ctx.storage.sql.exec("DELETE FROM kv WHERE k = ?", key);
 	}
 
+	/** Several values in one call (missing keys are left out). */
+	getValues(keys: string[]): Record<string, Json> {
+		const out: Record<string, Json> = {};
+		for (const key of keys.slice(0, 500)) {
+			const value = this.getValue(key);
+			if (value !== null) out[key] = value;
+		}
+		return out;
+	}
+
 	getValue(key: string): Json | null {
 		const row = this.ctx.storage.sql.exec("SELECT v FROM kv WHERE k = ?", key).toArray()[0];
 		return row ? (JSON.parse(row.v as string) as Json) : null;
