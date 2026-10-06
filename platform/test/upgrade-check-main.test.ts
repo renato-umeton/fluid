@@ -50,7 +50,7 @@ describe("gateAndLand after an apply that pushed main and then threw", () => {
 		vi.spyOn(console, "warn").mockImplementation(() => undefined);
 	});
 
-	async function land() {
+	async function land(options: { retryApply?: boolean } = {}) {
 		const t = apiEnv();
 		t.artifacts.add(REPO);
 		t.fleet.register({ repo: REPO, userId: "s-1", persona: "hospitalist-researcher", pinnedTag: "v1.1.0", status: "pinned" });
@@ -64,7 +64,10 @@ describe("gateAndLand after an apply that pushed main and then threw", () => {
 			do: async (name: string, ...rest: unknown[]) => {
 				names.push(name);
 				if (name === "replay gate") return passedGate(replay);
-				return (rest.at(-1) as () => Promise<unknown>)();
+				const run = rest.at(-1) as () => Promise<unknown>;
+				// The apply step's retry (GIT_STEP retries), when asked for: the second try finds main already at the commit.
+				if (name === "replay apply" && options.retryApply) return run().catch(() => run());
+				return run();
 			},
 			sleep: async () => undefined,
 		};
@@ -85,5 +88,17 @@ describe("gateAndLand after an apply that pushed main and then threw", () => {
 		expect(entry).toMatchObject({ pinnedTag: TAG, pendingUpgrade: null, status: "passed" });
 		expect(entry!.health).toMatchObject({ health: "yellow", commit: replay });
 		expect(created.filter((c) => c.workflow === "YellowWorkflow")).toHaveLength(1);
+	});
+
+	it("rolls back to main's head from before the push, not the replay commit's first parent", async () => {
+		const { t, before } = await land();
+		expect((await t.fleet.get(REPO))!.health.lastGreenCommit).toBe(before);
+	});
+
+	it("uses main's head from before the push when a retried apply finds main already at the commit", async () => {
+		const { t, before, result } = await land({ retryApply: true });
+		expect(result).toEqual({ passed: true, outcome: "applied" });
+		expect(names).not.toContain("replay check main");
+		expect((await t.fleet.get(REPO))!.health).toMatchObject({ health: "yellow", lastGreenCommit: before });
 	});
 });

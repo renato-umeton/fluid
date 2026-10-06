@@ -25,7 +25,7 @@ import { newIntentId, STOCK_REPO, userIdFromForkRepo } from "../lib/names.ts";
 import { parseToml, setTomlValue } from "../lib/toml.ts";
 import { AGENT_MODEL, callModel } from "../runtime/llm.ts";
 import { pinnedTagOf } from "../stock/releases.ts";
-import { fleetStub, quotaStub } from "../stubs.ts";
+import { fleetStub, quotaStub, runsStub } from "../stubs.ts";
 import { landedEarlier } from "../yellow/landing.ts";
 import { findRolledBackUpgrade, reapplyChange } from "../yellow/reapply.ts";
 import { logTiers, persistGate, repairRunId } from "./gate.ts";
@@ -86,9 +86,13 @@ export async function replayFirst<T>(deps: {
  * After the replay's apply step gave up: whether main (checked out in `ws`)
  * already holds the gated commit, because a try pushed main and then failed.
  * Null means it does not, and the upgrade may fall back to merging. As in
- * a retried apply, the change counts as landed (a yellow run starts, from
- * the commit's first parent) only while main is at the commit and the
- * fork's health does not name it yet.
+ * a retried apply, the change counts as landed (a yellow run starts) only
+ * while main is at the commit and the fork's health does not name it yet.
+ * `previous` here is the commit's first parent, a fallback only: the yellow
+ * run's previous commit is a rollback target for a fork with no green commit
+ * yet, so the caller prefers main's head recorded before the push
+ * (mainBeforePush), since a replay of several wishes has first parents that
+ * were never on main.
  */
 export async function mainHoldsCommit(ws: Workspace, commit: string, healthCommit: string | null): Promise<{ landed: boolean; previous: string | null } | null> {
 	if (!(await branchContains(ws, "main", commit))) return null;
@@ -427,6 +431,7 @@ export class UpgradeWorkflow extends WorkflowEntrypoint<Env, UpgradeParams> {
 					const remote = await repoRemote(this.env, p.repo, "read");
 					const ws = await cloneRepo({ ...remote, ref: "main", singleBranch: true });
 					const found = await mainHoldsCommit(ws, at, (await fleetStub(this.env).health(p.repo))?.commit ?? null);
+					if (found?.landed) found.previous = (await this.mainBeforePush(p.runId, at)) ?? found.previous;
 					if (found) await log.step("Merge to main", "done", `main already holds ${at.slice(0, 7)} (an apply try pushed it before failing)${found.landed ? "; its yellow run starts now" : ""}`);
 					return found;
 				});
@@ -473,6 +478,9 @@ export class UpgradeWorkflow extends WorkflowEntrypoint<Env, UpgradeParams> {
 		const previous = await headCommit(ws, "main");
 		const ff = await fastForward(ws, "main", commit);
 		if (ff.outcome === "fast-forward") {
+			// Kept before the push: if the push lands and the step then fails, a retry or the
+			// "check main" step still knows where main was (the yellow run's rollback target).
+			await log.update({ mainBeforePush: { commit, previous } });
 			await pushBranch(ws, remote, "main");
 			await log.step("Merge to main", "done", `main fast-forwarded to ${commit.slice(0, 7)} on ${tag}`);
 			return { applied: true, regate: null, previous, landed: true };
@@ -481,7 +489,7 @@ export class UpgradeWorkflow extends WorkflowEntrypoint<Env, UpgradeParams> {
 			// A retried step after a successful push: main is at the commit but its yellow run never started.
 			const landed = landedEarlier({ mainHead: ff.oid, commit, healthCommit: (await fleetStub(this.env).health(repo))?.commit ?? null });
 			await log.step("Merge to main", "done", landed ? `main is already at ${commit.slice(0, 7)} (an earlier attempt pushed it); its yellow run starts now` : `main already contains ${commit.slice(0, 7)}`);
-			return { applied: true, regate: null, previous: landed ? await firstParent(ws, commit) : previous, landed };
+			return { applied: true, regate: null, previous: landed ? ((await this.mainBeforePush(runId, commit)) ?? (await firstParent(ws, commit))) : previous, landed };
 		}
 		await checkoutBranch(ws, branch);
 		const outcome = await mergeInto(ws, { ours: branch, theirs: "main", message: `Merge main into ${branch}\n\nmain moved to ${ff.oid.slice(0, 7)} during the upgrade to ${tag}; the merge is gated before main moves.` });
@@ -489,6 +497,12 @@ export class UpgradeWorkflow extends WorkflowEntrypoint<Env, UpgradeParams> {
 		await pushBranch(ws, remote, branch, { force: true });
 		await log.step("Merge to main", "info", `main moved to ${ff.oid.slice(0, 7)}; merged it into ${branch} as ${outcome.oid.slice(0, 7)} for another gate`);
 		return { applied: false, regate: outcome.oid };
+	}
+
+	/** main's head just before this run pushed `commit` to it (advanceMain), or null when it never got that far. */
+	private async mainBeforePush(runId: string, commit: string): Promise<string | null> {
+		const recorded = (await runsStub(this.env, runId).get())?.mainBeforePush as { commit?: unknown; previous?: unknown } | null | undefined;
+		return recorded?.commit === commit && typeof recorded.previous === "string" ? recorded.previous : null;
 	}
 
 	/** Model resolution within a budget; deterministic fallback otherwise or on any model problem. */
