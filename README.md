@@ -59,7 +59,7 @@ git add -A && git commit -m "Describe the change"
 git push origin work/my-change
 ```
 
-The platform imports each new `work/*` branch head from the inbox into your fork (at most 50 commits, 200 files, 1 MB per file, and 8 MB to download), and the gate decides what reaches main, exactly as for changes made in the app. Pushes to the inbox's main, tags, and other branches are ignored. If your branch adds no `.intent/<id>.json`, the gate drafts one from your commit messages and the files you touched; existing records may only be added to. After a change lands, `git pull origin main` gets the new main. Details and limits in [docs/GATE_AND_AGENTS.md](docs/GATE_AND_AGENTS.md#outside-pushes). With `/?mock=1`, the panel can simulate a push from the inbox to green.
+The platform imports each new `work/<name>` branch head from the inbox into your fork as `work/inbox/<name>` (at most 10 an hour, 50 commits, 200 files, 1 MB per file, and 8 MB to download), and the gate decides what reaches main, exactly as for changes made in the app. Pushes to the inbox's main, tags, and other branches are ignored. If your branch adds no `.intent/<id>.json`, the gate drafts one from your commit messages and the files you touched; existing records may only be added to. A failed gate opens no repair for an imported change: fix it in your agent and push again. Each new token replaces your inbox with a fresh copy of your main, so clone again; the inbox is deleted 15 minutes after its token expires. After a change lands, `git pull origin main` gets the new main. Details and limits in [docs/GATE_AND_AGENTS.md](docs/GATE_AND_AGENTS.md#outside-pushes). With `/?mock=1`, the panel can simulate a push from the inbox to green.
 
 ## Intent replay
 

@@ -967,7 +967,9 @@ function startOutsidePush(body) {
 const OUTSIDE_COMMITS = ["Add a plain-language summary line to research answers", "Add a tier 3 test for the summary line"];
 
 function outsidePushScript(run) {
-  const { fork, branch, pushed, target, intentId, persona } = run._ctx;
+  const { fork, branch: inboxBranch, pushed, target, intentId, persona } = run._ctx;
+  // Imports land under work/inbox/ in the fork, a name no platform workflow uses.
+  const branch = inboxBranch === "main" ? "main" : `work/inbox/${inboxBranch.slice("work/".length)}`;
   const inbox = `inbox-${fork.repo}`;
   if (target === "main") {
     return [{
@@ -977,7 +979,7 @@ function outsidePushScript(run) {
   }
   return [
     {
-      name: `Push received in ${inbox} on ${branch}`, ms: 800,
+      name: `Push received in ${inbox} on ${inboxBranch}`, ms: 800,
       done: (r, v) => { v.detail = `${pushed.slice(0, 7)} from an outside agent: ${OUTSIDE_COMMITS.length} commits (${OUTSIDE_COMMITS.join("; ")})`; },
     },
     {
@@ -985,6 +987,7 @@ function outsidePushScript(run) {
       done: (r, v) => {
         fork.branches = fork.branches.filter((b) => b.name !== branch);
         fork.branches.push({ name: branch, commit: pushed, role: "imported", gate: "pending" });
+        run.branch = branch;
         v.detail = `${OUTSIDE_COMMITS.length} commits, 2 files, within the caps (50 commits, 200 files, 1 MB per file, 8 MB download); pushed to ${branch} in ${fork.repo}`;
       },
     },

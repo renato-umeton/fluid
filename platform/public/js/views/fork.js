@@ -77,7 +77,7 @@ function outsidePanel(fork) {
       const minted = await api.outsideToken(fork.repo);
       mount(status);
       showAccess(access, minted);
-      getToken.textContent = "Get a new token (the old one stops working)";
+      getToken.textContent = "Get a new token (replaces your inbox)";
     } catch (err) {
       mount(status, err.message);
     } finally {
@@ -119,7 +119,7 @@ function showAccess(el, minted) {
   mount(el,
     h("div", { class: "row" }, expiry, h("span", { class: "small muted" }, `Write access to your inbox ${minted.inbox} only, never to ${minted.repo}. Branches that start with ${minted.branchPrefix} are imported.`), reveal),
     h("ol", { class: "cmd-list" }, lines.map((l) => l.row)),
-    h("p", { class: "xsmall muted" }, "The token is part of the clone URL, so git stores it in the clone's .git/config until it expires. Getting a new token stops the old one. After a change lands, the inbox main is updated, so git pull origin main gets the latest. An import takes at most 50 commits, 200 files, 1 MB per file, and 8 MB to download. A branch with no .intent/<id>.json gets one drafted from your commit messages before it is gated."));
+    h("p", { class: "xsmall muted" }, "The token is part of the clone URL, so git stores it in the clone's .git/config until it expires. A new token replaces your inbox with a fresh copy of your main, so clone again; the inbox is deleted 15 minutes after its token expires. Each work/<name> push is imported as work/inbox/<name> in your fork, at most 10 an hour, and must stay within 50 commits, 200 files, 1 MB per file, and 8 MB to download. A failed gate for an imported change opens no repair: fix it in your agent and push again. After a change lands, git pull origin main gets the latest main. A branch with no .intent/<id>.json gets one drafted from your commit messages before it is gated."));
   expiryTimer = setInterval(() => {
     if (!expiry.isConnected) { clearInterval(expiryTimer); expiryTimer = null; return; }
     expiry.textContent = expiryText(minted.expiresAt);
