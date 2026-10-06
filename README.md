@@ -8,6 +8,10 @@ This is an entry to Cloudflare's "Build the next Git platform" competition.
 
 Live demo: https://fluid.renato83.workers.dev (synthetic data only). To deploy your own copy, see [docs/DEPLOY.md](docs/DEPLOY.md).
 
+![Fluid answers the same dosing question in clinical, research, and multi-intent mode as the context changes](docs/screenshots/demo.gif)
+
+The demo above is mock mode (`/?mock=1`): Dr. Rowan Ellery asks the same dosing question at the bedside, attests to see the research answer, asks again while writing a manuscript, and gets labeled answers on an ambiguous screen.
+
 ## Three proposals
 
 1. **A fork per person.** A central team ships a stock release. Each user gets an Artifacts repository forked from a stock tag and changes it freely with their own agent.
