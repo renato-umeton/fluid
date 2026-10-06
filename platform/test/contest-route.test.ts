@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import worker from "../src/index.ts";
 import { contestLockKey } from "../src/contest/plan.ts";
 import { runsStub } from "../src/stubs.ts";
@@ -46,6 +46,20 @@ describe("POST /api/contests", () => {
 		const t = setup();
 		expect((await start(t, { size: 5 })).status).toBe(400);
 		expect((await start(t, {}, "s-other")).status).toBe(403);
+	});
+
+	it("releases the fork, closes the contest, and refunds the quota when the workflow cannot start", async () => {
+		const t = setup();
+		const broken = { ...t, ctx: { waitUntil: () => undefined, exports: new Proxy({}, { get: () => ({ create: async () => { throw new Error("workflows unavailable"); } }) }) } as unknown as ExecutionContext };
+		vi.spyOn(console, "error").mockImplementation(() => undefined);
+		const res = await start(broken, { size: 3 });
+		expect(res.status).toBe(500);
+		expect(t.fleet.contestState(FORK)?.status).toBe("done");
+		expect(t.fleet.getValue(contestLockKey(FORK))).toBeNull();
+		for (let i = 0; i < 3; i++) {
+			expect((await start(t, { size: 3 })).status).toBe(202);
+			t.fleet.deleteValue(contestLockKey(FORK));
+		}
 	});
 
 	it("counts a contest as N customizations and releases the fork when the quota refuses", async () => {

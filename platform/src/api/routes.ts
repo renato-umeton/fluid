@@ -37,7 +37,7 @@ import { rerunTargets, upgradeTargets } from "../workflows/upgrade.ts";
 import { decodeParam, HttpError, json, readJson, requireJsonPost, requireString } from "./http.ts";
 import { askRef, parsePreferences } from "./validate.ts";
 import { readWishes } from "../contest/read-wishes.ts";
-import { agentInboxBranch, CONTEST_LIMITS, contestLockKey, contestRunId, contestantRunId, lineup, newContestId, parseContestOptions, takeContestQuota } from "../contest/plan.ts";
+import { agentInboxBranch, CONTEST_LIMITS, contestLockKey, contestRunId, contestantRunId, lineup, newContestId, parseContestOptions, refundContestQuota, takeContestQuota, type QuotaAccess } from "../contest/plan.ts";
 import { pickNotes } from "../contest/winner.ts";
 import { matchRecipe } from "../agents/recipes.ts";
 
@@ -551,7 +551,15 @@ route("POST", "/api/contests", async (rc) => {
 	const contestId = newContestId();
 	const runId = contestRunId(contestId);
 	if (!(await fleet.tryLock(contestLockKey(repo), CONTEST_LIMITS.lockTtlMs, runId))) throw new HttpError(409, "a contest is already running on this fork; ship one of its contestants or wait for it to end");
-	const refused = await takeContestQuota((subject, bucket, limit, window) => quotaStub(rc.env, subject).take(bucket, limit, window), `user:${session?.userId ?? "admin"}`, options.size, LIMITS.customizationsPerUserPerHour);
+	const quota = contestQuota(rc.env);
+	const subject = `user:${session?.userId ?? "admin"}`;
+	let refused: string | null;
+	try {
+		refused = await takeContestQuota(quota, subject, options.size, LIMITS.customizationsPerUserPerHour);
+	} catch (error) {
+		await fleet.unlock(contestLockKey(repo), runId);
+		throw error;
+	}
 	if (refused) {
 		await fleet.unlock(contestLockKey(repo), runId);
 		throw new HttpError(429, refused);
@@ -560,11 +568,36 @@ route("POST", "/api/contests", async (rc) => {
 	const agentBranch = options.includeAgent ? agentInboxBranch(contestId) : null;
 	const seats = lineup({ recipe: matchRecipe(request) !== null, size: options.size, includeAgent: options.includeAgent });
 	const contestants = seats.map((s) => ({ label: s.label, kind: s.kind, title: s.title, status: s.kind === "agent" ? "waiting for your push" : "queued", runId: contestantRunId(contestId, s.label) }));
-	await runsStub(rc.env, runId).create({ id: runId, kind: "contest", repo, status: "running", fields: { request: cleanText(request, 1000), contestId, size: options.size, includeAgent: options.includeAgent, joinUntil, agentBranch, contestants } });
-	await fleet.openContest(repo, { contestId, runId, status: "open", includeAgent: options.includeAgent, joinUntil, agentJoined: false });
-	await appExports(rc.ctx).ContestWorkflow.create({ id: runId, params: { runId, contestId, repo, request, userId: session?.userId ?? userIdFromForkRepo(repo) ?? "admin", persona: entry.persona, size: options.size, includeAgent: options.includeAgent } });
+	try {
+		await runsStub(rc.env, runId).create({ id: runId, kind: "contest", repo, status: "running", fields: { request: cleanText(request, 1000), contestId, size: options.size, includeAgent: options.includeAgent, joinUntil, agentBranch, contestants } });
+		await fleet.openContest(repo, { contestId, runId, status: "open", includeAgent: options.includeAgent, joinUntil, agentJoined: false });
+		await appExports(rc.ctx).ContestWorkflow.create({ id: runId, params: { runId, contestId, repo, request, userId: session?.userId ?? userIdFromForkRepo(repo) ?? "admin", persona: entry.persona, size: options.size, includeAgent: options.includeAgent } });
+	} catch (error) {
+		// Nothing runs this contest: close it so no inbox push can join it, free the fork, and give the quota back.
+		await abandonContest(rc.env, { repo, contestId, runId, subject, size: options.size }, error).catch((cleanup) => console.error(`contest ${runId} cleanup failed: ${scrubText(String(cleanup))}`));
+		throw error;
+	}
 	return json({ runId, contestId, joinUntil, agentBranch }, 202);
 });
+
+function contestQuota(env: Env): QuotaAccess {
+	return {
+		take: (subject, bucket, limit, window) => quotaStub(env, subject).take(bucket, limit, window),
+		give: async (subject, bucket, window) => {
+			await quotaStub(env, subject).give(bucket, window);
+		},
+	};
+}
+
+/** A contest that could not start after its lease and quota were taken: closed, unlocked, and refunded. */
+async function abandonContest(env: Env, c: { repo: string; contestId: string; runId: string; subject: string; size: number }, error: unknown): Promise<void> {
+	const fleet = fleetStub(env);
+	await fleet.setContestStatus(c.repo, c.contestId, "done");
+	await fleet.unlock(contestLockKey(c.repo), c.runId);
+	const run = runsStub(env, c.runId);
+	if (await run.get()) await run.update({ status: "failed", error: `the contest could not start: ${scrubText(error instanceof Error ? error.message : String(error)).slice(0, 300)}` });
+	await refundContestQuota(contestQuota(env), c.subject, c.size);
+}
 
 // Ship a contestant: the rule's winner or another contestant that passed every tier and every wish test.
 route("POST", "/api/contests/:runId/pick", async (rc, { runId }) => {

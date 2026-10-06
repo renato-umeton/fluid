@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { Fleet } from "../src/durable/fleet.ts";
+import { Quota } from "../src/durable/quota.ts";
 import { construct } from "./helpers/durable.ts";
-import { behaviorFiles, contestBranch, contestIdOfBranch, CONTEST_LIMITS, entrantOf, joinDecision, lineup, parseContestOptions, takeContestQuota } from "../src/contest/plan.ts";
+import { behaviorFiles, contestBranch, contestIdOfBranch, CONTEST_LIMITS, entrantOf, joinDecision, lineup, parseContestOptions, refundContestQuota, takeContestQuota } from "../src/contest/plan.ts";
 
 describe("lineup", () => {
 	it("puts the recipe first when one matches, then model plans", () => {
@@ -114,25 +115,66 @@ describe("entrantOf", () => {
 });
 
 describe("takeContestQuota", () => {
-	it("counts a contest as N customizations and refuses past the hourly limit", async () => {
+	/** A quota like the Quota object: a refused take counts nothing; give returns one unit. */
+	function fakeQuota(limits: Record<string, number> = {}) {
 		const used: Record<string, number> = {};
-		const take = async (subject: string, bucket: string, limit: number) => {
-			const key = `${subject}/${bucket}`;
-			used[key] = (used[key] ?? 0) + 1;
-			return { allowed: used[key]! <= limit, remaining: Math.max(0, limit - used[key]!), retryAfterSeconds: 60 };
+		return {
+			used,
+			take: async (subject: string, bucket: string, limit: number) => {
+				const key = `${subject}/${bucket}`;
+				const cap = limits[key] ?? limit;
+				if ((used[key] ?? 0) >= cap) return { allowed: false, remaining: 0, retryAfterSeconds: 60 };
+				used[key] = (used[key] ?? 0) + 1;
+				return { allowed: true, remaining: cap - used[key]!, retryAfterSeconds: 60 };
+			},
+			give: async (subject: string, bucket: string) => {
+				const key = `${subject}/${bucket}`;
+				used[key] = Math.max(0, (used[key] ?? 0) - 1);
+			},
 		};
-		expect(await takeContestQuota(take, "user:u", 3, 10)).toBeNull();
-		expect(used["user:u/customize"]).toBe(3);
-		expect(used["global/contest"]).toBe(1);
-		expect(await takeContestQuota(take, "user:u", 3, 10)).toBeNull();
-		expect(await takeContestQuota(take, "user:u", 3, 10)).toBeNull();
-		expect(await takeContestQuota(take, "user:u", 3, 10)).toMatch(/customizations/);
+	}
+
+	it("counts a contest as N customizations and one platform contest", async () => {
+		const q = fakeQuota();
+		expect(await takeContestQuota(q, "user:u", 3, 10)).toBeNull();
+		expect(q.used).toEqual({ "user:u/customize": 3, "global/contest": 1 });
 	});
 
-	it("has a platform-wide cap on contests", async () => {
-		let n = 0;
-		const take = async (subject: string, bucket: string, limit: number) => ({ allowed: bucket === "contest" ? ++n <= limit : true, remaining: 0, retryAfterSeconds: 60 });
-		for (let i = 0; i < CONTEST_LIMITS.globalPerHour; i++) expect(await takeContestQuota(take, `user:${i}`, 2, 10)).toBeNull();
-		expect(await takeContestQuota(take, "user:x", 2, 10)).toMatch(/contests/);
+	it("refunds the units it took when a later unit is refused", async () => {
+		const q = fakeQuota();
+		for (let i = 0; i < 3; i++) expect(await takeContestQuota(q, "user:u", 3, 10)).toBeNull();
+		expect(await takeContestQuota(q, "user:u", 3, 10)).toMatch(/counts as 3 customizations/);
+		expect(q.used["user:u/customize"]).toBe(9);
+		expect(await takeContestQuota(q, "user:u", 2, 10)).toMatch(/counts as 2 customizations/);
+		expect(q.used["user:u/customize"]).toBe(9);
+	});
+
+	it("refunds the customizations when the platform-wide cap refuses", async () => {
+		const q = fakeQuota({ "global/contest": CONTEST_LIMITS.globalPerHour });
+		for (let i = 0; i < CONTEST_LIMITS.globalPerHour; i++) expect(await takeContestQuota(q, `user:${i}`, 2, 10)).toBeNull();
+		expect(await takeContestQuota(q, "user:x", 2, 10)).toMatch(/contests/);
+		expect(q.used["user:x/customize"]).toBe(0);
+	});
+
+	it("Quota.give returns one use in the current window, never below zero", () => {
+		const { instance: quota } = construct(Quota);
+		const at = Date.parse("2026-10-06T12:10:00Z");
+		quota.take("customize", 2, 3600, at);
+		quota.take("customize", 2, 3600, at);
+		expect(quota.take("customize", 2, 3600, at).allowed).toBe(false);
+		quota.give("customize", 3600, at);
+		expect(quota.take("customize", 2, 3600, at).allowed).toBe(true);
+		quota.give("customize", 3600, at);
+		quota.give("customize", 3600, at);
+		quota.give("customize", 3600, at);
+		expect(quota.take("customize", 2, 3600, at).remaining).toBe(1);
+	});
+
+	it("gives a whole contest back", async () => {
+		const q = fakeQuota();
+		await takeContestQuota(q, "user:u", 3, 10);
+		await refundContestQuota(q, "user:u", 3);
+		expect(q.used).toEqual({ "user:u/customize": 0, "global/contest": 0 });
 	});
 });
+

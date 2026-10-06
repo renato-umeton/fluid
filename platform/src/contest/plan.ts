@@ -134,17 +134,41 @@ export function entrantOf(c: { label: string; status?: unknown; error?: unknown;
 	};
 }
 
+/** The Quota object's take and give (a refund of one use in the current window). */
+export interface QuotaAccess {
+	take(subject: string, bucket: string, limit: number, windowSeconds: number): Promise<QuotaDecision>;
+	give(subject: string, bucket: string, windowSeconds: number): Promise<void>;
+}
+
 /**
  * A contest costs N customizations of its owner's hourly quota (taken one by
- * one) and one of the platform's contests per hour. Returns why it is
- * refused, or null.
+ * one) and one of the platform's contests per hour. When a later unit or the
+ * platform cap refuses, the units already taken are given back. Returns why
+ * it is refused, or null.
  */
-export async function takeContestQuota(take: (subject: string, bucket: string, limit: number, windowSeconds: number) => Promise<QuotaDecision>, subject: string, size: number, customizationsPerHour: number): Promise<string | null> {
+export async function takeContestQuota(quota: QuotaAccess, subject: string, size: number, customizationsPerHour: number): Promise<string | null> {
+	let taken = 0;
+	const giveBack = async () => {
+		for (let i = 0; i < taken; i++) await quota.give(subject, "customize", 3600);
+	};
 	for (let i = 0; i < size; i++) {
-		const own = await take(subject, "customize", customizationsPerHour, 3600);
-		if (!own.allowed) return `a contest of ${size} counts as ${size} customizations, and you have used your ${customizationsPerHour} customizations for this hour; retry in ${own.retryAfterSeconds}s`;
+		const own = await quota.take(subject, "customize", customizationsPerHour, 3600);
+		if (!own.allowed) {
+			await giveBack();
+			return `a contest of ${size} counts as ${size} customizations, and you have used your ${customizationsPerHour} customizations for this hour; retry in ${own.retryAfterSeconds}s`;
+		}
+		taken += 1;
 	}
-	const all = await take("global", "contest", CONTEST_LIMITS.globalPerHour, 3600);
-	if (!all.allowed) return `the platform is running ${CONTEST_LIMITS.globalPerHour} contests an hour already; retry in ${all.retryAfterSeconds}s`;
+	const all = await quota.take("global", "contest", CONTEST_LIMITS.globalPerHour, 3600);
+	if (!all.allowed) {
+		await giveBack();
+		return `the platform is running ${CONTEST_LIMITS.globalPerHour} contests an hour already; retry in ${all.retryAfterSeconds}s`;
+	}
 	return null;
+}
+
+/** Gives back everything a contest took, when it could not start after its quota was taken. */
+export async function refundContestQuota(quota: QuotaAccess, subject: string, size: number): Promise<void> {
+	for (let i = 0; i < size; i++) await quota.give(subject, "customize", 3600);
+	await quota.give("global", "contest", 3600);
 }
