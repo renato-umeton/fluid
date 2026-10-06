@@ -587,7 +587,7 @@ const MOCK_EXAMPLES = [
   'fonts ("Use Palatino fonts", "a monospace font")',
   'density ("Make the layout compact")',
   'accent colors ("Make the buttons teal", "make the look red")',
-  'looks ("I want the St. Jude look and feel" for crimson, "make it look like Windows XP" for luna-xp, "reset the look")',
+  'looks ("give the app a crimson look and feel" for crimson, "make it look like Windows XP" for luna-xp, "reset the look")',
   'chart tabs ("add a page of charts", "add a dashboard tab showing my override rate")',
   'REDCap ("Add a REDCap connector so research mode reports enrollment for my protocols")',
   'tau ("Lower my confidence threshold to 0.6")',
