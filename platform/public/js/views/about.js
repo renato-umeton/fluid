@@ -14,7 +14,7 @@ const IDEAS = [
   },
   {
     name: "Living forks",
-    text: "Every person's fork keeps changing. They reshape it in plain words or with their own agent over plain git. On each release, intent replay grants every wish again on the new upstream code.",
+    text: "Every person's fork keeps changing. They reshape it in plain words or with their own agent over plain git. On each release, intent replay grants each recipe wish again on the new upstream code; other changes upgrade by merge, and the gate still decides.",
     where: "See it in My fork, Customize, and Fleet.",
   },
   {

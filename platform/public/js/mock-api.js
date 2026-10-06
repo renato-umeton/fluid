@@ -195,8 +195,8 @@ const STOCK_INTENT = {
   id: "int_2026_10_03_0001",
   author: "mothership:clinical-informatics",
   agent: null,
-  request: "Publish the first upstream release of Fluid",
-  purpose: "Every fork starts from an intent engine with hard-context floors, an upstream minimum tau, option B with attestation, per-mode answer policies, a US source registry, and the invariant and functional suites that define the floor.",
+  request: "Publish the first stock release of Fluid",
+  purpose: "Every fork starts from an intent engine with hard-context floors, a stock minimum tau, option B with attestation, per-mode answer policies, a US source registry, and the invariant and functional suites that define the floor.",
   modes_affected: ["clinical", "research", "administrative"],
   files: ["app/", "intent/", "policies/", "connectors/", "tests/invariants/manifest.json", "tests/functional/manifest.json", "fluid.toml"],
   tests_added: ["tests/invariants/manifest.json", "tests/functional/manifest.json"],
@@ -967,7 +967,7 @@ function mockUpgradeRun(fork, upgradeRun, commit) {
   const { tag, branch, replay } = upgradeRun;
   const steps = [];
   if (replay?.path === "replay") {
-    steps.push({ name: `Replay wishes on stock ${tag}`, status: "done", detail: `${replay.carried} of ${replay.total} wish${replay.total === 1 ? "" : "es"} carried to ${tag} on ${branch}. ${replay.wishes.map((w) => `${w.intentId}: ${w.reason}${w.stockAlsoChanged.length ? ` (upstream ${tag} also changed ${w.stockAlsoChanged.join(", ")}; replay needed no merge there)` : ""}`).join("; ")}` });
+    steps.push({ name: `Replay wishes on stock ${tag}`, status: "done", detail: `${replay.carried} of ${replay.total} wish${replay.total === 1 ? "" : "es"} carried to ${tag} on ${branch}. ${replay.wishes.map((w) => `${w.intentId}: ${w.reason}${w.stockAlsoChanged.length ? ` (stock ${tag} also changed ${w.stockAlsoChanged.join(", ")}; replay needed no merge there)` : ""}`).join("; ")}` });
   } else {
     if (replay) steps.push({ name: `Replay wishes on stock ${tag}`, status: "info", detail: `Upgrading by merge: ${replay.reason}` });
     steps.push({ name: `Merge stock ${tag} into ${branch}`, status: "done", detail: "No textual conflicts" });

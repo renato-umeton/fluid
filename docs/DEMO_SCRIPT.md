@@ -77,7 +77,7 @@ Then a last, smaller line: "Proving ground: academic medicine."
 Narration:
 > This is Fluid. Everyone gets their own fork. Behavior decides what ships.
 > One: behavior is the merge rule. A change reaches main only when upstream's tests pass, your own tests pass, and a live soak stays clean.
-> Two: forks stay alive. You reshape yours in plain words or with your own agent, and every release grants your wishes again on fresh code. A wish is one change plus its reason.
+> Two: forks stay alive. You reshape yours in plain words or with your own agent, and each release grants your recipe wishes again on fresh code, while other changes merge. A wish is one change plus its reason.
 > Three: git is the audit log for what software says. Every change records why. Every answer records the commit that produced it.
 > Four: every commit runs, in its own sandbox, with no build queue.
 > We picked the domain where a wrong merge can hurt someone. If behavior-gated forks are safe enough for a dosing question, they are safe enough for your expense tool.
@@ -267,7 +267,7 @@ Point out: the counters moving, yellow squares turning green, and event lines en
 **Shot 5.4 (0:35).** Point at the line under the status bar: "Upgraded to vX: N by intent replay (wishes granted again on fresh upstream code), M by merge." Click **Show a replayed fork that would have conflicted under merge**. In **Fork detail**, point at "Wishes carried to vX: N of N", the **replayed** tags, the line "Upstream vX also changed app/cards.ts. A merge would have had to resolve it; replay granted the wish again on the new code.", and **Gate on the replay branch**.
 
 > Most tools upgrade a fork by merging old text into new text. That is where conflicts come from.
-> A Fluid fork is a list of wishes and the tests that prove them. On every release we grant your wishes again on fresh code.
+> A Fluid fork is a list of wishes and the tests that prove them. On every release we grant your recipe wishes again on fresh code. Other changes merge.
 > This fork reworded the same line the release reworded. A merge would conflict. Replay starts from the new release, applies the wish again, and runs the fork's own tests to prove it still holds.
 
 Point out: the counts, the wish list, and the run step "Replay wishes on stock vX" (the step name still says stock on the live site).
@@ -325,7 +325,7 @@ Narration:
 > Cloudflare asked four questions.
 > How do agents know what other agents are doing? Every wish in flight is a branch with its reason, and the platform streams every run live.
 > How do you keep track of why? In git, next to the code, and every answer points to its commit.
-> What about conflicts? Main only moves to a gated commit, and every release grants your wishes again on fresh code.
+> What about conflicts? Main only moves to a gated commit, and each release grants recipe wishes again on fresh code, while other changes merge.
 > How do you pick which change ships? Let agents compete, and let behavior decide.
 > Everyone gets their own fork. Behavior decides what ships.
 > It all runs on Cloudflare Workers and Artifacts. Try it at the link on screen. The code is MIT licensed, and all the data is synthetic.

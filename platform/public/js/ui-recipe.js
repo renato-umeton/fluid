@@ -8,7 +8,7 @@
 import { FONT_LABELS, LOOK_LABELS, MAX_TABS, MAX_TITLE, WIDGET_LABELS, sanitizePreferences } from "./ui-prefs.js";
 
 const LOOK_NOTES = {
-  standard: "the standard Fluid look",
+  standard: "the stock Fluid look",
   crimson: "bold red and white institutional colors; no logos, names, or trademarks",
   "luna-xp": "a Windows XP style from about 2001: blue title bars, a blue rail, bevelled buttons with a green primary, Tahoma-style web-safe fonts",
 };
