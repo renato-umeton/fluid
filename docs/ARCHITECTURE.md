@@ -2,6 +2,8 @@
 
 This document maps each concept in the spec (`docs/Fluid_ Personal Software for Academic Medicine.md`) to the code and to the Cloudflare primitive behind it. It also lists where the build differs from the spec, and why, and it describes the safety model.
 
+For the platform in one page, with what is still medical-specific, see [OVERVIEW.md](OVERVIEW.md).
+
 Related documents: `docs/GATE_AND_AGENTS.md` (workflows and gate details), `docs/SPIKE_FINDINGS.md` (measured behavior of each primitive), `stock/README.md` (the stock runtime contract), `docs/UI.md`.
 
 ## Repository layout
@@ -98,7 +100,7 @@ flowchart TB
 
 ### Run-time ledger (spec 8)
 
-- **Code.** `platform/src/durable/user-ledger.ts`. Each answer appends a record with the intent, confidence, signals, override, attestation, sources, τ, fork commit, and stock tag. Overrides update the record. An alarm commits new records once a day to `ledger-<id>` as one JSONL file per day. Ledger repos are created only for users with a fork, and the alarm stops when nothing is waiting.
+- **Code.** `platform/src/durable/user-ledger.ts`. Each answer appends a record with the intent, confidence, signals, override, attestation, sources, τ, fork commit, and stock tag. Overrides update the record. An alarm commits new records once a day to `ledger-<id>` as one JSONL file per day. Ledger repos are created only for users with a fork, and the alarm stops when nothing is waiting. The ledger is plain git history with no extra tamper protection.
 - **Primitives.** Durable Object with SQLite storage, Artifacts repository per user.
 
 ### Customization agent and test suggester (spec 6.3, 11)
@@ -129,7 +131,7 @@ flowchart TB
 
 ### Harvesting (spec 9)
 
-- **Code.** `platform/src/workflows/fleet.ts` (`HarvestWorkflow`) and `platform/src/agents/harvest-cluster.ts`. Harvest is opt-in: the harvester reads intent records only from forks whose `fluid.toml` sets `harvest_opt_in = true`. It clusters them by token similarity, which is deterministic, asks the model only for a readable label, and drafts eligible clusters as `harvest/<slug>` branches in `stock`. Each run replaces earlier drafts.
+- **Code.** `platform/src/workflows/fleet.ts` (`HarvestWorkflow`) and `platform/src/agents/harvest-cluster.ts`. Harvest is opt-in: the harvester reads intent records only from forks whose `fluid.toml` sets `harvest_opt_in = true`. It clusters them by token similarity, which is deterministic, asks the model only for a readable label, and drafts eligible clusters as `harvest/<slug>` branches in `stock`. Each run replaces earlier drafts. Maintainers review a draft. Harvest changes no fork.
 
 ### Abuse limits for the public demo
 
@@ -156,7 +158,7 @@ Models (named only because the code pins them): `@cf/meta/llama-3.3-70b-instruct
 
 | Spec | Build | Why |
 | :-- | :-- | :-- |
-| Each fork deploys through Workers Builds, and the gate tests the branch's Workers Preview. | Each fork runs in a Worker Loader isolate at any branch or commit. The gate loads the pushed commit directly. | An isolate per commit is live in milliseconds, with no build queue, so hundreds of forks can be gated at once. Worker Loader also lets the gate keep stock's runner in a separate isolate from fork code. Workers Builds with per-branch previews stays the production path for a real deployment, where each user's fork would be a full Worker. |
+| Each fork deploys through Workers Builds, and the gate tests the branch's Workers Preview. | Each fork runs in a Worker Loader isolate at any branch or commit. The gate loads the pushed commit directly. | An isolate per commit is live in milliseconds, with no build queue, so many forks can be gated at once (more than 100 at once in local testing). Worker Loader also lets the gate keep stock's runner in a separate isolate from fork code. Workers Builds with per-branch previews stays the production path for a real deployment, where each user's fork would be a full Worker. |
 | Fork runtime is the deployed Worker code. | Fork code is TypeScript, and the platform strips types at load time and caches the result per repo and SHA. | Worker Loader has no build step. Stripping at load time keeps every commit instantly runnable. |
 | One event subscription per repo. | One account-level `repo.pushed` subscription, filtered in the consumer by namespace and repo prefix. | The account-level source accepted `repo.pushed` for every repo, so one subscription covers all forks. No `repo.forked` event arrived in testing, so provisioning uses the return value of `fork()`. |
 | An onboarding Workflow provisions each fork. | Provisioning runs in the request (`provisionFork`). Seeded demo forks use `SeedForkWorkflow`. | A single fork takes 4 to 7 seconds, which fits a request. |
@@ -165,6 +167,8 @@ Models (named only because the code pins them): `@cf/meta/llama-3.3-70b-instruct
 | Fleet health from Artifacts metrics. | Fleet health from the `Fleet` Durable Object and its event stream. | The demo needs per-fork status changes in real time. |
 | Stock tests read with `refs/tags/<tag>`. | Short tag names or SHAs. | The binding returns null for `refs/...` names. |
 | Each fork's `app/` serves its own chat UI. | The control plane serves one UI; a fork changes its look only through `ui/preferences.json`, which the platform validates and the UI maps to fixed styles and platform-computed charts. | No fork code runs in the browser of the public demo, and answer cards stay the stock JSON contract. |
+| Run-time records give a tamper-evident audit trail. | Run-time records are committed daily to `ledger-<id>` as plain git history. | Signing or anchoring the commits is not built. |
+| When a harvested feature ships in stock, upgrade agents retire the duplicate custom code in each fork. | Harvest drafts `harvest/<slug>` branches in stock for maintainers to review. | Retiring fork code is not built. |
 | Repair agent proposes a fix for every failure. | A fix is proposed when a rule applies. Otherwise the branch carries the explanation only. | Fixes to safety-critical behavior should come from fixed rules or the user, never from free model output. |
 
 ## Safety model
