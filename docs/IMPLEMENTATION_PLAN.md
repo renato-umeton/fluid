@@ -6,7 +6,7 @@ Best-of-N agents compete to grant one wish. A behavior diff replaces the pull re
 **Goal**: Pure code that turns answer cards captured during a gate into a per-probe diff, and a deterministic winner rule with plain reasons.
 **Success Criteria**: Volatile card fields are ignored; diffs list added, removed, and changed fields with caps; the rule applies (a) to (d) in order and explains the choice and each loss.
 **Tests**: `test/contest-behavior.test.ts`, `test/contest-winner.test.ts`.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Capture in the gate, wishes in flight, branch rules
 **Goal**: `runGate` can record the fork's card for every probe in the host ask callback (runner and stock unchanged), and run extra probes that do not count toward the verdict. Contest branches are never gated by push events or the direct trigger. Customize and contest runs note their wishes; `GET /api/forks/:repo/wishes` lists them with the work branches and their intent records.
