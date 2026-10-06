@@ -23,6 +23,13 @@ export const BEHAVIOR_LIMITS = {
 /** Keys whose value changes on every answer or every commit, so they never count as a behavior change. */
 const VOLATILE_KEYS = new Set(["answer_id", "fork_commit"]);
 
+/**
+ * Wording fields of a card (and of its labeled alternatives). A change to only
+ * these, in a mode the wish tests ask about, is what the wish targets. Any
+ * other field (mode, confidence, dose, attestation, override, ledger) is not.
+ */
+const WORDING_PATH = /^(alternatives\.\d+\.)?(body|framing|sources)(\.|$)/;
+
 export type ProbeTier = "invariant" | "functional" | "user" | "wish";
 
 /** One probe as the gate ran it on one commit: its result and the card the fork answered with (null for config probes). */
@@ -46,6 +53,8 @@ export interface FieldChange {
 export interface BehaviorCell {
 	passed: boolean | null;
 	changed: boolean;
+	/** Where a change falls: a wish test, wording in a mode the wish targets, or outside the wish. */
+	scope?: "wish" | "target" | "outside";
 	/** Number of fields that differ from main's card. */
 	total: number;
 	changes: FieldChange[];
@@ -68,6 +77,8 @@ export interface CandidateCounts {
 	outside: number;
 	/** Wish tests whose answer or result differs from main (expected: that is the wish). */
 	inside: number;
+	/** Other probes whose only change is wording in a mode the wish tests ask about (inside the wish too). */
+	target: number;
 	wishPassed: number;
 	wishTotal: number;
 	failingWish: string[];
@@ -75,6 +86,8 @@ export interface CandidateCounts {
 
 export interface BehaviorTable {
 	rows: BehaviorRow[];
+	/** Modes the wish tests ask about (the mode of main's answer to each wish test). */
+	targetModes: string[];
 	/** Rows left out by the cap (none of them has more changes than the rows kept). */
 	omitted: number;
 	counts: Record<string, CandidateCounts>;
@@ -155,6 +168,9 @@ export function diffCards(before: Json | null, after: Json | null, max = BEHAVIO
  * The behavior diff: one row per probe (matched by key), one cell per
  * candidate. A cell is changed when the card differs from main's or the
  * probe's result differs, or when the candidate no longer runs the probe.
+ * A change is inside the wish when the row is a wish test, or when only the
+ * wording changed (body, framing, sources) in an answer whose mode the wish
+ * tests ask about and the result stayed the same. Everything else is outside.
  * Counts are taken over every row before the cap.
  */
 export function behaviorTable(main: Observation[], candidates: { label: string; observations: Observation[] }[], options: { maxProbes?: number } = {}): BehaviorTable {
@@ -170,7 +186,9 @@ export function behaviorTable(main: Observation[], candidates: { label: string; 
 	for (const c of candidates) c.observations.forEach(remember);
 	const mainBy = new Map(main.map((o) => [o.key, o]));
 	const byCandidate = candidates.map((c) => ({ label: c.label, by: new Map(c.observations.map((o) => [o.key, o])) }));
-	const counts: Record<string, CandidateCounts> = Object.fromEntries(candidates.map((c) => [c.label, { outside: 0, inside: 0, wishPassed: 0, wishTotal: 0, failingWish: [] as string[] }]));
+	const counts: Record<string, CandidateCounts> = Object.fromEntries(candidates.map((c) => [c.label, { outside: 0, inside: 0, target: 0, wishPassed: 0, wishTotal: 0, failingWish: [] as string[] }]));
+	const modeOf = (card: Json | null) => (card && typeof card === "object" && !Array.isArray(card) && typeof card.mode === "string" ? card.mode : null);
+	const targetModes = [...new Set(main.filter((o) => o.key.startsWith("wish:")).map((o) => modeOf(o.card)).filter((m): m is string => m !== null && m !== "multi"))].sort();
 
 	const rows: BehaviorRow[] = order.map((key) => {
 		const info = meta.get(key)!;
@@ -183,14 +201,18 @@ export function behaviorTable(main: Observation[], candidates: { label: string; 
 			let cell: BehaviorCell;
 			if (!seen) cell = { passed: null, changed: true, total: 0, changes: [], missing: true };
 			else {
-				const diff = diffCards(base?.card ?? null, seen.card);
-				cell = { passed: seen.passed, changed: diff.total > 0 || seen.passed !== (base?.passed ?? null), total: diff.total, changes: diff.changes };
+				const full = diffCards(base?.card ?? null, seen.card, Number.POSITIVE_INFINITY);
+				const sameResult = seen.passed === (base?.passed ?? null);
+				cell = { passed: seen.passed, changed: full.total > 0 || !sameResult, total: full.total, changes: full.changes.slice(0, BEHAVIOR_LIMITS.maxChangesPerCell) };
+				if (cell.changed && !wish && sameResult && base && targetModes.includes(modeOf(base.card) ?? "") && full.changes.every((c) => WORDING_PATH.test(c.path))) cell.scope = "target";
 			}
-			cells[label] = cell;
 			if (cell.changed) {
-				if (wish) count.inside += 1;
+				cell.scope ??= wish ? "wish" : "outside";
+				if (cell.scope === "wish") count.inside += 1;
+				else if (cell.scope === "target") count.target += 1;
 				else count.outside += 1;
 			}
+			cells[label] = cell;
 			if (wish) {
 				count.wishTotal += 1;
 				if (cell.passed === true) count.wishPassed += 1;
@@ -200,8 +222,8 @@ export function behaviorTable(main: Observation[], candidates: { label: string; 
 		return { id: info.id, key, tier: info.tier, question: info.question, wish, main: base ? { passed: base.passed } : { passed: null, missing: true }, cells };
 	});
 
-	if (rows.length <= maxProbes) return { rows, omitted: 0, counts };
+	if (rows.length <= maxProbes) return { rows, targetModes, omitted: 0, counts };
 	const changed = (r: BehaviorRow) => Object.values(r.cells).some((c) => c.changed);
 	const keep = new Set([...rows.filter(changed), ...rows.filter((r) => !changed(r))].slice(0, maxProbes).map((r) => r.key));
-	return { rows: rows.filter((r) => keep.has(r.key)), omitted: rows.length - keep.size, counts };
+	return { rows: rows.filter((r) => keep.has(r.key)), targetModes, omitted: rows.length - keep.size, counts };
 }

@@ -82,7 +82,7 @@ describe("behaviorTable", () => {
 	it("marks changed cells, wish rows, and counts changes outside the wish", () => {
 		const table = behaviorTable(main, [
 			{ label: "model-a", observations: [obs("inv-a", true, card()), obs("fn-b", true, card({ mode: "administrative" }), { tier: "functional" }), obs("t-own", true, card({ body: "new" }), { key: "wish:1", tier: "user" })] },
-			{ label: "model-b", observations: [obs("inv-a", true, card({ body: "changed" })), obs("fn-b", false, card({ mode: "research" }), { tier: "functional" }), obs("t-wish", true, card({ body: "new" }), { key: "wish:1", tier: "wish" })] },
+			{ label: "model-b", observations: [obs("inv-a", true, card({ confidence: 0.5 })), obs("fn-b", false, card({ mode: "research" }), { tier: "functional" }), obs("t-wish", true, card({ body: "new" }), { key: "wish:1", tier: "wish" })] },
 		]);
 		expect(table.rows.map((r) => r.id)).toEqual(["inv-a", "fn-b", "t-wish"]);
 		const wish = table.rows.find((r) => r.id === "t-wish")!;
@@ -91,14 +91,30 @@ describe("behaviorTable", () => {
 		expect(wish.cells["model-a"]!.passed).toBe(true);
 		expect(table.rows[0]!.cells["model-a"]!.changed).toBe(false);
 		expect(table.rows[0]!.cells["model-b"]!.changed).toBe(true);
-		expect(table.counts).toEqual({ "model-a": { outside: 0, inside: 1, wishPassed: 1, wishTotal: 1, failingWish: [] }, "model-b": { outside: 2, inside: 1, wishPassed: 1, wishTotal: 1, failingWish: [] } });
+		expect(table.rows[0]!.cells["model-b"]!.scope).toBe("outside");
+		expect(wish.cells["model-a"]!.scope).toBe("wish");
+		expect(table.counts).toEqual({ "model-a": { outside: 0, inside: 1, target: 0, wishPassed: 1, wishTotal: 1, failingWish: [] }, "model-b": { outside: 2, inside: 1, target: 0, wishPassed: 1, wishTotal: 1, failingWish: [] } });
+	});
+
+	it("counts new wording in a mode the wish tests ask about as inside the wish", () => {
+		// The wish tests ask a research question, so research answers may gain the new line.
+		const table = behaviorTable(main, [
+			{ label: "wording", observations: [obs("inv-a", true, card({ body: "Morphinex is listed in two registries. In short: two sources agree." })), main[1]!, obs("t-wish", true, card({ body: "new" }), { key: "wish:1", tier: "wish" })] },
+			{ label: "dose", observations: [obs("inv-a", true, card({ computed_dose: { value: 5, unit: "mg" } })), main[1]!, obs("t-wish", true, card({ body: "new" }), { key: "wish:1", tier: "wish" })] },
+			{ label: "admin", observations: [main[0]!, obs("fn-b", true, card({ mode: "administrative", body: "changed" }), { tier: "functional" }), obs("t-wish", true, card({ body: "new" }), { key: "wish:1", tier: "wish" })] },
+		]);
+		expect(table.targetModes).toEqual(["research"]);
+		expect(table.rows[0]!.cells.wording!.scope).toBe("target");
+		expect(table.counts.wording).toMatchObject({ outside: 0, target: 1 });
+		expect(table.rows[0]!.cells.dose!.scope).toBe("outside");
+		expect(table.rows[1]!.cells.admin!.scope).toBe("outside");
 	});
 
 	it("counts a probe a candidate no longer runs as a change", () => {
 		const table = behaviorTable(main, [{ label: "agent", observations: [obs("inv-a", true, card())] }]);
 		const row = table.rows.find((r) => r.id === "fn-b")!;
 		expect(row.cells.agent).toMatchObject({ missing: true, changed: true, passed: null });
-		expect(table.counts.agent).toMatchObject({ outside: 1, wishTotal: 1, wishPassed: 0, failingWish: ["t-wish"] });
+		expect(table.counts.agent).toMatchObject({ outside: 1, inside: 1, wishTotal: 1, wishPassed: 0, failingWish: ["t-wish"] });
 	});
 
 	it("capBehavior trims field lists until the stored diff fits", async () => {
