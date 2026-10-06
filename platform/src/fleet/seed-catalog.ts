@@ -56,16 +56,20 @@ export function seedPlan(batch: string, count: number): SeedSpec[] {
 		else if (i % 50 === 11) kinds.push("compact-research");
 		else {
 			const r = rand();
+			// Most forks carry a wish intent replay can run again (redcap, plain-wording, raise-tau).
+			// budget-summary is written by the model, so it upgrades by merge; it stays a small share.
 			if (persona === "research-coordinator") {
-				if (r < 0.6) kinds.push("redcap");
-				else if (r < 0.7) kinds.push("raise-tau");
+				if (r < 0.7) kinds.push("redcap");
+				else if (r < 0.85) kinds.push("raise-tau");
+				else if (r < 0.92) kinds.push("plain-wording");
 			} else if (persona === "hospitalist-researcher") {
-				if (r < 0.4) kinds.push("plain-wording");
-				else if (r < 0.55) kinds.push("redcap");
-				else if (r < 0.65) kinds.push("raise-tau");
+				if (r < 0.45) kinds.push("plain-wording");
+				else if (r < 0.7) kinds.push("redcap");
+				else if (r < 0.9) kinds.push("raise-tau");
 			} else {
-				if (r < 0.45) kinds.push("budget-summary");
-				else if (r < 0.6) kinds.push("plain-wording");
+				if (r < 0.6) kinds.push("plain-wording");
+				else if (r < 0.8) kinds.push("raise-tau");
+				else if (r < 0.95) kinds.push("budget-summary");
 			}
 		}
 		if (kinds.length === 0) kinds.push("none");

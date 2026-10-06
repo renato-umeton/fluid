@@ -150,6 +150,25 @@ describe("seeded customizations", () => {
 		expect(seedPlan("t1", 30).filter((s) => s.kinds.includes("lower-tau") || s.kinds.includes("compact-research"))).toHaveLength(2);
 	});
 
+	it("keeps the forks that fail the next release at the same indexes", () => {
+		const plan = seedPlan("t1", 200);
+		expect(plan.filter((s) => s.kinds.includes("compact-research")).map((s) => s.index)).toEqual([11, 61, 111, 161]);
+		expect(plan.filter((s) => s.kinds.includes("lower-tau")).map((s) => s.index)).toEqual([7, 47, 87, 127, 167]);
+	});
+
+	// Release day shows intent replay, so most seeded forks carry a wish that replays.
+	it("gives most forks a replayable wish, and few forks none or a model-written one", () => {
+		for (const batch of ["t1", "a1", "b7", "demo", "x9"]) {
+			const plan = seedPlan(batch, 200);
+			const count = (k: SeedKind) => plan.filter((s) => s.kinds.includes(k)).length;
+			expect(count("redcap") + count("plain-wording") + count("raise-tau")).toBeGreaterThanOrEqual(150);
+			expect(count("none")).toBeGreaterThan(0);
+			expect(count("none")).toBeLessThanOrEqual(25);
+			expect(count("budget-summary")).toBeGreaterThanOrEqual(3);
+			expect(count("budget-summary")).toBeLessThanOrEqual(16);
+		}
+	});
+
 	it("keeps the lowered-tau change off main: it goes to a work branch for the gate", () => {
 		expect(seedTarget("lower-tau")).toBe("work-branch");
 		for (const kind of ["redcap", "budget-summary", "plain-wording", "raise-tau", "compact-research"] as const) expect(seedTarget(kind)).toBe("main");
