@@ -79,6 +79,10 @@ export const api = {
   run: (runId) => call("GET", `/api/runs/${enc(runId)}`),
   decide: (runId, testId, decision, edited) => call("POST", `/api/suggestions/${enc(runId)}/decide`, { testId, decision, edited }),
   gates: (repo) => call("GET", `/api/gates/${enc(repo)}`),
+  /** A one hour git write token for the session's own fork, with clone and push commands. */
+  outsideToken: (repo) => call("POST", `/api/forks/${enc(repo)}/token`, {}),
+  /** Mock mode only: a push from an outside agent to its inbox, on work/my-change (imported) or on main (ignored). */
+  simulateOutsidePush: (repo, target) => call("POST", "/api/mock/outside-push", { repo, target }),
   /** Gate repair/<sha> in merge mode; main fast-forwards to it only if it passes. */
   applyRepair: (repo, sha) => call("POST", `/api/forks/${enc(repo)}/repairs/${enc(sha)}/apply`, {}, { admin: true }),
   release: (tag, notes, safety) => call("POST", "/api/admin/release", { tag, notes, safety }, { admin: true }),

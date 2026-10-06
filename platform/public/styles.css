@@ -436,6 +436,9 @@ dialog::backdrop { background: rgba(15, 25, 30, 0.45); }
 .facts dt { color: var(--ink-3); }
 .facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .facts code { overflow-wrap: anywhere; }
+.cmd-list { margin: 0; padding-left: 20px; display: grid; gap: 4px; }
+.cmd-row { display: flex; gap: 8px; align-items: center; }
+.cmd-row .cmd { flex: 1; min-width: 0; font-family: var(--mono); font-size: 12px; background: var(--panel-2); padding: 4px 8px; border-radius: var(--r-sm); overflow-wrap: anywhere; }
 .tau-meter { display: grid; gap: 4px; }
 .tau-track { position: relative; height: 8px; background: var(--line); border-radius: 2px; }
 .tau-fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--clinical); border-radius: 2px; }

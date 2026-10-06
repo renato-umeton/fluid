@@ -123,6 +123,7 @@ An upgrade run and the fork's `lastRun` in the fleet carry `path` (`"replay"` or
 | `GET /api/forks/:repo` | anyone | Fork info: remote, pinned tag, tau, branches, last gate |
 | `GET /api/forks/:repo/health` | anyone | Yellow or green state, soak progress, history |
 | `GET /api/forks/:repo/ui` | anyone | Validated `ui/preferences.json` from main |
+| `POST /api/forks/:repo/token` | owner | A one hour git write token for your own agent, scoped to the fork's inbox repo (`inbox-<fork>`, created on first use), never to the fork: `{repo, inbox, remote, token, expiresAt, branchPrefix: "work/", commands}`. Revokes the previous outside token |
 | `POST /api/forks/:repo/upgrade` | owner | One-tap upgrade to a passed release |
 | `POST /api/forks/:repo/repairs/:sha/apply` | owner | Gate a repair branch and fast-forward main on pass |
 | `POST /api/ask` | session | Ask the user's fork (or stock); returns an answer card. `reaskOf` (an earlier `answer_id`) marks an override or attestation re-ask of the same question and is recorded as `reask_of` |
@@ -154,6 +155,7 @@ An upgrade run and the fork's `lastRun` in the fleet carry `path` (`"replay"` or
 ## Limits and protections
 
 - Per-client quotas run ahead of the global ones. A client is an IPv4 address or an IPv6 /64, and the admin is exempt. The limits: forks 3 per hour per client and 60 per hour overall, asks 30 per minute per client, and Artifacts-backed reads (`/api/me`, `/api/forks/:repo`, `/api/intents/:repo`) 60 per minute per client. Fork info is cached for 5 seconds.
+- Outside git tokens (`POST /api/forks/:repo/token`): only a normal session that owns the fork (not the admin header, not a yellow run's test session), 3 per hour per user, 6 per hour per client, and 60 per hour overall, one request per fork at a time (a second one gets a 409). Each token lasts one hour and can write only the fork's inbox repo; each request replaces the inbox with a fresh fork of `main`, which ends every earlier token, and the inbox is deleted 15 minutes after its token expires. The response is `no-store` and the token is never logged (only its id and expiry). Inboxes are not fleet forks and do not count toward the fork limits. Imports from the inbox: 10 per fork per hour and 200 per hour overall, each in its own workflow, capped at 8 MB downloaded, 5000 tree entries, 50 commits, 200 files, and 1 MB per file, with unsafe paths refused. A failed gate for an imported change opens no repair. See "Outside pushes" in `docs/GATE_AND_AGENTS.md`.
 - Fork claims are atomic in `Fleet.claimProvisioning`. A concurrent second request gets a 409, and failed attempts do not count toward the 500-fork cap.
 - Fleet streams are capped at 200 overall and 5 per client. A subscriber with more than 256 KB unread is dropped.
 - Ledger repos are created only for users with a fork, and the daily alarm stops when nothing is waiting.

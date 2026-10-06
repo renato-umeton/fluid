@@ -378,6 +378,83 @@ export async function restoreTreeFrom(ws: Workspace, commit: string, extra: Reco
 	await replaceTree(ws, { ...files, ...extra });
 }
 
+export interface FileChange {
+	path: string;
+	status: "added" | "modified" | "deleted";
+}
+
+/** The best common ancestor of two commits, or null when they share no history. */
+export async function mergeBase(ws: Workspace, a: string, b: string): Promise<string | null> {
+	const [base] = await git.findMergeBase({ fs: ws.fs, dir: ws.dir, oids: [a, b] });
+	return (base as string | undefined) ?? null;
+}
+
+export class TreeTooLargeError extends Error {
+	constructor(readonly limit: number) {
+		super(`the tree has more than ${limit} entries`);
+		this.name = "TreeTooLargeError";
+	}
+}
+
+/**
+ * Files that differ between two commits (base null: every file in head is
+ * added), sorted by path. With maxEntries, a tree with more entries (files
+ * and directories) stops the walk with TreeTooLargeError.
+ */
+export async function changedFiles(ws: Workspace, base: string | null, head: string, options: { maxEntries?: number } = {}): Promise<FileChange[]> {
+	const blobs = async (oid: string | null) => {
+		const out = new Map<string, string>();
+		if (!oid) return out;
+		let entries = 0;
+		await git.walk({
+			fs: ws.fs,
+			dir: ws.dir,
+			trees: [git.TREE({ ref: oid })],
+			map: async (path, [entry]) => {
+				if (!entry || path === ".") return true;
+				if (options.maxEntries !== undefined && ++entries > options.maxEntries) throw new TreeTooLargeError(options.maxEntries);
+				if ((await entry.type()) === "blob") out.set(path, await entry.oid());
+				return true;
+			},
+		});
+		return out;
+	};
+	const [before, after] = await Promise.all([blobs(base), blobs(head)]);
+	const changes: FileChange[] = [];
+	for (const [path, oid] of after) {
+		const old = before.get(path);
+		if (old === undefined) changes.push({ path, status: "added" });
+		else if (old !== oid) changes.push({ path, status: "modified" });
+	}
+	for (const path of before.keys()) if (!after.has(path)) changes.push({ path, status: "deleted" });
+	return changes.sort((x, y) => (x.path < y.path ? -1 : x.path > y.path ? 1 : 0));
+}
+
+/** How far back from base commitsBetween looks to recognize history the branch shares with it. */
+const BASE_HISTORY_WALK = 1000;
+
+/**
+ * Commits reachable from head but not from base, oldest first, at most
+ * `limit`. Bounded: base's history is read at most BASE_HISTORY_WALK commits
+ * deep, and at most 4 x limit commits are visited from head.
+ */
+export async function commitsBetween(ws: Workspace, base: string | null, head: string, limit = 50): Promise<{ oid: string; message: string }[]> {
+	const shared = new Set<string>();
+	if (base) for (const entry of await git.log({ fs: ws.fs, dir: ws.dir, ref: base, depth: BASE_HISTORY_WALK })) shared.add(entry.oid);
+	const out: { oid: string; message: string }[] = [];
+	const queue = [head];
+	const seen = new Set<string>();
+	while (queue.length > 0 && out.length < limit && seen.size < limit * 4) {
+		const oid = queue.shift()!;
+		if (seen.has(oid) || shared.has(oid)) continue;
+		seen.add(oid);
+		const { commit } = await git.readCommit({ fs: ws.fs, dir: ws.dir, oid });
+		out.push({ oid, message: commit.message });
+		queue.push(...commit.parent);
+	}
+	return out.reverse();
+}
+
 /** First parent of a commit (the branch a merge was made on), or null for a root commit. */
 export async function firstParent(ws: Workspace, oid: string): Promise<string | null> {
 	const { commit } = await git.readCommit({ fs: ws.fs, dir: ws.dir, oid });

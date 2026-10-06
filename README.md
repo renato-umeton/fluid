@@ -45,6 +45,21 @@ flowchart LR
 - Every push starts its own gate. Every failed gate starts its own repair agent.
 - In local testing, one release upgraded 202 forks in 159 seconds, with up to 110 forks upgrading or gating at once. 193 passed (39 after the merge agent resolved a conflict) and 9 stayed pinned with repair branches open. These numbers predate intent replay.
 - The fleet view streams every status change live.
+- A change imported from your inbox and a customization can race on the same fork. Whichever passes its gate first lands; the other finds main moved, merges main into its branch, and is gated again (or stops on a conflict). The run timeline says so.
+
+## Bring your own agent
+
+You can work on your fork with your own agent or editor over plain git. In **My fork**, **Connect your own agent** gets a write token valid for one hour and shows the commands (the route is `POST /api/forks/:repo/token`). The token writes only to your inbox, `inbox-user-<id>`, a separate copy of your fork; it never writes your fork:
+
+```sh
+git clone https://x:<token>@<account>.artifacts.cloudflare.net/git/fluid/inbox-user-<id>.git inbox-user-<id>
+cd inbox-user-<id>
+git checkout -b work/my-change
+git add -A && git commit -m "Describe the change"
+git push origin work/my-change
+```
+
+The platform imports each new `work/<name>` branch head from the inbox into your fork as `work/inbox/<name>` (at most 10 an hour, 50 commits, 200 files, 1 MB per file, and 8 MB to download), and the gate decides what reaches main, exactly as for changes made in the app. Pushes to the inbox's main, tags, and other branches are ignored. If your branch adds no `.intent/<id>.json`, the gate drafts one from your commit messages and the files you touched; existing records may only be added to. A failed gate opens no repair for an imported change: fix it in your agent and push again. Each new token replaces your inbox with a fresh copy of your main, so clone again; the inbox is deleted 15 minutes after its token expires. After a change lands, `git pull origin main` gets the new main. Details and limits in [docs/GATE_AND_AGENTS.md](docs/GATE_AND_AGENTS.md#outside-pushes). With `/?mock=1`, the panel can simulate a push from the inbox to green.
 
 ## Intent replay
 

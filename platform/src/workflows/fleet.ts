@@ -7,7 +7,7 @@
 // opted-in forks, clusters them, labels clusters with the model, and drafts
 // eligible ones as harvest/<slug> branches in stock.
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
-import { clusterRecords, deterministicLabel, draftFilesFor, harvestable, LABEL_SCHEMA, labelPrompt, proposalOf, type HarvestProposal, type HarvestRecord } from "../agents/harvest-cluster.ts";
+import { clusterRecords, deterministicLabel, draftFilesFor, floorKey, harvestable, LABEL_SCHEMA, labelPrompt, proposalOf, type HarvestProposal, type HarvestRecord } from "../agents/harvest-cluster.ts";
 import { buildIntent, intentJson, intentPath, cleanText } from "../agents/intent.ts";
 import { replayExtra } from "../agents/replay.ts";
 import { cloneRepo, commitChanges, checkoutBranch, deleteRemoteBranch, headCommit, listRemoteRefs, pushBranch, readWorkspaceFile, writeFiles } from "../git/ops.ts";
@@ -286,7 +286,13 @@ async function readBatch(env: Env, repos: string[]): Promise<{ records: HarvestR
 				}
 				if (!toml || !preferencesOf(parseToml(toml)).harvest_opt_in) continue;
 				optedIn++;
-				for (const intent of await readIntents(env, repo, "main")) records.push({ repo, intent });
+				// readIntents skips malformed records; the gate's real-diff floor contact is joined in per record.
+				const intents = await readIntents(env, repo, "main");
+				const floors = await fleetStub(env).getValues(intents.map((i) => floorKey(repo, i.id)));
+				for (const intent of intents) {
+					const floor = floors[floorKey(repo, intent.id)];
+					records.push({ repo, intent, ...(Array.isArray(floor) ? { floor: floor.filter((f): f is string => typeof f === "string") } : {}) });
+				}
 			} catch (error) {
 				console.warn(`harvest: skipped ${repo}: ${errorText(error)}`);
 			}

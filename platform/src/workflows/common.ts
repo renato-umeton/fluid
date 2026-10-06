@@ -28,7 +28,8 @@ export interface GateParams {
 	branch: string;
 	commit: string;
 	mode: "merge" | "check";
-	source: "event" | "customize" | "direct" | "repair" | "repair-apply" | "seed";
+	/** "import": a work branch copied from the fork's inbox. "outside-push": the commit the gate made after drafting an intent record for it. */
+	source: "event" | "customize" | "direct" | "repair" | "repair-apply" | "seed" | "outside-push" | "import";
 	runId?: string;
 	parentRunId?: string;
 	/** Set when this gate checks the merge of main into the branch after main moved (fast-forward-only main). */
@@ -98,7 +99,7 @@ export interface SeedForkParams {
 	stockTag?: string;
 }
 
-export type YellowSource = "customize" | "gate" | "repair-apply" | "upgrade" | "one-tap" | "admin";
+export type YellowSource = "customize" | "gate" | "repair-apply" | "upgrade" | "one-tap" | "admin" | "outside-push";
 
 export interface YellowParams {
 	runId: string;
@@ -110,6 +111,23 @@ export interface YellowParams {
 	source: YellowSource;
 	/** The run that landed the change (customize, gate, upgrade); it shows the yellow phase. */
 	parentRunId?: string;
+}
+
+/** One push of a work/* branch to an inbox (forks/inbox.ts). */
+export interface ImportParams {
+	runId: string;
+	inbox: string;
+	fork: string;
+	branch: string;
+	commit: string;
+}
+
+/** Deletes an inbox once the token it was made for has expired (workflows/inbox-cleanup.ts). */
+export interface InboxCleanupParams {
+	fork: string;
+	inbox: string;
+	tokenId: string;
+	expiresAt: string;
 }
 
 export interface HarvestParams {
@@ -125,6 +143,8 @@ export interface AppExports extends PlatformExports {
 	SeedFleetWorkflow: WorkflowBinding<SeedFleetParams>;
 	SeedForkWorkflow: WorkflowBinding<SeedForkParams>;
 	HarvestWorkflow: WorkflowBinding<HarvestParams>;
+	ImportWorkflow: WorkflowBinding<ImportParams>;
+	InboxCleanupWorkflow: WorkflowBinding<InboxCleanupParams>;
 	YellowWorkflow: WorkflowBinding<YellowParams>;
 }
 
