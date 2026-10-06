@@ -5,7 +5,7 @@
 import { api } from "../api.js";
 import { h, mount, short, statusTag } from "../dom.js";
 import { renderTimeline } from "./shared.js";
-import { cellView, changeLine, countsLine, isFinalContest, joinCountdown, resultText, seconds, shipChoices, statusText, tierLines } from "../contest.js";
+import { cellView, changeLine, countsLine, isFinalContest, joinCountdown, mainText, seconds, shipChoices, statusText, tierLines } from "../contest.js";
 
 export const title = "Contest";
 export const sub = "Several agents compete to grant one wish. Each works on its own branch and is gated in check mode; a behavior diff against main and a fixed rule pick the winner. Only the one you ship is gated in merge mode.";
@@ -214,7 +214,7 @@ function diffTable(run) {
           h("th", { scope: "row" },
             h("code", {}, r.id), " ", h("span", { class: `tag ${r.wish ? "warn" : ""}` }, r.wish ? "wish test" : r.tier),
             r.question ? h("div", { class: "xsmall muted" }, r.question) : null),
-          h("td", { dataset: { state: "main" } }, resultText(r.main?.passed)),
+          h("td", { dataset: { state: "main" } }, mainText(r.main)),
           labels.map((l) => cell(r.cells[l]))))))),
     run.wishTests?.length ? h("p", { class: "xsmall muted" }, `Wish tests (every contestant faces them): ${run.wishTests.map((w) => w.id).join(", ")}`) : null);
 }
@@ -222,7 +222,7 @@ function diffTable(run) {
 function cell(c) {
   const view = cellView(c);
   return h("td", { class: "diff-cell", dataset: { state: view.state }, "aria-label": view.label },
-    h("span", { class: "cell-mark", "aria-hidden": "true" }, view.state === "same" ? "=" : view.state === "missing" ? "?" : "+/-"),
+    h("span", { class: "cell-mark", "aria-hidden": "true" }, view.state === "same" ? "=" : view.state === "missing" ? "?" : view.state === "own" ? "new" : "+/-"),
     " ", view.text,
     c?.changed && c.changes?.length ? h("details", {}, h("summary", {}, `Show ${c.changes.length < c.total ? `${c.changes.length} of ${c.total}` : c.total} field change${c.total === 1 ? "" : "s"}`),
       h("ul", {}, c.changes.map((x) => h("li", {}, changeLine(x))))) : null);

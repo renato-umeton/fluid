@@ -489,6 +489,7 @@ table.behavior-diff td { min-width: 150px; }
 table.behavior-diff td.diff-cell[data-state="outside"] { background: var(--fail-bg); }
 table.behavior-diff td.diff-cell[data-state="target"], table.behavior-diff td.diff-cell[data-state="wish"] { background: var(--warn-bg); }
 table.behavior-diff td.diff-cell[data-state="missing"] { background: var(--panel-2); font-style: italic; }
+table.behavior-diff td.diff-cell[data-state="own"] { background: var(--panel-2); box-shadow: inset 3px 0 0 var(--line-strong); }
 table.behavior-diff .cell-mark { font-family: var(--mono); font-weight: 700; }
 table.behavior-diff details ul { margin: 4px 0 0; padding-left: 16px; font-size: var(--fs-xs); overflow-wrap: anywhere; }
 @media (max-width: 900px) { .contest { grid-template-columns: 1fr; } }

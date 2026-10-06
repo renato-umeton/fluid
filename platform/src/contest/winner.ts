@@ -4,6 +4,8 @@
 //   (b) fewest behavior changes outside what the wish targets;
 //   (c) fewest files changed;
 //   (d) earliest finished; a full tie goes to the earlier contestant in the lineup.
+// Tests only one contestant ran ("own" cells in the behavior diff) are not
+// counted in outsideChanges, so adding tests never costs a contestant a point.
 // public/js/contest-rules.js is a copy for mock mode (test/ui-contest.test.ts keeps them the same).
 
 export interface Entrant {

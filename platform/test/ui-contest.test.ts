@@ -3,7 +3,7 @@ import { decideWinner, pickNotes, type Entrant } from "../src/contest/winner.ts"
 // @ts-expect-error plain ES module from the static UI
 import * as ui from "../public/js/contest-rules.js";
 // @ts-expect-error plain ES module from the static UI
-import { cellView, changeLine, countsLine, isFinalContest, joinCountdown, shipChoices, tierLines } from "../public/js/contest.js";
+import { cellView, changeLine, countsLine, isFinalContest, joinCountdown, mainText, shipChoices, tierLines } from "../public/js/contest.js";
 // @ts-expect-error plain ES module from the static UI
 import { childRunAt, contestAt, mockContestScenario } from "../public/js/mock-contest.js";
 
@@ -34,6 +34,13 @@ describe("contest screen text", () => {
 		expect(cellView({ passed: true, changed: true, total: 1, changes: [], scope: "target" }).label).toContain("wording in a mode the wish targets");
 		expect(cellView({ passed: null, changed: true, total: 0, changes: [], missing: true }).state).toBe("missing");
 		expect(cellView(undefined).text).toBe("not run");
+	});
+
+	it("shows a test only one contestant ran as a new test, never as a change outside the wish", () => {
+		expect(cellView({ passed: true, changed: true, total: 3, changes: [], scope: "own" })).toMatchObject({ state: "own", text: "pass, new test", label: "pass, a new test only this contestant runs; not counted against it" });
+		expect(cellView({ passed: null, changed: false, total: 0, changes: [], missing: true })).toMatchObject({ state: "missing", text: "not run (another contestant's own test)" });
+		expect(mainText({ passed: null, missing: true })).toBe("new test, not on main");
+		expect(mainText({ passed: true })).toBe("pass");
 	});
 
 	it("writes field changes in plain words", () => {

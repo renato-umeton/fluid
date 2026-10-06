@@ -53,12 +53,16 @@ export interface FieldChange {
 export interface BehaviorCell {
 	passed: boolean | null;
 	changed: boolean;
-	/** Where a change falls: a wish test, wording in a mode the wish targets, or outside the wish. */
-	scope?: "wish" | "target" | "outside";
+	/**
+	 * Where a change falls: a wish test, wording in a mode the wish targets,
+	 * outside the wish, or "own": a test only this candidate ran (main never
+	 * did), such as a test it added itself. "own" never counts toward rule (b).
+	 */
+	scope?: "wish" | "target" | "outside" | "own";
 	/** Number of fields that differ from main's card. */
 	total: number;
 	changes: FieldChange[];
-	/** The candidate did not run this probe (for example, it removed one of your tests). */
+	/** The candidate did not run this probe (it removed one of your tests, or the probe is another candidate's own test). */
 	missing?: true;
 }
 
@@ -79,6 +83,8 @@ export interface CandidateCounts {
 	inside: number;
 	/** Other probes whose only change is wording in a mode the wish tests ask about (inside the wish too). */
 	target: number;
+	/** Tests only this candidate ran (main never did); shown as new tests, never counted against it. */
+	own: number;
 	wishPassed: number;
 	wishTotal: number;
 	failingWish: string[];
@@ -170,7 +176,9 @@ export function diffCards(before: Json | null, after: Json | null, max = BEHAVIO
  * probe's result differs, or when the candidate no longer runs the probe.
  * A change is inside the wish when the row is a wish test, or when only the
  * wording changed (body, framing, sources) in an answer whose mode the wish
- * tests ask about and the result stayed the same. Everything else is outside.
+ * tests ask about and the result stayed the same. A test main never ran
+ * (one the candidate added itself) is "own": shown as a new test and never
+ * counted against the candidate. Everything else is outside.
  * Counts are taken over every row before the cap.
  */
 export function behaviorTable(main: Observation[], candidates: { label: string; observations: Observation[] }[], options: { maxProbes?: number } = {}): BehaviorTable {
@@ -186,7 +194,7 @@ export function behaviorTable(main: Observation[], candidates: { label: string; 
 	for (const c of candidates) c.observations.forEach(remember);
 	const mainBy = new Map(main.map((o) => [o.key, o]));
 	const byCandidate = candidates.map((c) => ({ label: c.label, by: new Map(c.observations.map((o) => [o.key, o])) }));
-	const counts: Record<string, CandidateCounts> = Object.fromEntries(candidates.map((c) => [c.label, { outside: 0, inside: 0, target: 0, wishPassed: 0, wishTotal: 0, failingWish: [] as string[] }]));
+	const counts: Record<string, CandidateCounts> = Object.fromEntries(candidates.map((c) => [c.label, { outside: 0, inside: 0, target: 0, own: 0, wishPassed: 0, wishTotal: 0, failingWish: [] as string[] }]));
 	const modeOf = (card: Json | null) => (card && typeof card === "object" && !Array.isArray(card) && typeof card.mode === "string" ? card.mode : null);
 	const targetModes = [...new Set(main.filter((o) => o.key.startsWith("wish:")).map((o) => modeOf(o.card)).filter((m): m is string => m !== null && m !== "multi"))].sort();
 
@@ -199,8 +207,13 @@ export function behaviorTable(main: Observation[], candidates: { label: string; 
 			const seen = by.get(key);
 			const count = counts[label]!;
 			let cell: BehaviorCell;
-			if (!seen) cell = { passed: null, changed: true, total: 0, changes: [], missing: true };
-			else {
+			// A probe main never ran and this candidate did not run either (another candidate's own test): no change.
+			if (!seen) cell = base || wish ? { passed: null, changed: true, total: 0, changes: [], missing: true } : { passed: null, changed: false, total: 0, changes: [], missing: true };
+			else if (!base && !wish) {
+				// A test only this candidate ran (main never did): new, not a change to existing behavior.
+				const full = diffCards(null, seen.card, Number.POSITIVE_INFINITY);
+				cell = { passed: seen.passed, changed: true, scope: "own", total: full.total, changes: full.changes.slice(0, BEHAVIOR_LIMITS.maxChangesPerCell) };
+			} else {
 				const full = diffCards(base?.card ?? null, seen.card, Number.POSITIVE_INFINITY);
 				const sameResult = seen.passed === (base?.passed ?? null);
 				cell = { passed: seen.passed, changed: full.total > 0 || !sameResult, total: full.total, changes: full.changes.slice(0, BEHAVIOR_LIMITS.maxChangesPerCell) };
@@ -210,6 +223,7 @@ export function behaviorTable(main: Observation[], candidates: { label: string; 
 				cell.scope ??= wish ? "wish" : "outside";
 				if (cell.scope === "wish") count.inside += 1;
 				else if (cell.scope === "target") count.target += 1;
+				else if (cell.scope === "own") count.own += 1;
 				else count.outside += 1;
 			}
 			cells[label] = cell;

@@ -71,7 +71,7 @@ export function mockContestScenario({ contestId, request, recipe = false, size =
   const shownFunctional = rows.filter((r) => r.tier === "functional").length;
   const counts = {};
   for (const seat of seats) {
-    const c = { outside: 0, inside: 0, target: 0, wishPassed: 0, wishTotal: 0, failingWish: [] };
+    const c = { outside: 0, inside: 0, target: 0, own: 0, wishPassed: 0, wishTotal: 0, failingWish: [] };
     for (const row of behaviorRows) {
       const cell = row.cells[seat.label];
       if (cell.changed) c[cell.scope === "wish" ? "inside" : cell.scope === "target" ? "target" : "outside"] += 1;

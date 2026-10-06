@@ -12,11 +12,18 @@ export function resultText(passed) {
 export function cellView(cell) {
   if (!cell) return { state: "missing", text: "not run", label: "not run" };
   const result = resultText(cell.passed);
+  if (cell.missing && !cell.changed) return { state: "missing", text: "not run (another contestant's own test)", label: "not run: this is a test another contestant added" };
   if (cell.missing) return { state: "missing", text: "not run (probe removed)", label: "not run: this contestant no longer runs the probe" };
+  if (cell.scope === "own") return { state: "own", text: `${result}, new test`, label: `${result}, a new test only this contestant runs; not counted against it` };
   if (!cell.changed) return { state: "same", text: `${result}, same as main`, label: `${result}, same answer as main` };
   const fields = cell.total ? `${cell.total} field${cell.total === 1 ? "" : "s"}` : "result only";
   const where = scopeText(cell.scope);
   return { state: cell.scope ?? "outside", text: `${result}, changed (${fields})`, label: `${result}, answer changed from main (${fields}), ${where}` };
+}
+
+/** What the main column says for a row: its result, or that the probe is a test main never ran. */
+export function mainText(main) {
+  return main?.missing ? "new test, not on main" : resultText(main?.passed);
 }
 
 export function scopeText(scope) {

@@ -2,7 +2,8 @@
 // (test/ui-contest.test.ts checks that both pick the same winner with the
 // same words). (a) every tier and every wish test passed; (b) fewest
 // behavior changes outside the wish; (c) fewest files changed; (d) earliest
-// finished, then lineup order.
+// finished, then lineup order. Tests only one contestant ran ("own" cells in the
+// behavior diff) are not counted in outsideChanges, so they never cost a point.
 
 export function eligibility(e) {
   if (!e.ready) return { eligible: false, why: `it could not produce a change${e.problem ? ` (${e.problem})` : ""}` };

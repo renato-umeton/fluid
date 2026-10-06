@@ -93,7 +93,7 @@ describe("behaviorTable", () => {
 		expect(table.rows[0]!.cells["model-b"]!.changed).toBe(true);
 		expect(table.rows[0]!.cells["model-b"]!.scope).toBe("outside");
 		expect(wish.cells["model-a"]!.scope).toBe("wish");
-		expect(table.counts).toEqual({ "model-a": { outside: 0, inside: 1, target: 0, wishPassed: 1, wishTotal: 1, failingWish: [] }, "model-b": { outside: 2, inside: 1, target: 0, wishPassed: 1, wishTotal: 1, failingWish: [] } });
+		expect(table.counts).toEqual({ "model-a": { outside: 0, inside: 1, target: 0, own: 0, wishPassed: 1, wishTotal: 1, failingWish: [] }, "model-b": { outside: 2, inside: 1, target: 0, own: 0, wishPassed: 1, wishTotal: 1, failingWish: [] } });
 	});
 
 	it("counts new wording in a mode the wish tests ask about as inside the wish", () => {
@@ -108,6 +108,19 @@ describe("behaviorTable", () => {
 		expect(table.counts.wording).toMatchObject({ outside: 0, target: 1 });
 		expect(table.rows[0]!.cells.dose!.scope).toBe("outside");
 		expect(table.rows[1]!.cells.admin!.scope).toBe("outside");
+	});
+
+	it("gives a test only a candidate ran (main never did) its own scope, outside rule b", () => {
+		// The owner's agent adds two tests of its own; main and the other candidate never ran them.
+		const agentObs = [...main, obs("t-mine-1", true, card({ body: "mine" }), { key: "user:t-mine-1", tier: "user" }), obs("t-mine-2", false, null, { key: "user:t-mine-2", tier: "user" })];
+		const table = behaviorTable(main, [{ label: "agent", observations: agentObs }, { label: "model-a", observations: main }]);
+		const row = table.rows.find((r) => r.id === "t-mine-1")!;
+		expect(row.main).toEqual({ passed: null, missing: true });
+		expect(row.cells.agent).toMatchObject({ scope: "own", changed: true, passed: true });
+		expect(row.cells["model-a"]).toMatchObject({ missing: true, changed: false, passed: null });
+		expect(row.cells["model-a"]!.scope).toBeUndefined();
+		expect(table.counts.agent).toMatchObject({ outside: 0, own: 2 });
+		expect(table.counts["model-a"]).toMatchObject({ outside: 0, own: 0 });
 	});
 
 	it("counts a probe a candidate no longer runs as a change", () => {
