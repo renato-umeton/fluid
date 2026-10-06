@@ -41,12 +41,14 @@ flowchart LR
 ## How concurrency shows up
 
 - Each user's customization agent works in its own fork, at the same time as every other user's.
-- One stock release fans out one upgrade Workflow per fork. Each upgrade merges the new tag, runs a merge agent on conflicts, and gates the result.
+- One stock release fans out one upgrade Workflow per fork. Each upgrade first tries intent replay (below); otherwise it merges the new tag, runs a merge agent on conflicts, and gates the result.
 - Every push starts its own gate. Every failed gate starts its own repair agent.
-
-**Intent replay.** A Fluid fork is a list of wishes and the tests that prove them. On every release we grant your wishes again on fresh code. When every wish in a fork's intent records came from a recipe (a tau change, a look or chart tab, a REDCap connector, the seeded plain wording), the upgrade rebuilds the fork from the new stock tag by running each wish again in order, gates it with all tiers including the user's own tests, and shows "N of N wishes carried to vX". A fork that reworded the card line a release also rewords would conflict under a merge; replay simply sets its wording again on the new file. Anything that cannot be replayed falls back to the merge path above. Try it in mock mode: Fleet, then "Tag release and upgrade the fleet". Details: [docs/GATE_AND_AGENTS.md](docs/GATE_AND_AGENTS.md).
-- In local testing, one release upgraded 202 forks in 159 seconds, with up to 110 forks upgrading or gating at once. 193 passed (39 after the merge agent resolved a conflict) and 9 stayed pinned with repair branches open.
+- In local testing, one release upgraded 202 forks in 159 seconds, with up to 110 forks upgrading or gating at once. 193 passed (39 after the merge agent resolved a conflict) and 9 stayed pinned with repair branches open. These numbers predate intent replay.
 - The fleet view streams every status change live.
+
+## Intent replay
+
+A Fluid fork is a list of wishes and the tests that prove them. On every release we grant your wishes again on fresh code. When every wish in a fork's intent records came from a recipe (a tau change, a look or chart tab, a REDCap connector, the seeded plain wording), the upgrade rebuilds the fork from the new stock tag by running each wish again in order, gates it with all tiers including the user's own tests, and shows "N of N wishes carried to vX". A fork that reworded the card line a release also rewords would conflict under a merge; replay simply sets its wording again on the new file. Forks with a model change, or anything replay cannot rebuild exactly, take the merge path, and so does a replay that fails its gate. Try it in mock mode: Fleet, then "Tag release and upgrade the fleet". Details: [docs/GATE_AND_AGENTS.md](docs/GATE_AND_AGENTS.md).
 
 ## Quick start (local)
 
