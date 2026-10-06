@@ -117,7 +117,7 @@ function uiSuggestions(input: SuggestInput): Suggestion[] {
 	if (!parsed.ok || !parsed.present) return [];
 	const p = parsed.preferences;
 	const assert: Record<string, unknown>[] = [];
-	for (const key of ["font", "density", "accent"] as const) if (p[key] !== undefined) assert.push({ path: key, equals: p[key] });
+	for (const key of ["look", "font", "density", "accent"] as const) if (p[key] !== undefined) assert.push({ path: key, equals: p[key] });
 	for (const tab of p.tabs ?? []) assert.push({ path: "tabs", some: { path: "title", equals: tab.title } });
 	if (assert.length === 0) return [];
 	const id = testId(input.intentId, "ui-preferences");
@@ -164,7 +164,7 @@ export function suggestScenarios(input: SuggestInput & { tau?: number | null }):
 		const parsed = parseUiPreferences(prefsText);
 		if (parsed.ok && parsed.present) {
 			const assert: Record<string, unknown>[] = [{ path: "valid", equals: true }];
-			for (const key of ["font", "density", "accent"] as const) if (parsed.preferences[key] !== undefined) assert.push({ path: `parsed.${key}`, equals: parsed.preferences[key] });
+			for (const key of ["look", "font", "density", "accent"] as const) if (parsed.preferences[key] !== undefined) assert.push({ path: `parsed.${key}`, equals: parsed.preferences[key] });
 			for (const tab of parsed.preferences.tabs ?? []) assert.push({ path: "parsed.tabs", some: { path: "title", equals: tab.title } });
 			add("ui-preferences-live", "The live fork keeps the requested look and still answers with the card contract", `Checks ${input.intentId} on the live fork: ${UI_PREFERENCES_PATH} on main is valid and keeps the requested preferences, and answers still carry the override control (the browser tier also checks that the preferences render).`, {
 				description: `${UI_PREFERENCES_PATH} on the live main keeps the requested preferences; answers keep the card contract (verifies ${input.intentId}).`,

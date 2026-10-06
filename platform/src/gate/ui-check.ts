@@ -20,7 +20,7 @@ export function uiInvariant(text: string | null): { probe: { id: string; passed:
 	const failure: GateFailure = {
 		tier: "invariant",
 		probe: UI_INVARIANT_ID,
-		description: "Platform invariant: ui/preferences.json matches the UI preferences schema (allowlisted font, density, accent, at most 4 tabs of at most 6 platform chart widgets, no unknown keys).",
+		description: "Platform invariant: ui/preferences.json matches the UI preferences schema (allowlisted look, font, density, accent, at most 4 tabs of at most 6 platform chart widgets, no unknown keys).",
 		sample: 1,
 		samples: 1,
 		file: UI_PREFERENCES_PATH,

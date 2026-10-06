@@ -61,6 +61,15 @@ auto_upgrade = false
 harvest_opt_in = true
 ```
 
+### UI preferences (ui/preferences.json)
+
+```json
+{ "look": "crimson", "font": "georgia", "density": "compact", "accent": "teal",
+  "tabs": [ { "title": "Charts", "widgets": ["answers-by-intent", "override-rate"] } ] }
+```
+
+Every key is optional and unknown keys are rejected. `look` is one of `standard`, `crimson`, `luna-xp` (`standard` is the same as no look). `font`, `density`, `accent`, and the 6 widgets are fixed lists in `platform/src/ui/preferences.ts`. At most 4 tabs, titles of at most 40 plain characters, 1 to 6 widgets each, and at most 8 KB. An explicit `font`, `density`, or `accent` wins over the look's own. Details in `docs/UI.md`.
+
 ### Test probe format (tests/*/manifest.json)
 
 ```json

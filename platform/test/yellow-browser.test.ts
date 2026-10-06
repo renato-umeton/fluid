@@ -60,9 +60,15 @@ describe("browser checks", () => {
 
 	it("compares the rendered font, density, accent, and tabs with the fork's preferences", () => {
 		const prefs = { font: "palatino" as const, tabs: [{ title: "Charts", widgets: ["override-rate" as const] }] };
-		expect(preferencesCheck(prefs, { font: "palatino", density: null, accent: null, tabs: ["Charts"] })).toMatchObject({ passed: true, detail: "font palatino, tabs Charts as configured" });
-		expect(preferencesCheck(prefs, { font: null, density: null, accent: null, tabs: [] })).toMatchObject({ passed: false, detail: "font default, expected palatino; tabs [], expected [Charts]" });
-		expect(preferencesCheck({}, { font: null, density: null, accent: null, tabs: [] })).toMatchObject({ passed: true, detail: "defaults as configured" });
+		expect(preferencesCheck(prefs, { look: null, font: "palatino", density: null, accent: null, tabs: ["Charts"] })).toMatchObject({ passed: true, detail: "font palatino, tabs Charts as configured" });
+		expect(preferencesCheck(prefs, { look: null, font: null, density: null, accent: null, tabs: [] })).toMatchObject({ passed: false, detail: "font default, expected palatino; tabs [], expected [Charts]" });
+		expect(preferencesCheck({}, { look: null, font: null, density: null, accent: null, tabs: [] })).toMatchObject({ passed: true, detail: "defaults as configured" });
+	});
+
+	it("checks the rendered look; the standard look renders as no attribute", () => {
+		expect(preferencesCheck({ look: "luna-xp" }, { look: "luna-xp", font: null, density: null, accent: null, tabs: [] })).toMatchObject({ passed: true, detail: "look luna-xp as configured" });
+		expect(preferencesCheck({ look: "crimson" }, { look: null, font: null, density: null, accent: null, tabs: [] })).toMatchObject({ passed: false, detail: "look default, expected crimson" });
+		expect(preferencesCheck({ look: "standard" }, { look: null, font: null, density: null, accent: null, tabs: [] })).toMatchObject({ passed: true });
 	});
 
 	it("fails the tier on any console error and passes it otherwise", () => {

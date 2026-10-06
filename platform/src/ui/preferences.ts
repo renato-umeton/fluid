@@ -24,6 +24,22 @@ export type Density = (typeof DENSITIES)[number];
 export const ACCENTS = ["teal", "blue", "violet", "amber", "green", "rose", "slate"] as const;
 export type Accent = (typeof ACCENTS)[number];
 
+/**
+ * Whole looks: a set of colors, weights, and shapes the UI defines in
+ * styles.css. "standard" is the stock look (the same as no look). Colors and
+ * weights only: no logos, names, images, or loaded fonts, and the three mode
+ * colors never change. An explicit font, density, or accent wins over the
+ * look's own defaults.
+ */
+export const LOOKS = ["standard", "crimson", "luna-xp"] as const;
+export type Look = (typeof LOOKS)[number];
+
+export const LOOK_DESCRIPTIONS: Record<Look, string> = {
+	standard: "the stock Fluid look",
+	crimson: "bold red and white institutional colors; no logos, names, or trademarks",
+	"luna-xp": "a Windows XP style from about 2001: blue title bars, a blue rail, bevelled buttons with a green primary, Tahoma-style web-safe fonts",
+};
+
 /** Chart widgets the platform computes over the user's own data. */
 export const WIDGETS = ["answers-by-intent", "confidence-distribution", "override-rate", "sources-by-kind", "intent-timeline", "gate-history"] as const;
 export type Widget = (typeof WIDGETS)[number];
@@ -45,6 +61,7 @@ export interface UiTab {
 }
 
 export interface UiPreferences {
+	look?: Look;
 	font?: FontKey;
 	density?: Density;
 	accent?: Accent;
@@ -53,7 +70,7 @@ export interface UiPreferences {
 
 export const DEFAULT_UI_PREFERENCES: UiPreferences = {};
 
-const TOP_KEYS = ["font", "density", "accent", "tabs"];
+const TOP_KEYS = ["look", "font", "density", "accent", "tabs"];
 const TAB_KEYS = ["title", "widgets"];
 /** Plain text: no control characters and no markup characters. */
 const PLAIN_TEXT = /^[^\u0000-\u001f\u007f-\u009f<>]+$/;
@@ -73,6 +90,7 @@ export function validateUiPreferences(value: unknown): UiValidation {
 	if (!isObject(value)) return { ok: false, errors: ["ui/preferences.json must be a JSON object"] };
 	const errors: string[] = [];
 	for (const key of Object.keys(value)) if (!TOP_KEYS.includes(key)) errors.push(`unknown key "${key}" (allowed: ${TOP_KEYS.join(", ")})`);
+	if (value.look !== undefined && !(LOOKS as readonly unknown[]).includes(value.look)) errors.push(`look must be one of ${oneOf(LOOKS)}`);
 	if (value.font !== undefined && !(typeof value.font === "string" && value.font in FONT_STACKS)) errors.push(`font must be one of ${oneOf(Object.keys(FONT_STACKS))}`);
 	if (value.density !== undefined && !(DENSITIES as readonly unknown[]).includes(value.density)) errors.push(`density must be ${oneOf(DENSITIES)}`);
 	if (value.accent !== undefined && !(ACCENTS as readonly unknown[]).includes(value.accent)) errors.push(`accent must be one of ${oneOf(ACCENTS)}`);

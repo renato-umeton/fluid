@@ -4,7 +4,7 @@
 // fields that explain the change.
 import { parseToml, setTomlValue } from "../lib/toml.ts";
 import { UI_PREFERENCES_PATH } from "../ui/preferences.ts";
-import { parseUiRequest, uiChange } from "./ui-recipe.ts";
+import { hasCodeContent, parseUiRequest, uiChange } from "./ui-recipe.ts";
 
 export type Recipe = { kind: "redcap" } | { kind: "tau"; value: number; direction: "lower" | "raise" | "set" } | { kind: "ui" };
 
@@ -33,8 +33,9 @@ export function matchRecipe(request: string): Recipe | null {
 		if (direction === "raise") return { kind: "tau", value: Number.NaN, direction };
 		if (direction === "lower") return { kind: "tau", value: Number.NaN, direction };
 	}
-	// Look and layout (fonts, density, accent colors, tabs with charts) is a declarative UI preference.
-	if (parseUiRequest(request)) return { kind: "ui" };
+	// Look and layout (a look, fonts, density, accent colors, tabs with charts) is a declarative UI
+	// preference, unless the request also changes answer content: then the model gets all of it.
+	if (parseUiRequest(request) && !hasCodeContent(request)) return { kind: "ui" };
 	return null;
 }
 

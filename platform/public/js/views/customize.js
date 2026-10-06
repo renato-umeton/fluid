@@ -3,6 +3,7 @@ import { api } from "../api.js";
 import { h, mount, json, statusTag } from "../dom.js";
 import { renderTimeline, renderDiff, renderGate, renderIntent, repairApply } from "./shared.js";
 import { renderHealth } from "../health.js";
+import { mergeOutcome, uiChanges } from "../ui-prefs.js";
 
 export const title = "Customize";
 export const sub = "Ask for a change in plain words. An agent writes it on a work branch with an intent record, proposes tests, and the gate decides whether it merges.";
@@ -12,9 +13,10 @@ const EXAMPLES = [
   "Lower my confidence threshold to 0.6",
   "Raise my confidence threshold to 0.9",
   "Use Palatino fonts and add a tab with charts",
+  "Make the look and feel like it is 2001 and we run on Windows XP",
 ];
 const POLL_MS = 600;
-const runs = new Map(); // persona id -> { runId, run }
+const runs = new Map(); // persona id -> { runId, run, uiBefore, applied }
 let current = null;
 let timer = null;
 
@@ -54,12 +56,21 @@ function isFinal(run) {
   return run && ["passed", "failed"].includes(run.status) && run.yellow?.health !== "yellow";
 }
 
+/** The change is on main once the run passed or its yellow phase started. */
+function merged(run) {
+  return run?.status === "passed" || Boolean(run?.yellow?.runId);
+}
+
+function touchesUi(run) {
+  return (run.intent?.files ?? (run.diff ?? []).map((d) => d.path)).includes("ui/preferences.json");
+}
+
 async function start(request) {
   if (!request) return;
   const { app } = current;
   try {
     const { runId } = await api.customize(app.fork.repo, request);
-    runs.set(app.persona.id, { runId, run: { id: runId, status: "running", steps: [], request } });
+    runs.set(app.persona.id, { runId, run: { id: runId, status: "running", steps: [], request }, uiBefore: structuredClone(app.ui ?? {}), applied: null });
     paint(runs.get(app.persona.id).run);
     poll();
   } catch (err) {
@@ -80,6 +91,10 @@ async function poll() {
   }
   if (current.app.persona.id !== persona || !current.root.isConnected) return;
   paint(entry.run);
+  if (merged(entry.run) && touchesUi(entry.run) && !entry.applied) {
+    entry.yellowSeen = entry.run.yellow?.runId;
+    await showApplied(entry, persona);
+  }
   // The change is live: refresh the fork once so the top bar shows the yellow badge.
   if (entry.run.yellow?.runId && entry.yellowSeen !== entry.run.yellow.runId) {
     entry.yellowSeen = entry.run.yellow.runId;
@@ -90,6 +105,42 @@ async function poll() {
     return;
   }
   timer = setTimeout(poll, POLL_MS);
+}
+
+/**
+ * After a UI change merges: reload the fork's preferences, say what changed,
+ * and open a tab the change added, so the result is in front of the user.
+ */
+async function showApplied(entry, persona) {
+  const { app } = current;
+  const repo = app.fork?.repo;
+  entry.applied = { lines: [], newTabs: [] };
+  try {
+    await app.refreshFork();
+  } catch {
+    entry.applied = null; // the next poll tries again
+    return;
+  }
+  // The user may have switched persona while the fork reloaded; app.ui is then another fork's.
+  if (app.persona.id !== persona || app.fork?.repo !== repo) {
+    entry.applied = null;
+    return;
+  }
+  entry.applied = uiChanges(entry.uiBefore, app.ui);
+  if (app.persona.id !== persona || !current.root.isConnected || app.view !== "customize") return;
+  paint(entry.run);
+  const tab = entry.applied.newTabs[0];
+  if (tab) app.go("tab", `i=${tab.index}`);
+}
+
+function appliedBox(run) {
+  const entry = runs.get(current.app.persona.id);
+  const done = entry?.run?.id === run.id ? entry.applied : null;
+  if (!done) return null;
+  const outcome = mergeOutcome(run, done);
+  return h("div", { class: "applied", role: "status", dataset: { state: outcome.state } },
+    h("p", {}, outcome.text),
+    outcome.open && done.newTabs.length ? h("div", { class: "row" }, done.newTabs.map((t) => h("button", { type: "button", class: "btn btn-primary", onclick: () => current.app.go("tab", `i=${t.index}`) }, `Open ${t.title}`))) : null);
 }
 
 function paint(run) {
@@ -105,7 +156,7 @@ function paint(run) {
     return;
   }
   mount($("#run-status"), statusTag(run.status));
-  mount($("#run-steps"), h("p", { class: "small", style: { marginBottom: "10px" } }, h("strong", {}, "Request: "), run.request ?? ""), renderTimeline(run.steps),
+  mount($("#run-steps"), appliedBox(run), h("p", { class: "small", style: { marginBottom: "10px" } }, h("strong", {}, "Request: "), run.request ?? ""), renderTimeline(run.steps),
     run.status === "failed" && run.error ? h("div", { class: "explain", role: "status", style: { marginTop: "10px" } }, h("strong", {}, "Why the run stopped: "), run.error) : null,
     run.intent?.mapped?.length ? h("div", { class: "explain", style: { marginTop: "10px" } }, h("strong", {}, "How your request was mapped: "), h("ul", { class: "framing" }, run.intent.mapped.map((m) => h("li", {}, m)))) : null);
   mount($("#run-branch"), run.branch ? h("code", {}, `${run.branch}${run.commit ? ` at ${run.commit.slice(0, 7)}` : ""}`) : "");

@@ -38,6 +38,13 @@ describe("uiInvariant (tier 1, platform)", () => {
 		expect(String(out.failure!.actual)).toContain("font must be one of");
 	});
 
+	it("passes an allowlisted look and names the look in the failure description", () => {
+		expect(uiInvariant(JSON.stringify({ look: "luna-xp" }))!.probe.passed).toBe(true);
+		const out = uiInvariant(JSON.stringify({ look: "st-jude" }))!;
+		expect(String(out.failure!.actual)).toContain("look must be one of");
+		expect(out.failure!.description).toContain("look");
+	});
+
 	it("fails a file that is not JSON", () => {
 		expect(String(uiInvariant("font = palatino")!.failure!.actual)).toContain("not valid JSON");
 	});

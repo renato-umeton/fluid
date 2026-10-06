@@ -5,7 +5,8 @@
 // with timers so every demo scene works without a backend.
 import { SYNTHETIC } from "./synthetic.js";
 import { cannedCard } from "./mock-canned.js";
-import { sanitizePreferences, FONT_LABELS, WIDGET_LABELS } from "./ui-prefs.js";
+import { sanitizePreferences } from "./ui-prefs.js";
+import { mappedLines, matchRecipe, mergeUiRequest, parseUiRequest, tauTarget } from "./ui-recipe.js";
 
 const STOCK_MIN_TAU = 0.85;
 const STOCK_TAG = "v1.0.0";
@@ -305,12 +306,15 @@ function startCustomize(body) {
   if (!fork) throw new HttpError(404, `Fork ${body?.repo} not found`);
   const text = String(body?.request ?? "").trim();
   if (!text) throw new HttpError(400, "Describe the change you want");
-  const tauMatch = text.match(/\b(0?\.\d+|1(?:\.0+)?)\b/);
-  const uiMapping = /redcap/i.test(text) || (/(threshold|tau|τ)/i.test(text) && tauMatch) ? null : mapUiRequest(text);
-  const script = /redcap/i.test(text) ? redcapScript : /(threshold|tau|τ)/i.test(text) && tauMatch ? tauScript(Number(tauMatch[1])) : uiMapping ? uiScript(uiMapping) : genericScript;
+  // The same routing as the platform (platform/src/agents/recipes.ts): REDCap, tau, then UI preferences.
+  const recipe = matchRecipe(text);
+  const script = recipe?.kind === "redcap" ? redcapScript
+    : recipe?.kind === "tau" ? tauScript(tauTarget(recipe, fork.tau))
+    : recipe?.kind === "ui" ? uiScript(parseUiRequest(text))
+    : notMappedScript;
   const id = `run_${hex(10)}`;
   const intentId = nextIntentId();
-  const slug = /redcap/i.test(text) ? "redcap-enrollment" : uiMapping ? "ui-preferences" : script === genericScript ? "custom-change" : "tau-threshold";
+  const slug = recipe?.kind === "redcap" ? "redcap-enrollment" : recipe?.kind === "ui" ? "ui-preferences" : "tau-threshold";
   const run = {
     id, kind: "customize", status: "running", repo: fork.repo, request: text, startedAt: now(),
     branch: null, commit: null, diff: [], intent: null, suggestions: [], gate: null,
@@ -578,35 +582,32 @@ function tauScript(target) {
   };
 }
 
-function genericScript(run) {
-  const { fork, intentId, persona } = run._ctx;
+/** Requests that need code. Mock mode has no model to write it, so the run says so instead of faking a change. */
+const MOCK_EXAMPLES = [
+  'fonts ("Use Palatino fonts", "a monospace font")',
+  'density ("Make the layout compact")',
+  'accent colors ("Make the buttons teal", "make the look red")',
+  'looks ("I want the St. Jude look and feel" for crimson, "make it look like Windows XP" for luna-xp, "reset the look")',
+  'chart tabs ("add a page of charts", "add a dashboard tab showing my override rate")',
+  'REDCap ("Add a REDCap connector so research mode reports enrollment for my protocols")',
+  'tau ("Lower my confidence threshold to 0.6")',
+];
+
+function notMappedScript(run) {
+  return stopScript(run, `Not mapped: this request names no look, font, density, accent color, chart tab, REDCap connector, or tau change, and mock mode has no model to write code. Nothing was changed. Requests that work here: ${MOCK_EXAMPLES.join("; ")}.`, "No recipe matched, and mock mode has no model");
+}
+
+/** A failed run that stops at planning: no diff, no intent record, no branch, no merge. */
+function stopScript(run, message, detail = message) {
+  const { fork } = run._ctx;
   return [
-    { name: "Read the fork's intent ledger", ms: 800, done: (r, v) => { v.detail = `${db.intents[fork.repo].length} build-time records read`; } },
-    { name: "Plan the change", ms: 900, done: (r, v) => { v.detail = "Presentation-only change in app/cards.js"; } },
-    { name: "Write code", ms: 1000, done: (r, v) => { run.diff = [{ path: "app/cards.js", status: "modified", additions: 9, deletions: 3, summary: run._ctx.text }]; v.detail = "1 file changed"; } },
+    { name: "Read the fork's intent ledger", ms: 600, done: (r, v) => { v.detail = `${db.intents[fork.repo].length} build-time records read`; } },
     {
-      name: "Record build-time intent", ms: 600,
+      name: "Plan the change", ms: 700,
       done: (r, v) => {
-        run.intent = { id: intentId, author: `user:${persona.id}`, agent: "customization-agent", request: run._ctx.text, purpose: run._ctx.text, modes_affected: ["clinical", "research", "administrative"], files: ["app/cards.js"], tests_added: [], stock_tag: fork.stockTag };
-        v.detail = `.intent/${intentId}.json`;
-      },
-    },
-    pushStep(run),
-    suggestStep(run, () => [{
-      id: "t-card-renders", title: "Answer cards keep every required field", file: "tests/user/card_fields.json", intentId, decision: null,
-      rationale: "The change edits card rendering, so this checks the card still carries the badge, override, sources, and ledger record.",
-      probe: { request: { question: "Is Morphinex on formulary?", context: { documentType: "budget" } }, assert: [{ path: "override_available", equals: true }, { path: "ledger.answer_id", exists: true }] },
-    }]),
-    ...gateSteps(run, []),
-    {
-      name: "Merge to main and deploy", ms: 800,
-      done: (r, v) => {
-        fork.head = hex(40);
-        fork.branches = fork.branches.filter((b) => b.name !== run.branch);
-        fork.branches[0].commit = fork.head;
-        db.intents[fork.repo].unshift({ ...run.intent, commit: fork.head.slice(0, 7), at: now() });
-        v.detail = `main is now ${fork.head.slice(0, 7)}`;
-        startMockYellow(fork, run);
+        v.detail = detail;
+        run.error = message;
+        return "failed";
       },
     },
   ];
@@ -621,47 +622,32 @@ function forkUi(repo) {
   return { repo, commit: fork.head, path: "ui/preferences.json", present: Boolean(db.ui[repo]), valid: true, preferences };
 }
 
-/** A small stand-in for the platform's request mapping (platform/src/agents/ui-recipe.ts). */
-function mapUiRequest(text) {
-  const out = { prefs: {}, notes: [] };
-  const font = [["palatino", /palatino|book antiqua|lino ?type/i], ["georgia", /georgia|\bserif\b(?!.*sans)/i], ["humanist-sans", /humanist|optima|sans/i], ["mono", /\bmono/i], ["system", /system font/i]].find(([, re]) => re.test(text));
-  if (font) { out.prefs.font = font[0]; out.notes.push(`font "${font[0]}" (${FONT_LABELS[font[0]]})`); }
-  if (/\b(compact|dense|tighter)\b/i.test(text)) { out.prefs.density = "compact"; out.notes.push('density "compact"'); }
-  else if (/\b(comfortable|spacious|roomy)\b/i.test(text)) { out.prefs.density = "comfortable"; out.notes.push('density "comfortable"'); }
-  const accent = /\b(colou?r|accent|theme|buttons?|links?)\b/i.test(text) && [["teal", /teal|cyan/i], ["blue", /blue|navy/i], ["violet", /violet|purple/i], ["amber", /amber|orange|gold/i], ["green", /green/i], ["rose", /rose|pink|red\b/i], ["slate", /slate|gr[ae]y/i]].find(([, re]) => re.test(text));
-  if (accent) { out.prefs.accent = accent[0]; out.notes.push(`accent "${accent[0]}"`); }
-  if (/\b(tabs?|dashboards?|pages?)\b/i.test(text) && /\b(charts?|graphs?|dashboards?|stats|metrics)\b/i.test(text)) {
-    const title = /dashboard/i.test(text) ? "Dashboard" : "Charts";
-    out.tab = { title, widgets: Object.keys(WIDGET_LABELS) };
-    out.notes.push(`tab "${title}" with the default set of ${out.tab.widgets.length} charts`);
-  }
-  return out.notes.length ? out : null;
-}
-
+/** The ui recipe in mock mode: the same merge as uiChange in platform/src/agents/ui-recipe.ts. */
 function uiScript(mapping) {
   return (run) => {
     const { fork, intentId, persona } = run._ctx;
-    const next = { ...(db.ui[fork.repo] ?? {}), ...mapping.prefs };
-    if (mapping.tab) next.tabs = [...(next.tabs ?? []).filter((t) => t.title !== mapping.tab.title), mapping.tab].slice(-4);
-    const prefs = sanitizePreferences(next);
+    const merged = mergeUiRequest(db.ui[fork.repo] ?? null, mapping);
+    if (!merged.ok) return stopScript(run, merged.error);
+    const prefs = merged.prefs;
+    const notes = mappedLines(mapping.notes);
     const assert = [
-      ...["font", "density", "accent"].filter((k) => prefs[k]).map((k) => ({ path: k, equals: prefs[k] })),
+      ...["look", "font", "density", "accent"].filter((k) => prefs[k]).map((k) => ({ path: k, equals: prefs[k] })),
       ...(prefs.tabs ?? []).map((t) => ({ path: "tabs", some: { path: "title", equals: t.title } })),
     ];
     return [
       { name: "Read the fork's intent ledger", ms: 700, done: (r, v) => { v.detail = `${db.intents[fork.repo].length} build-time records read`; } },
-      { name: "Plan the change", ms: 800, done: (r, v) => { v.detail = `Matched the ui recipe. Mapped: ${mapping.notes.join("; ")}`; } },
+      { name: "Plan the change", ms: 800, done: (r, v) => { v.detail = `Matched the ui recipe. Mapped: ${notes.join("; ")}`; } },
       {
         name: "Write code and load it in an isolate", ms: 700,
         done: (r, v) => {
-          run.diff = [{ path: "ui/preferences.json", status: db.ui[fork.repo] ? "modified" : "added", additions: 8, deletions: 0, summary: `Mapped: ${mapping.notes.join("; ")}` }];
+          run.diff = [{ path: "ui/preferences.json", status: db.ui[fork.repo] ? "modified" : "added", additions: 8, deletions: 0, summary: `Mapped: ${notes.join("; ")}` }];
           v.detail = "ui/preferences.json matches the UI preferences schema; no runtime code changed, so answer cards keep the stock contract";
         },
       },
       {
         name: "Record build-time intent", ms: 500,
         done: (r, v) => {
-          run.intent = { id: intentId, author: `user:${persona.id}`, agent: "customization-agent", request: run._ctx.text, purpose: "Change how this fork's control plane looks for its owner. UI preferences are declarative, validated by the platform, and never change answer cards.", modes_affected: [], files: ["ui/preferences.json", `.intent/${intentId}.json`], tests_added: [], stock_tag: fork.stockTag, recipe: "ui", mapped: mapping.notes };
+          run.intent = { id: intentId, author: `user:${persona.id}`, agent: "customization-agent", request: run._ctx.text, purpose: "Change how this fork's control plane looks for its owner. UI preferences are declarative, validated by the platform, and never change answer cards.", modes_affected: [], files: ["ui/preferences.json", `.intent/${intentId}.json`], tests_added: [], stock_tag: fork.stockTag, recipe: "ui", mapped: notes };
           run.diff.push({ path: `.intent/${intentId}.json`, status: "added", additions: 14, deletions: 0, summary: "Why this change exists" });
           v.detail = `.intent/${intentId}.json`;
         },

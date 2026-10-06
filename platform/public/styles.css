@@ -532,6 +532,9 @@ dialog::backdrop { background: rgba(15, 25, 30, 0.45); }
 .release-form { display: grid; gap: 10px; }
 .drill { display: grid; gap: 12px; }
 .explain { border-left: 3px solid var(--warn); padding: 8px 12px; background: var(--warn-bg); font-size: var(--fs-sm); }
+.applied { border-left: 3px solid var(--pass); padding: 10px 12px; background: var(--pass-bg); font-size: var(--fs-sm); display: grid; gap: 8px; margin-bottom: 12px; }
+.applied[data-state="yellow"] { border-left-color: var(--yellow); background: var(--yellow-bg); }
+.applied[data-state="rolled_back"], .applied[data-state="failed"] { border-left-color: var(--fail); background: var(--fail-bg); }
 .event-log { list-style: none; margin: 0; padding: 0; font-family: var(--mono); font-size: 11px; max-height: 160px; overflow-y: auto; color: var(--ink-2); }
 .event-log li { padding: 2px 0; border-bottom: 1px dotted var(--line); }
 
@@ -595,6 +598,192 @@ dialog::backdrop { background: rgba(15, 25, 30, 0.45); }
 }
 
 /* ---------- Fork UI preferences (ui/preferences.json, validated by the platform) ---------- */
+/* Looks: whole sets of colors, weights, and shapes (key "look"). They come
+   before the font, density, and accent rules below, so an explicit font,
+   density, or accent wins over a look's own defaults. Colors only: no images,
+   loaded fonts, logos, or names, and the three mode colors and answer cards
+   never change. Each look has a light set and a dark set of values. */
+
+/* Crimson: bold red and white institutional colors. */
+:root[data-look="crimson"] {
+  --paper: #f3f2f2;
+  --panel: #ffffff;
+  --panel-2: #f8f4f4;
+  --ink: #232323;
+  --ink-2: #4b4b4b;
+  --ink-3: #6b6b6b;
+  --line: #e2dbdc;
+  --line-strong: #bfb3b5;
+  --rail: #a3182c;
+  --rail-ink: #ffffff;
+  --rail-ink-2: #f7d7dc;
+  --rail-hi: #82101f;
+  --look-band: #a3182c;
+  --accent-l: #c3102c;
+  --accent-d: #ff8a9b;
+  --link: var(--accent);
+  --focus: var(--accent);
+  --rail-accent: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-look="crimson"]:not([data-theme="light"]) {
+    --paper: #151212;
+    --panel: #1f1a1b;
+    --panel-2: #282122;
+    --ink: #f2eded;
+    --ink-2: #c8bbbd;
+    --ink-3: #9d8f91;
+    --line: #3b3133;
+    --line-strong: #5a4a4d;
+    --rail: #6f0e1c;
+    --rail-ink-2: #f0c3ca;
+    --rail-hi: #8f1627;
+    --look-band: #8f1627;
+  }
+}
+:root[data-look="crimson"][data-theme="dark"] {
+  --paper: #151212;
+  --panel: #1f1a1b;
+  --panel-2: #282122;
+  --ink: #f2eded;
+  --ink-2: #c8bbbd;
+  --ink-3: #9d8f91;
+  --line: #3b3133;
+  --line-strong: #5a4a4d;
+  --rail: #6f0e1c;
+  --rail-ink-2: #f0c3ca;
+  --rail-hi: #8f1627;
+  --look-band: #8f1627;
+}
+:root[data-look="crimson"] h1, :root[data-look="crimson"] h2 { font-weight: 700; letter-spacing: -0.005em; }
+:root[data-look="crimson"] .brand-name { font-weight: 700; }
+:root[data-look="crimson"] .topbar { border-top: 6px solid var(--look-band); border-bottom: 2px solid var(--look-band); }
+:root[data-look="crimson"] .notice-bar { border-bottom-color: var(--look-band); }
+:root[data-look="crimson"] .panel { border-top: 3px solid var(--look-band); }
+:root[data-look="crimson"] .btn-primary { font-weight: 700; }
+:root[data-look="crimson"] .nav-btn[aria-current="page"] { font-weight: 700; }
+
+/* Luna XP: a Windows XP style from about 2001. Web-safe fonts at a slightly smaller size. */
+:root[data-look="luna-xp"] {
+  --sans: Tahoma, Verdana, "Segoe UI", sans-serif;
+  --fs-xs: 0.6875rem;
+  --fs-sm: 0.75rem;
+  --fs-md: 0.8125rem;
+  --fs-lg: 1rem;
+  --fs-xl: 1.25rem;
+  --fs-2xl: 1.625rem;
+  --r-sm: 3px;
+  --paper: #d6e8f8;
+  --panel: #ffffff;
+  --panel-2: #f1efe2;
+  --ink: #111111;
+  --ink-2: #3b3b3b;
+  --ink-3: #5c5c5c;
+  --line: #cfcab8;
+  --line-strong: #7f9db9;
+  --rail: #2160d8;
+  --rail-ink: #ffffff;
+  --rail-ink-2: #dce8ff;
+  --rail-hi: #1645b0;
+  --accent-l: #0050d8;
+  --accent-d: #8db6ff;
+  --link: var(--accent);
+  --focus: var(--accent);
+  --rail-accent: #ffc23d;
+  --xp-desktop: linear-gradient(180deg, #8ec3f0 0%, #c9e3f9 40%, #d9eecb 78%, #a4d585 100%);
+  --xp-rail: linear-gradient(180deg, #3d7fee 0%, #2763dd 35%, #1c50c6 100%);
+  --xp-title: linear-gradient(180deg, #0a5ce6 0%, #3d8ef7 9%, #2a72ea 45%, #1b5ad6 88%, #1650c4 100%);
+  --xp-title-ink: #ffffff;
+  --xp-frame: #0c3fc4;
+  --xp-bar: linear-gradient(180deg, #fbfaf6 0%, #ecead9 100%);
+  --xp-btn: linear-gradient(180deg, #ffffff 0%, #f4f3ee 55%, #dcd8ca 100%);
+  --xp-btn-ink: #111111;
+  --xp-btn-border: #2c4c8a;
+  --xp-btn-hover: inset 0 2px 0 #ffe2a0, inset 0 -2px 0 #f2a628;
+  --xp-input-border: #7f9db9;
+  --xp-input-shade: inset 1px 1px 0 #b9c4d0;
+  --xp-start: linear-gradient(180deg, #67c45a 0%, #3d9f2f 48%, #2f8a23 100%);
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-look="luna-xp"]:not([data-theme="light"]) {
+    --paper: #13213a;
+    --panel: #1b2333;
+    --panel-2: #242e42;
+    --ink: #eef2fa;
+    --ink-2: #bcc6da;
+    --ink-3: #93a0b8;
+    --line: #34415b;
+    --line-strong: #5874a6;
+    --rail-ink-2: #c9d8f5;
+    --rail-hi: #0e2f80;
+    --xp-desktop: linear-gradient(180deg, #0c1b38 0%, #13284a 55%, #15301f 100%);
+    --xp-rail: linear-gradient(180deg, #1f48a8 0%, #163c90 40%, #0f2c6e 100%);
+    --xp-title: linear-gradient(180deg, #0a49c0 0%, #2a6fd8 9%, #1b57c0 45%, #1446a6 100%);
+    --xp-frame: #2f5fc8;
+    --xp-bar: linear-gradient(180deg, #232c3f 0%, #1b2333 100%);
+    --xp-btn: linear-gradient(180deg, #46536f 0%, #343f57 55%, #29324a 100%);
+    --xp-btn-ink: #eef2fa;
+    --xp-btn-border: #7d97cc;
+    --xp-input-border: #6f88b4;
+    --xp-input-shade: inset 1px 1px 0 #0b1222;
+    --xp-start: linear-gradient(180deg, #4fa845 0%, #2f8526 50%, #23701b 100%);
+  }
+}
+:root[data-look="luna-xp"][data-theme="dark"] {
+  --paper: #13213a;
+  --panel: #1b2333;
+  --panel-2: #242e42;
+  --ink: #eef2fa;
+  --ink-2: #bcc6da;
+  --ink-3: #93a0b8;
+  --line: #34415b;
+  --line-strong: #5874a6;
+  --rail-ink-2: #c9d8f5;
+  --rail-hi: #0e2f80;
+  --xp-desktop: linear-gradient(180deg, #0c1b38 0%, #13284a 55%, #15301f 100%);
+  --xp-rail: linear-gradient(180deg, #1f48a8 0%, #163c90 40%, #0f2c6e 100%);
+  --xp-title: linear-gradient(180deg, #0a49c0 0%, #2a6fd8 9%, #1b57c0 45%, #1446a6 100%);
+  --xp-frame: #2f5fc8;
+  --xp-bar: linear-gradient(180deg, #232c3f 0%, #1b2333 100%);
+  --xp-btn: linear-gradient(180deg, #46536f 0%, #343f57 55%, #29324a 100%);
+  --xp-btn-ink: #eef2fa;
+  --xp-btn-border: #7d97cc;
+  --xp-input-border: #6f88b4;
+  --xp-input-shade: inset 1px 1px 0 #0b1222;
+  --xp-start: linear-gradient(180deg, #4fa845 0%, #2f8526 50%, #23701b 100%);
+}
+:root[data-look="luna-xp"] body { background: var(--xp-desktop) fixed; background-color: var(--paper); }
+:root[data-look="luna-xp"] .rail { background: var(--xp-rail); border-right: 1px solid var(--xp-frame); }
+:root[data-look="luna-xp"] .topbar { background: var(--xp-bar); border-bottom: 1px solid var(--line-strong); }
+:root[data-look="luna-xp"] .panel { border: 1px solid var(--xp-frame); border-radius: 8px 8px 3px 3px; box-shadow: 2px 2px 4px rgba(0, 0, 0, 0.18); }
+:root[data-look="luna-xp"] .panel-head {
+  background: var(--xp-title); color: var(--xp-title-ink); border-radius: 7px 7px 0 0;
+  align-items: center; padding: 5px 10px; margin-bottom: 10px;
+}
+:root[data-look="luna-xp"] .panel-head h2, :root[data-look="luna-xp"] .panel-head h3 { color: var(--xp-title-ink); font-size: var(--fs-md); font-weight: 700; text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.45); }
+:root[data-look="luna-xp"] .panel-head p, :root[data-look="luna-xp"] .panel-head .muted { color: #e4edff; }
+:root[data-look="luna-xp"] .panel-head :focus-visible { outline-color: #ffffff; }
+:root[data-look="luna-xp"] .viz.panel { align-content: start; }
+:root[data-look="luna-xp"] .btn {
+  background: var(--xp-btn); color: var(--xp-btn-ink); border: 1px solid var(--xp-btn-border); border-radius: 3px;
+  box-shadow: inset 1px 1px 0 rgba(255, 255, 255, 0.7), inset -1px -1px 0 rgba(0, 0, 0, 0.12);
+}
+:root[data-look="luna-xp"] .btn:hover { box-shadow: var(--xp-btn-hover); opacity: 1; }
+:root[data-look="luna-xp"] .btn-quiet { background: transparent; border-color: transparent; box-shadow: none; }
+:root[data-look="luna-xp"] .btn-danger { color: var(--fail); }
+:root[data-look="luna-xp"] .btn-primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+/* The green Start-style primary, unless the fork picked its own accent. */
+:root[data-look="luna-xp"]:not([data-accent]) .btn-primary {
+  background: var(--xp-start); color: #ffffff; border-color: #1d6614; border-radius: 4px 12px 12px 4px;
+  font-weight: 700; font-style: italic; text-shadow: 1px 1px 1px rgba(0, 0, 0, 0.5); padding-right: 16px;
+}
+:root[data-look="luna-xp"] :is(input[type="text"], input[type="password"], input[type="search"], select, textarea) {
+  border: 1px solid var(--xp-input-border); border-radius: 0; box-shadow: var(--xp-input-shade);
+}
+:root[data-look="luna-xp"] .rail-foot button { border-color: rgba(255, 255, 255, 0.5); }
+:root[data-look="luna-xp"] .fork-pill { border-radius: 3px; border-color: var(--line-strong); }
+:root[data-look="luna-xp"][data-density="compact"] { --fs-md: 0.75rem; --fs-sm: 0.6875rem; --fs-lg: 0.9375rem; }
+
 /* Web-safe font stacks only; keep in step with FONT_STACKS in platform/src/ui/preferences.ts. */
 :root[data-font="system"] { --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
 :root[data-font="palatino"] { --sans: "Palatino Linotype", "Book Antiqua", Palatino, serif; }

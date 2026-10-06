@@ -85,6 +85,6 @@ export function failureExplanation(input: { attempts: number; error: string; las
 		"Fluid could not apply this change, so nothing was committed: no branch was written and main is unchanged.",
 		attempted,
 		`Why it could not be loaded, after ${tries}: ${userFacingError(input.error)}.`,
-		"What you can try: ask for a smaller change and name the answer mode or file it should affect. For look and layout (fonts, density, accent colors, a tab with charts), ask for that directly, for example \"Use Palatino fonts and add a tab with charts\"; those go into ui/preferences.json without code.",
+		"What you can try: ask for a smaller change and name the answer mode or file it should affect. For look and layout (a whole look such as crimson or luna-xp, fonts, density, accent colors, a tab with charts), ask for that directly, for example \"Use Palatino fonts and add a tab with charts\"; those go into ui/preferences.json without code.",
 	].join(" ");
 }

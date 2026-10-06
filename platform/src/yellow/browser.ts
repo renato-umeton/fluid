@@ -93,15 +93,18 @@ export function bedsideCheck(card: { mode: string | null; text: string; override
 }
 
 /** The UI preferences check from the root attributes and the rail tabs the page shows. */
-export function preferencesCheck(prefs: UiPreferences, page: { font: string | null; density: string | null; accent: string | null; tabs: string[] }): BrowserCheck {
+export function preferencesCheck(prefs: UiPreferences, page: { look: string | null; font: string | null; density: string | null; accent: string | null; tabs: string[] }): BrowserCheck {
 	const name = "The fork's UI preferences render";
 	const problems: string[] = [];
+	// The standard look is the same as no look, so the page shows no attribute for it.
+	const look = prefs.look && prefs.look !== "standard" ? prefs.look : null;
+	if (look !== page.look) problems.push(`look ${page.look ?? "default"}, expected ${look ?? "default"}`);
 	if ((prefs.font ?? null) !== page.font) problems.push(`font ${page.font ?? "default"}, expected ${prefs.font ?? "default"}`);
 	if ((prefs.density === "compact" ? "compact" : null) !== page.density) problems.push(`density ${page.density ?? "default"}`);
 	if ((prefs.accent ?? null) !== page.accent) problems.push(`accent ${page.accent ?? "default"}, expected ${prefs.accent ?? "default"}`);
 	const expectedTabs = (prefs.tabs ?? []).map((t) => t.title);
 	if (JSON.stringify(expectedTabs) !== JSON.stringify(page.tabs)) problems.push(`tabs [${page.tabs.join(", ")}], expected [${expectedTabs.join(", ")}]`);
-	const described = [prefs.font ? `font ${prefs.font}` : null, expectedTabs.length ? `tabs ${expectedTabs.join(", ")}` : null].filter(Boolean).join(", ") || "defaults";
+	const described = [look ? `look ${look}` : null, prefs.font ? `font ${prefs.font}` : null, expectedTabs.length ? `tabs ${expectedTabs.join(", ")}` : null].filter(Boolean).join(", ") || "defaults";
 	return { name, passed: problems.length === 0, detail: problems.length ? problems.join("; ") : `${described} as configured` };
 }
 
@@ -179,6 +182,7 @@ export async function runBrowserChecks(binding: Fetcher, input: BrowserRunInput)
 		const shown = await page.evaluate(() => {
 			const doc = (globalThis as unknown as PageGlobal).document;
 			return {
+				look: doc.documentElement.getAttribute("data-look"),
 				font: doc.documentElement.getAttribute("data-font"),
 				density: doc.documentElement.getAttribute("data-density"),
 				accent: doc.documentElement.getAttribute("data-accent"),
