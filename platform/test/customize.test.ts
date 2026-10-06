@@ -39,6 +39,11 @@ describe("validateCandidate", () => {
 describe("planPrompt", () => {
 	const prompt = planPrompt("Use Palatino and add a chart tab", files, 'imports do not resolve: app/cards.ts imports "./cards.base.js"');
 
+	it("adds a contest plan's approach before the request, and nothing without one", () => {
+		expect(planPrompt("Add a summary", files, null, "Write the smallest change.")).toContain("Approach: Write the smallest change.\n\nUser request: Add a summary");
+		expect(planPrompt("Add a summary", files, null)).not.toContain("Approach:");
+	});
+
 	it("sends the exact previous error back", () => {
 		expect(prompt).toContain('Your previous attempt failed with this exact error. Fix it:\nimports do not resolve: app/cards.ts imports "./cards.base.js"');
 	});

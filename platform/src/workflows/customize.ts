@@ -26,15 +26,12 @@ import { isRuntimePath, transformTs } from "../runtime/modules.ts";
 import { headOf, openRepo, readCommitFiles } from "../runtime/repo-files.ts";
 import { fleetStub, runsStub } from "../stubs.ts";
 import { parseUiPreferences, UI_PREFERENCES_PATH, uiPreferencesJson } from "../ui/preferences.ts";
-import { appExports, ensureRun, errorText, GIT_STEP, linkGateParent, repoRemote, runLog, startGateInstance, guarded, steps, type CustomizeParams, type Steps } from "./common.ts";
+import { appExports, ensureRun, errorText, GIT_STEP, linkGateParent, repoRemote, runLog, startGateInstance, guarded, steps, waitForRun, type CustomizeParams } from "./common.ts";
 
 export const MODEL_LIMITS = { maxFiles: 3, maxFileChars: 16_000 };
 const MODEL_PATH = /^(app|intent|policies|connectors)\/[A-Za-z0-9_-]+(\/[A-Za-z0-9_-]+)*\.(ts|json)$/;
 const PLAN_TIMEOUT = "15 minutes";
 const DECISION_TIMEOUT = "1 hour";
-/** Waiting for the gate or repair: up to WAIT_ROUNDS event waits of WAIT_EACH each (about 30 minutes). */
-const WAIT_ROUNDS = 30;
-const WAIT_EACH = "1 minute";
 
 const PLAN_SCHEMA = {
 	type: "object",
@@ -286,10 +283,10 @@ export class CustomizeWorkflow extends WorkflowEntrypoint<Env, CustomizeParams> 
 
 		// The gate reports back with an event (gate-finished). A re-gate after main moved hands the
 		// report to the next gate run, so the final run id comes from the event or the run chain.
-		const final = await this.waitForRun(step, "gate", "gate-finished", gate.runId, (run) => (typeof run.regateRunId === "string" ? run.regateRunId : null));
+		const final = await waitForRun(this.env, step, "gate", "gate-finished", gate.runId, (run) => (typeof run.regateRunId === "string" ? run.regateRunId : null));
 
 		if (final.passed === false && final.repairRunId) {
-			await this.waitForRun(step, "repair", "repair-finished", final.repairRunId, () => null);
+			await waitForRun(this.env, step, "repair", "repair-finished", final.repairRunId, () => null);
 		}
 
 		await step.do("finish", async () => {
@@ -305,62 +302,36 @@ export class CustomizeWorkflow extends WorkflowEntrypoint<Env, CustomizeParams> 
 		return { passed: final.passed, branch: recorded.branch, commit };
 	}
 
-	/**
-	 * Waits for a gate or repair run to finish: the run sends an event when it
-	 * does, and the run record is checked after each wait, so a lost or early
-	 * event only costs one wait. Bounded to WAIT_ROUNDS waits of WAIT_EACH,
-	 * two steps per round, well inside the per-instance step limit.
-	 */
-	private async waitForRun(step: Steps, label: string, eventType: string, firstRunId: string, next: (run: Record<string, unknown>) => string | null): Promise<{ runId: string; status: string; passed: boolean | null; repairRunId: string | null }> {
-		let runId = firstRunId;
-		for (let i = 0; i < WAIT_ROUNDS; i++) {
-			const state = await step.do(`check ${label} ${i}`, async () => {
-				let id = runId;
-				for (let hops = 0; hops < 4; hops++) {
-					const run = await runsStub(this.env, id).get();
-					if (!run || run.status === "running" || run.status === "queued") return { runId: id, done: false, status: "running", passed: null as boolean | null, repairRunId: null as string | null };
-					const forward = next(run as unknown as Record<string, unknown>);
-					if (forward) {
-						id = forward;
-						continue;
-					}
-					return { runId: id, done: true, status: run.status, passed: run.status === "passed" || run.status === "waiting", repairRunId: typeof run.repairRunId === "string" ? run.repairRunId : null };
-				}
-				return { runId: id, done: false, status: "running", passed: null as boolean | null, repairRunId: null as string | null };
-			});
-			runId = state.runId;
-			if (state.done) return state;
-			try {
-				await step.waitForEvent(`${label} finished ${i}`, { type: eventType, timeout: WAIT_EACH });
-			} catch {
-				// Timed out: the next round checks the run record again.
-			}
-		}
-		return { runId, status: "running", passed: null, repairRunId: null };
-	}
 
-
-	/** One model plan. A plan that breaks the file rules is a CandidateError, so its exact problem goes back to the model. */
 	private async modelPlan(request: string, files: Record<string, string>, feedback: string | null): Promise<PlannedChange> {
-		let out: Record<string, unknown>;
-		try {
-			out = await callModel(this.env.AI, planPrompt(request, files, feedback), PLAN_SCHEMA, { model: AGENT_MODEL, maxTokens: 6000 });
-		} catch (error) {
-			if (/not JSON|missing required key|should be|no content|not a JSON object/.test(errorText(error))) throw new CandidateError(`the plan was not valid JSON for the schema: ${errorText(error)}`);
-			throw error;
-		}
-		const list = (Array.isArray(out.files) ? out.files : []) as { path: string; content: string }[];
-		const problem = checkModelFiles(list);
-		if (problem) throw new CandidateError(`the plan was rejected: ${problem}`);
-		return {
-			summary: cleanText(String(out.summary), 200),
-			purpose: cleanText(String(out.purpose), 400),
-			modes_affected: (Array.isArray(out.modes_affected) ? out.modes_affected : []).map(String),
-			files: Object.fromEntries(list.map((f) => [f.path, f.content])),
-			notes: Object.fromEntries(list.map((f) => [f.path, files[f.path] === undefined ? "New file written by the customization agent" : "Edited by the customization agent"])),
-			recipe: "model",
-		};
+		return modelPlan(this.env, request, files, feedback);
 	}
+}
+
+/**
+ * One model plan. A plan that breaks the file rules is a CandidateError, so
+ * its exact problem goes back to the model. A contest passes a style (an
+ * extra instruction) and a temperature, so its model plans differ.
+ */
+export async function modelPlan(env: Env, request: string, files: Record<string, string>, feedback: string | null, variant: { style?: string; temperature?: number } = {}): Promise<PlannedChange> {
+	let out: Record<string, unknown>;
+	try {
+		out = await callModel(env.AI, planPrompt(request, files, feedback, variant.style), PLAN_SCHEMA, { model: AGENT_MODEL, maxTokens: 6000, ...(variant.temperature !== undefined ? { temperature: variant.temperature } : {}) });
+	} catch (error) {
+		if (/not JSON|missing required key|should be|no content|not a JSON object/.test(errorText(error))) throw new CandidateError(`the plan was not valid JSON for the schema: ${errorText(error)}`);
+		throw error;
+	}
+	const list = (Array.isArray(out.files) ? out.files : []) as { path: string; content: string }[];
+	const problem = checkModelFiles(list);
+	if (problem) throw new CandidateError(`the plan was rejected: ${problem}`);
+	return {
+		summary: cleanText(String(out.summary), 200),
+		purpose: cleanText(String(out.purpose), 400),
+		modes_affected: (Array.isArray(out.modes_affected) ? out.modes_affected : []).map(String),
+		files: Object.fromEntries(list.map((f) => [f.path, f.content])),
+		notes: Object.fromEntries(list.map((f) => [f.path, files[f.path] === undefined ? "New file written by the customization agent" : "Edited by the customization agent"])),
+		recipe: "model",
+	};
 }
 
 /** Records this run's wish in flight (contest/wishes.ts). Best effort: a note never fails the run. */
@@ -397,7 +368,7 @@ export async function validateCandidate(env: Env, exports: Parameters<typeof loa
 	if (card?.override_available !== true || !card.ledger) throw new Error("the changed fork answered without the card contract (override and ledger)");
 }
 
-export function planPrompt(request: string, files: Record<string, string>, feedback: string | null): string {
+export function planPrompt(request: string, files: Record<string, string>, feedback: string | null, style?: string): string {
 	const listing = Object.keys(files).filter((p) => p !== "fluid.toml" && p !== USER_MANIFEST).sort().join("\n");
 	const show = ["app/index.ts", "app/types.ts", "connectors/types.ts"].map((p) => `### ${p}\n${files[p] ?? "(missing)"}`).join("\n\n");
 	return `You customize one user's fork of Fluid, a clinical assistant runtime written in TypeScript (ES modules, relative imports end in ".js", no Node APIs, no network, no dependencies). Write the smallest change that does what the user asked.
@@ -408,7 +379,7 @@ Imports: every relative import must name a file listed below or a file you write
 
 Look and layout: fonts, density, colors, extra tabs, charts, and dashboards are never done in answer card code. The answer card JSON must stay the stock contract (no style, HTML, or layout fields). The UI reads look and layout only from ${UI_PREFERENCES_PATH}, a JSON object with optional keys: "look" (one of "standard", "crimson", "luna-xp"), a whole look made of colors and shapes only ("crimson" is bold red and white institutional colors, "luna-xp" is a Windows XP style from about 2001, "standard" is the stock look; an explicit font or accent wins over the look's own), "font" (one of "system", "palatino", "georgia", "humanist-sans", "mono"), "density" ("comfortable" or "compact"), "accent" (one of "teal", "blue", "violet", "amber", "green", "rose", "slate"), and "tabs" (at most 4 objects {"title": plain text up to 40 characters, "widgets": 1 to 6 of "answers-by-intent", "confidence-distribution", "override-rate", "sources-by-kind", "intent-timeline", "gate-history"}). No other keys are allowed. Never put a logo, a name, or a trademark anywhere; a brand or an era maps to the closest look or accent. If the request is about look and layout, write only that file, and edit the current file: keep every key and tab the request does not mention, and write the complete merged JSON.
 
-User request: ${request}
+${style ? `Approach: ${style}\n\n` : ""}User request: ${request}
 ${feedback ? `\nYour previous attempt failed with this exact error. Fix it:\n${feedback}\n` : ""}
 Files in the fork:
 ${listing}

@@ -101,6 +101,18 @@ describe("behaviorTable", () => {
 		expect(table.counts.agent).toMatchObject({ outside: 1, wishTotal: 1, wishPassed: 0, failingWish: ["t-wish"] });
 	});
 
+	it("capBehavior trims field lists until the stored diff fits", async () => {
+		const { capBehavior } = await import("../src/workflows/contest.ts");
+		const big = { a: Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`k${i}`, "x".repeat(200)])) };
+		const base = Array.from({ length: 30 }, (_, i) => obs(`p${i}`, true, big));
+		const other = base.map((o) => ({ ...o, card: compactCard({ a: Object.fromEntries(Object.keys(big.a).map((k) => [k, "y".repeat(200)])) }) }));
+		const table = behaviorTable(base, [{ label: "x", observations: other }]);
+		const capped = capBehavior(table, 50_000);
+		expect(JSON.stringify(capped).length).toBeLessThanOrEqual(50_000);
+		expect(capped.counts).toEqual(table.counts);
+		expect(capped.rows[0]!.cells.x!.total).toBe(40);
+	});
+
 	it("keeps changed rows first when it has to leave rows out", () => {
 		const many = Array.from({ length: 10 }, (_, i) => obs(`p${i}`, true, card()));
 		const changed = many.map((o, i) => (i === 9 ? obs("p9", true, card({ body: "different" })) : o));

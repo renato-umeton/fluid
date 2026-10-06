@@ -40,4 +40,8 @@ describe("startsRepair", () => {
 	it("never for imported changes or their drafted commits, nor for a repair being applied", () => {
 		for (const source of ["import", "outside-push", "repair-apply"] as const) expect(startsRepair(source)).toBe(false);
 	});
+
+	it("never for a contest pick (the other contestants stay on their branches)", () => {
+		expect(startsRepair("contest")).toBe(false);
+	});
 });

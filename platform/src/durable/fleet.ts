@@ -4,6 +4,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Json } from "../lib/json.ts";
 import { upsertWishNote, wishNotesKey, type WishNote } from "../contest/wishes.ts";
+import { contestKey, joinDecision, type ContestState } from "../contest/plan.ts";
 import type { BaselineRecord } from "../yellow/baseline.ts";
 import { cancelRun, initialHealth, recordBrowser, recordFailure, recordPass, startYellow, type BrowserSummary, type HealthEvent, type HealthFailure, type HealthState, type Transition } from "../yellow/state.ts";
 
@@ -364,6 +365,28 @@ export class Fleet extends DurableObject<Env> {
 	wishNotes(repo: string): WishNote[] {
 		const value = this.getValue(wishNotesKey(repo));
 		return Array.isArray(value) ? (value as unknown as WishNote[]) : [];
+	}
+
+	/** The fork's current contest (contest/plan.ts): its run, its status, and the outside agent's seat. */
+	openContest(repo: string, state: ContestState): void {
+		this.setValue(contestKey(repo), state as unknown as Json);
+	}
+
+	contestState(repo: string): ContestState | null {
+		return this.getValue(contestKey(repo)) as unknown as ContestState | null;
+	}
+
+	/** Gives the outside agent's seat to one import, once, and only while the join window is open. */
+	joinContest(repo: string, contestId: string, now = Date.now()): ReturnType<typeof joinDecision> {
+		const state = this.contestState(repo);
+		const decision = joinDecision(state, contestId, now);
+		if (decision.ok) this.openContest(repo, { ...state!, agentJoined: true });
+		return decision;
+	}
+
+	setContestStatus(repo: string, contestId: string, status: ContestState["status"]): void {
+		const state = this.contestState(repo);
+		if (state?.contestId === contestId) this.openContest(repo, { ...state, status });
 	}
 
 	deleteValue(key: string): void {

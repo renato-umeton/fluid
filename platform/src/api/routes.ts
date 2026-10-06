@@ -37,6 +37,9 @@ import { rerunTargets, upgradeTargets } from "../workflows/upgrade.ts";
 import { decodeParam, HttpError, json, readJson, requireJsonPost, requireString } from "./http.ts";
 import { askRef, parsePreferences } from "./validate.ts";
 import { readWishes } from "../contest/read-wishes.ts";
+import { agentInboxBranch, CONTEST_LIMITS, contestLockKey, contestRunId, contestantRunId, lineup, newContestId, parseContestOptions, takeContestQuota } from "../contest/plan.ts";
+import { pickNotes } from "../contest/winner.ts";
+import { matchRecipe } from "../agents/recipes.ts";
 
 export const LIMITS = {
 	sessionsPerClientPerHour: 20,
@@ -526,6 +529,58 @@ route("POST", "/api/customize", async (rc) => {
 	await runsStub(rc.env, runId).create({ id: runId, kind: "customize", repo, status: "running", fields: { request: cleanText(request, 1000) } });
 	await appExports(rc.ctx).CustomizeWorkflow.create({ id: runId, params: { runId, repo, request, userId: session?.userId ?? userIdFromForkRepo(repo) ?? "admin", persona: entry.persona, admin: isAdmin(rc) } });
 	return json({ runId }, 202);
+});
+
+// Contest: N contestants compete to grant one wish (workflows/contest.ts). Costs N customizations.
+route("POST", "/api/contests", async (rc) => {
+	const body = await readJson(rc.request);
+	const repo = repoParam(requireString(body, "repo", 100));
+	const session = await requireForkAccess(rc, repo);
+	const request = requireString(body, "request", 1000);
+	if (isAdminTestRequest(request)) throw new HttpError(400, "test recipes cannot run as a contest");
+	let options: { size: number; includeAgent: boolean };
+	try {
+		options = parseContestOptions(body);
+	} catch (error) {
+		throw new HttpError(400, error instanceof Error ? error.message : String(error));
+	}
+	const entry = await fleetStub(rc.env).get(repo);
+	if (!entry) throw new HttpError(404, `fork ${repo} is not in the fleet`);
+	const fleet = fleetStub(rc.env);
+	if (!(await fleet.tryLock(contestLockKey(repo), CONTEST_LIMITS.lockTtlMs))) throw new HttpError(409, "a contest is already running on this fork; ship one of its contestants or wait for it to end");
+	const refused = await takeContestQuota((subject, bucket, limit, window) => quotaStub(rc.env, subject).take(bucket, limit, window), `user:${session?.userId ?? "admin"}`, options.size, LIMITS.customizationsPerUserPerHour);
+	if (refused) {
+		await fleet.unlock(contestLockKey(repo));
+		throw new HttpError(429, refused);
+	}
+	const contestId = newContestId();
+	const runId = contestRunId(contestId);
+	const joinUntil = options.includeAgent ? new Date(Date.now() + CONTEST_LIMITS.joinWindowMs).toISOString() : null;
+	const agentBranch = options.includeAgent ? agentInboxBranch(contestId) : null;
+	const seats = lineup({ recipe: matchRecipe(request) !== null, size: options.size, includeAgent: options.includeAgent });
+	const contestants = seats.map((s) => ({ label: s.label, kind: s.kind, title: s.title, status: s.kind === "agent" ? "waiting for your push" : "queued", runId: contestantRunId(contestId, s.label) }));
+	await runsStub(rc.env, runId).create({ id: runId, kind: "contest", repo, status: "running", fields: { request: cleanText(request, 1000), contestId, size: options.size, includeAgent: options.includeAgent, joinUntil, agentBranch, contestants } });
+	await fleet.openContest(repo, { contestId, runId, status: "open", includeAgent: options.includeAgent, joinUntil, agentJoined: false });
+	await appExports(rc.ctx).ContestWorkflow.create({ id: runId, params: { runId, contestId, repo, request, userId: session?.userId ?? userIdFromForkRepo(repo) ?? "admin", persona: entry.persona, size: options.size, includeAgent: options.includeAgent } });
+	return json({ runId, contestId, joinUntil, agentBranch }, 202);
+});
+
+// Ship a contestant: the rule's winner or another contestant that passed every tier and every wish test.
+route("POST", "/api/contests/:runId/pick", async (rc, { runId }) => {
+	if (!RUN_ID.test(runId!)) throw new HttpError(400, "invalid run id");
+	const stub = runsStub(rc.env, runId!);
+	const run = await stub.get();
+	if (!run || run.kind !== "contest" || typeof run.contestId !== "string") throw new HttpError(404, `contest ${runId} not found`);
+	await requireForkAccess(rc, run.repo ?? "");
+	const body = await readJson(rc.request);
+	const label = requireString(body, "label", 20);
+	if (run.picked || run.pickRequested) throw new HttpError(409, "a contestant was already picked in this contest");
+	if (run.status !== "waiting" || !Array.isArray(run.entrants)) throw new HttpError(409, "this contest is not waiting for a pick");
+	const check = pickNotes(run.entrants as never, label);
+	if (!check.ok) throw new HttpError(400, check.error);
+	await stub.update({ pickRequested: label });
+	await (await appExports(rc.ctx).ContestWorkflow.get(runId!)).sendEvent({ type: "contest-pick", payload: { label } });
+	return json(await stub.get());
 });
 
 route("GET", "/api/runs/:runId", async (rc, { runId }) => {

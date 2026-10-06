@@ -82,12 +82,13 @@ export function apiEnv() {
 /** An ExecutionContext whose workflow exports record what they were asked to create. */
 export function workerContext() {
 	const created: { workflow: string; id?: string; params: unknown }[] = [];
+	const sent: { workflow: string; id: string; event: unknown }[] = [];
 	const workflow = (name: string) => ({
 		create: async (o: { id?: string; params: unknown }) => (created.push({ workflow: name, ...o }), { id: o.id ?? "x" }),
-		get: async () => ({ status: async () => ({ status: "running" }) }),
+		get: async (id: string) => ({ status: async () => ({ status: "running" }), sendEvent: async (event: unknown) => void sent.push({ workflow: name, id, event }) }),
 	});
 	const exports = new Proxy({}, { get: (_t, name: string) => workflow(name) });
-	return { created, ctx: { waitUntil: () => undefined, passThroughOnException: () => undefined, exports } as unknown as ExecutionContext };
+	return { created, sent, ctx: { waitUntil: () => undefined, passThroughOnException: () => undefined, exports } as unknown as ExecutionContext };
 }
 
 export async function cookieFor(session: Partial<Session> & { userId: string }): Promise<string> {

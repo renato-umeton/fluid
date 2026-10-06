@@ -31,7 +31,7 @@ export function gateRunId(instanceId: string): string {
  * can push as often as its quota allows, and each push would start one.
  */
 export function startsRepair(source: GateParams["source"]): boolean {
-	return source !== "repair-apply" && source !== "import" && source !== "outside-push";
+	return source !== "repair-apply" && source !== "import" && source !== "outside-push" && source !== "contest";
 }
 
 export function repairRunId(repo: string, commit: string): string {
@@ -179,6 +179,8 @@ export class GateWorkflow extends WorkflowEntrypoint<Env, GateParams> {
 						...(origin.parentRunId && origin.source === "customize" ? { customizeRunId: origin.parentRunId } : {}),
 					});
 					await log.step("Repair agent", "running", `Started ${repairId}`);
+				} else if (origin.source === "contest") {
+					await log.step("Repair agent", "info", "No repair agent for a contest pick: the other contestants stay on their branches, so ship another one from the contest or run it again.");
 				} else if (origin.source === "import" || origin.source === "outside-push") {
 					await log.step("Repair agent", "info", "No repair agent for changes from your inbox: it calls the model, and every push would start one. Fix the change in your own agent and push again.");
 				}

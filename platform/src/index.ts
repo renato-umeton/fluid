@@ -12,6 +12,7 @@ export { Quota } from "./durable/quota.ts";
 export { LlmHost } from "./runtime/llm-host.ts";
 export { GateWorkflow } from "./workflows/gate.ts";
 export { CustomizeWorkflow } from "./workflows/customize.ts";
+export { ContestWorkflow } from "./workflows/contest.ts";
 export { RepairWorkflow } from "./workflows/repair.ts";
 export { ReleaseWorkflow, UpgradeWorkflow } from "./workflows/upgrade.ts";
 export { HarvestWorkflow, SeedFleetWorkflow, SeedForkWorkflow } from "./workflows/fleet.ts";
