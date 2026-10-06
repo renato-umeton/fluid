@@ -33,7 +33,8 @@ export interface HarvestProposal {
 	referenceFork: string | null;
 }
 
-const HARVESTABLE_AGENTS = new Set(["customization-agent", "seed-customization"]);
+// Records drafted for outside pushes count too: the floor rule below still keeps floor files out of drafts.
+const HARVESTABLE_AGENTS = new Set(["customization-agent", "seed-customization", "outside-agent"]);
 const STOPWORDS = new Set(
 	"a an and are as at be by can for from has have i in into is it its me my of on or our so that the their this to too up when with we you your add adds added make makes so show shows use uses more less than then them they do does not no new mode modes answer answers question questions please want would like should".split(" "),
 );

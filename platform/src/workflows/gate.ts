@@ -7,8 +7,12 @@
 // branches are only checked, unless the user applies one (merge mode).
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { fnv1a, gateInstanceId } from "../events/filter.ts";
-import { checkoutBranch, cloneRepo, fastForward, fetchBranch, firstParent, headCommit, mergeInto, pushBranch } from "../git/ops.ts";
+import { addedIntentIds, draftMessage, draftOutsideIntent, needsIntentCheck, OUTSIDE_SOURCE } from "../agents/outside-intent.ts";
+import { intentJson, intentPath } from "../agents/intent.ts";
+import { changedFiles, checkoutBranch, cloneRepo, commitChanges, commitsBetween, fastForward, fetchBranch, firstParent, headCommit, mergeBase, mergeInto, parseTrailers, pushBranch, readCommitMessage, readWorkspaceFile, writeFiles } from "../git/ops.ts";
 import { approveMainMove } from "../forks/main-guard.ts";
+import { newIntentId, userIdFromForkRepo } from "../lib/names.ts";
+import { pinnedTagOf } from "../stock/releases.ts";
 import { runGate } from "../gate/run.ts";
 import { gateBrief, type GateResult } from "../gate/tiers.ts";
 import { fleetStub } from "../stubs.ts";
@@ -77,6 +81,28 @@ export class GateWorkflow extends WorkflowEntrypoint<Env, GateParams> {
 			return { parentRunId, source };
 		});
 
+		// A push from outside the platform must carry a build-time intent record. When it has none,
+		// the gate drafts one onto the branch and gates that commit instead of this one.
+		if (needsIntentCheck(p, origin.source)) {
+			const check = await step.do("check the intent record", GIT_STEP, async () => this.draftIntentIfMissing(p, runId));
+			if (check.status === "moved") {
+				await step.do("finish moved branch", async () => {
+					await log.status("cancelled", { cancelReason: check.detail });
+					return true;
+				});
+				return { passed: false, merged: false };
+			}
+			if (check.status === "drafted") {
+				const next = await step.do("gate the drafted commit", async () => {
+					const started = await startGateInstance(exports.GateWorkflow, gateInstanceId(p.repo, p.branch, check.commit), { repo: p.repo, branch: p.branch, commit: check.commit, mode: "merge", source: OUTSIDE_SOURCE, parentRunId: runId });
+					await log.step("Gate the drafted commit", "done", `${started.runId} gates ${p.branch} at ${check.commit.slice(0, 7)}, which carries intent ${check.intentId}; main moves only if it passes`);
+					await log.status("passed", { draftedIntent: check.intentId, draftedCommit: check.commit, regateRunId: started.runId });
+					return started.runId;
+				});
+				return { passed: false, merged: false, draftedIntent: check.intentId, regateRunId: next };
+			}
+		}
+
 		const gate = await step.do("run tiers", GATE_STEP, async () => {
 			const result = await runGate({ env: this.env, exports }, { repo: p.repo, ref: p.branch, commit: p.commit, mode: p.mode });
 			await log.step(`Gate ${p.branch} at ${short}`, "done", `Stock ${result.stockTag ?? "?"} suites loaded from stock; fork and runner in separate isolates (${result.durationMs} ms)`);
@@ -108,7 +134,7 @@ export class GateWorkflow extends WorkflowEntrypoint<Env, GateParams> {
 				? await step.do("go yellow", async () => {
 						// The pin goes first: a fast rollback restores the old pin, and nothing after this step may overwrite it.
 						if (gate.stockTag) await setFleet(this.env, p.repo, { pinnedTag: gate.stockTag });
-						const source = origin.source === "customize" ? "customize" : origin.source === "repair-apply" ? "repair-apply" : "gate";
+						const source = origin.source === "customize" || origin.source === "repair-apply" || origin.source === "outside-push" ? origin.source : "gate";
 						const started = await startYellowRun(this.env, exports, { repo: p.repo, commit: p.commit, previous: merged.previous ?? null, source, parentRunId: origin.parentRunId ?? runId });
 						await log.step("Yellow: live on main, end-to-end soak", "info", `${p.commit.slice(0, 7)} is live with a yellow badge; ${started.runId} runs the end-to-end suite 3 times before the fork turns green`);
 						return started.runId;
@@ -154,6 +180,55 @@ export class GateWorkflow extends WorkflowEntrypoint<Env, GateParams> {
 			return true;
 		});
 		return { ...gateBrief(gate), merged: false };
+	}
+
+	/**
+	 * Looks for a build-time intent record that the branch adds since it left
+	 * main. With none, drafts one (outside-intent.ts), commits it onto the
+	 * branch with an Intent-Id trailer, records this run as the parent of that
+	 * commit's gate, and pushes without force. A retried step finds its own
+	 * drafted commit on the branch and reuses it.
+	 */
+	private async draftIntentIfMissing(p: GateParams, runId: string): Promise<{ status: "present" | "moved"; detail: string } | { status: "drafted"; commit: string; intentId: string }> {
+		const log = runLog(this.env, runId);
+		await log.step("Check the intent record", "running", `${p.branch} was pushed from outside the platform; every change needs a build-time intent record`);
+		const remote = await repoRemote(this.env, p.repo, "write");
+		const ws = await cloneRepo({ ...remote, ref: "main", singleBranch: true });
+		await fetchBranch(ws, remote, p.branch);
+		const head = await headCommit(ws, `refs/remotes/origin/${p.branch}`);
+		if (head !== p.commit) {
+			const message = await readCommitMessage(ws, head);
+			const own = parseTrailers(message)["Intent-Id"];
+			if (own && (await firstParent(ws, head)) === p.commit && message.startsWith("Draft the intent record")) {
+				await log.step("Check the intent record", "done", `Drafted ${intentPath(own)} at ${head.slice(0, 7)} (an earlier attempt pushed it)`);
+				return { status: "drafted", commit: head, intentId: own };
+			}
+			const detail = `${p.branch} moved on to ${head.slice(0, 7)}; the gate for that push decides`;
+			await log.step("Check the intent record", "info", detail);
+			return { status: "moved", detail };
+		}
+		const base = await mergeBase(ws, await headCommit(ws, "main"), p.commit);
+		const changes = await changedFiles(ws, base, p.commit);
+		await checkoutBranch(ws, p.branch);
+		const contents: Record<string, string | null> = {};
+		for (const c of changes) if (c.path.startsWith(".intent/") && c.status === "added") contents[c.path] = await readWorkspaceFile(ws, c.path);
+		const present = addedIntentIds(changes, contents);
+		if (present.length > 0 || changes.length === 0) {
+			const detail = present.length ? `${p.branch} adds ${present.map(intentPath).join(", ")}` : `${p.branch} changes no files since main`;
+			await log.step("Check the intent record", "done", detail);
+			return { status: "present", detail };
+		}
+		const commits = await commitsBetween(ws, base, p.commit);
+		const intentId = newIntentId();
+		const intent = draftOutsideIntent({ id: intentId, userId: userIdFromForkRepo(p.repo) ?? p.repo, branch: p.branch, stockTag: pinnedTagOf(await readWorkspaceFile(ws, "fluid.toml")) ?? "unknown", commits, changes });
+		await writeFiles(ws, { [intentPath(intentId)]: intentJson(intent) });
+		const commit = await commitChanges(ws, { message: draftMessage(intentId, p.branch, commits.length) });
+		// Recorded before the push: the push event may start the drafted commit's gate before this run does.
+		await linkGateParent(this.env, p.repo, p.branch, commit, { parentRunId: runId, source: OUTSIDE_SOURCE });
+		await pushBranch(ws, remote, p.branch);
+		await log.update({ intent: intent as never, draftedIntent: intentId });
+		await log.step("Check the intent record", "done", `No record on ${p.branch}: drafted ${intentPath(intentId)} (source ${OUTSIDE_SOURCE}) from ${commits.length} commit message${commits.length === 1 ? "" : "s"} and ${changes.length} file${changes.length === 1 ? "" : "s"} touched, committed as ${commit.slice(0, 7)}`);
+		return { status: "drafted", commit, intentId };
 	}
 
 	/**

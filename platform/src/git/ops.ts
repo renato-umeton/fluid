@@ -378,6 +378,56 @@ export async function restoreTreeFrom(ws: Workspace, commit: string, extra: Reco
 	await replaceTree(ws, { ...files, ...extra });
 }
 
+export interface FileChange {
+	path: string;
+	status: "added" | "modified" | "deleted";
+}
+
+/** The best common ancestor of two commits, or null when they share no history. */
+export async function mergeBase(ws: Workspace, a: string, b: string): Promise<string | null> {
+	const [base] = await git.findMergeBase({ fs: ws.fs, dir: ws.dir, oids: [a, b] });
+	return (base as string | undefined) ?? null;
+}
+
+/** Files that differ between two commits (base null: every file in head is added), sorted by path. */
+export async function changedFiles(ws: Workspace, base: string | null, head: string): Promise<FileChange[]> {
+	const blobs = async (oid: string | null) => {
+		const out = new Map<string, string>();
+		if (!oid) return out;
+		await git.walk({
+			fs: ws.fs,
+			dir: ws.dir,
+			trees: [git.TREE({ ref: oid })],
+			map: async (path, [entry]) => {
+				if (!entry || path === ".") return true;
+				if ((await entry.type()) === "blob") out.set(path, await entry.oid());
+				return true;
+			},
+		});
+		return out;
+	};
+	const [before, after] = await Promise.all([blobs(base), blobs(head)]);
+	const changes: FileChange[] = [];
+	for (const [path, oid] of after) {
+		const old = before.get(path);
+		if (old === undefined) changes.push({ path, status: "added" });
+		else if (old !== oid) changes.push({ path, status: "modified" });
+	}
+	for (const path of before.keys()) if (!after.has(path)) changes.push({ path, status: "deleted" });
+	return changes.sort((x, y) => (x.path < y.path ? -1 : x.path > y.path ? 1 : 0));
+}
+
+/** Commits reachable from head but not from base, oldest first, at most `limit`. */
+export async function commitsBetween(ws: Workspace, base: string | null, head: string, limit = 50): Promise<{ oid: string; message: string }[]> {
+	const out: { oid: string; message: string }[] = [];
+	for (const entry of await git.log({ fs: ws.fs, dir: ws.dir, ref: head, depth: limit * 4 })) {
+		if (base && (entry.oid === base || (await git.isDescendent({ fs: ws.fs, dir: ws.dir, oid: base, ancestor: entry.oid, depth: -1 })))) continue;
+		out.push({ oid: entry.oid, message: entry.commit.message });
+		if (out.length >= limit) break;
+	}
+	return out.reverse();
+}
+
 /** True when the working copy has this commit object. */
 export async function hasCommit(ws: Workspace, oid: string): Promise<boolean> {
 	try {

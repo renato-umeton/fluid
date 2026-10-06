@@ -28,7 +28,8 @@ export interface GateParams {
 	branch: string;
 	commit: string;
 	mode: "merge" | "check";
-	source: "event" | "customize" | "direct" | "repair" | "repair-apply" | "seed";
+	/** "outside-push": the commit the gate made after drafting an intent record for a push from outside the platform. */
+	source: "event" | "customize" | "direct" | "repair" | "repair-apply" | "seed" | "outside-push";
 	runId?: string;
 	parentRunId?: string;
 	/** Set when this gate checks the merge of main into the branch after main moved (fast-forward-only main). */
@@ -94,7 +95,7 @@ export interface SeedForkParams {
 	stockTag?: string;
 }
 
-export type YellowSource = "customize" | "gate" | "repair-apply" | "upgrade" | "one-tap" | "admin";
+export type YellowSource = "customize" | "gate" | "repair-apply" | "upgrade" | "one-tap" | "admin" | "outside-push";
 
 export interface YellowParams {
 	runId: string;

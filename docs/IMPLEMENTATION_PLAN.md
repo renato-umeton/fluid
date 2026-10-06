@@ -16,7 +16,7 @@
 **Goal**: the gate drafts `.intent/<id>.json` (source `outside-push`) for a pushed branch that carries none, then gates the drafted commit.
 **Success Criteria**: tier 3 runs on the drafted commit; harvest reads the record.
 **Tests**: changed files, commit messages, draft record, detection of an existing record, harvestable.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Concurrency with a customize run
 **Goal**: an outside push that lands while a customize run is in flight is re-merged or rejected cleanly and shown in the timeline.
