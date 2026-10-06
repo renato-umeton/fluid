@@ -38,8 +38,8 @@ function safetyNote(card) {
   if (!signal) return null;
   const served = card.fork?.servedBy;
   const text = signal.startsWith("safety_fallback:")
-    ? `Stock mode: answered by stock ${served?.ref || ""} because a safety release's grace period ended while this fork still fails it.`
-    : `Safety guard: this fork's answer computed a clinical dose, so stock ${served?.ref || ""} answered instead.`;
+    ? `Upstream mode: answered by upstream ${served?.ref || ""} because a safety release's grace period ended while this fork still fails it.`
+    : `Safety guard: this fork's answer computed a clinical dose, so upstream ${served?.ref || ""} answered instead.`;
   return h("div", { class: "safety-note", role: "status" }, h("strong", {}, signal), " ", text);
 }
 
@@ -118,7 +118,7 @@ function alternatives(card, opts) {
     wrap.append(
       h("div", { class: "alts-head" },
         h("div", {}, h("h3", {}, "Clinical first, others one tap away"),
-          h("p", {}, "A clinical signal is present, so the clinical answer opens first and the side-by-side view is not offered (stock behavior, spec 5.4 option B).")),
+          h("p", {}, "A clinical signal is present, so the clinical answer opens first and the side-by-side view is not offered (upstream behavior, spec 5.4 option B).")),
         h("div", { class: "alt-tabs", role: "group", "aria-label": "Labeled answers by intent" }, tabs)),
       panel);
   } else {
@@ -137,7 +137,7 @@ function footer(card, opts) {
     h("dl", {},
       h("div", {}, h("dt", {}, "Ledger record"), h("dd", {}, l.answer_id || "missing")),
       h("div", {}, h("dt", {}, "Fork commit"), h("dd", {}, l.fork_commit || "missing")),
-      h("div", {}, h("dt", {}, "Stock tag"), h("dd", {}, l.stock_tag || "missing")),
+      h("div", {}, h("dt", {}, "Upstream tag"), h("dd", {}, l.stock_tag || "missing")),
       l.attestation !== null && l.attestation !== undefined ? h("div", {}, h("dt", {}, "Attestation"), h("dd", {}, String(l.attestation))) : null),
     opts.nested ? null : h("a", { href: opts.ledgerHref(l.answer_id), class: "btn-quiet" }, "Open in ledger"));
 }

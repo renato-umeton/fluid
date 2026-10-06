@@ -30,7 +30,7 @@ export function render(root, app) {
     input,
     h("label", { class: "small row", for: "cust-contest" }, asContest, "Run as a contest: 3 agents compete on their own branches, a behavior diff and a fixed rule pick the winner (counts as 3 customizations)"),
     h("div", { class: "row" }, h("button", { class: "btn btn-primary", type: "submit" }, "Start customization"),
-      h("span", { class: "small muted" }, `Runs against ${app.fork.repo} on stock ${app.fork.stockTag}`)));
+      h("span", { class: "small muted" }, `Runs against ${app.fork.repo} on upstream ${app.fork.stockTag}`)));
   mount(root, h("div", { class: "customize" },
     h("section", { class: "panel request-box" },
       h("div", { class: "panel-head" }, h("h2", {}, "What should your fork do differently?")),

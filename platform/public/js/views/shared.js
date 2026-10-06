@@ -48,7 +48,7 @@ export function renderIntent(r, { related = false } = {}) {
       (r.modes_affected || []).map((m) => h("span", { class: `badge m-${m}`, style: { fontSize: "11px", padding: "1px 8px 1px 6px" } }, m)),
       h("div", { class: "file-list" }, (r.files || []).map((f) => h("code", {}, f)))),
     r.tests_added?.length ? h("p", { class: "xsmall muted" }, `Tests: ${r.tests_added.join(", ")}`) : null,
-    r.replay?.kind ? h("p", { class: "xsmall muted" }, r.replay.kind === "model" ? "Replay: a model change; releases upgrade this fork by merge." : `Replay: a ${r.replay.kind} wish, granted again on fresh stock at each release.`) : null);
+    r.replay?.kind ? h("p", { class: "xsmall muted" }, r.replay.kind === "model" ? "Replay: a model change; releases upgrade this fork by merge." : `Replay: a ${r.replay.kind} wish, granted again on fresh upstream code at each release.`) : null);
 }
 
 const WISH_TAG = { replayed: "pass", failed: "fail", fallback: "warn" };
@@ -67,7 +67,7 @@ export function renderWishes(replay) {
       w.request ? h("p", { class: "small" }, w.request) : null,
       h("p", { class: "xsmall muted" }, w.reason),
       w.stockAlsoChanged?.length && replay.path === "replay"
-        ? h("p", { class: "xsmall wish-note" }, `Stock ${replay.tag} also changed ${w.stockAlsoChanged.join(", ")}. A merge would have had to resolve it; replay granted the wish again on the new code.`)
+        ? h("p", { class: "xsmall wish-note" }, `Upstream ${replay.tag} also changed ${w.stockAlsoChanged.join(", ")}. A merge would have had to resolve it; replay granted the wish again on the new code.`)
         : null)))
       : null);
 }
@@ -90,8 +90,8 @@ export function renderDiff(diff) {
 }
 
 const TIER_INFO = {
-  invariant: ["Tier 1: invariants", "Owned by stock, read at the pinned tag. Every sample must pass."],
-  functional: ["Tier 2: functional", "Owned by stock. A majority of samples must pass."],
+  invariant: ["Tier 1: invariants", "Owned by upstream, read at the pinned tag. Every sample must pass."],
+  functional: ["Tier 2: functional", "Owned by upstream. A majority of samples must pass."],
   user: ["Tier 3: user tests", "Owned by you, in tests/user. Disabling one is logged."],
 };
 

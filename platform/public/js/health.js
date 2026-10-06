@@ -5,7 +5,7 @@
 import { h, short, fmtTime } from "./dom.js";
 
 export const HEALTH_LABEL = { green: "Green", yellow: "Yellow", rolled_back: "Rolled back" };
-const TIER_LABEL = { stock: "Stock scenarios", platform: "Basic platform scenarios", user: "Your scenarios" };
+const TIER_LABEL = { stock: "Upstream scenarios", platform: "Basic platform scenarios", user: "Your scenarios" };
 
 /** The fleet grid color: yellow and rolled back show over an idle status (mirrors platform/src/yellow/state.ts). */
 export function displayStatus(status, health) {
@@ -68,11 +68,11 @@ function scenarioRow(s) {
 export function renderScenarios(pass) {
   if (!pass) return h("p", { class: "empty" }, "The first soak pass is running.");
   return h("div", { class: "stack" },
-    h("p", { class: "small muted" }, `Pass ${pass.pass}${pass.stockTag ? ` at stock ${pass.stockTag}` : ""}${pass.runner === "bundled" ? " (this tag has no stock suite, so the basic platform scenarios ran)" : ""}, ${pass.durationMs} ms`),
+    h("p", { class: "small muted" }, `Pass ${pass.pass}${pass.stockTag ? ` at upstream ${pass.stockTag}` : ""}${pass.runner === "bundled" ? " (this tag has no upstream suite, so the basic platform scenarios ran)" : ""}, ${pass.durationMs} ms`),
     (pass.tiers || []).map((t) => h("section", { class: "stack", style: { gap: "6px" } },
       h("h4", { class: "small" }, `${TIER_LABEL[t.tier] ?? t.tier}: ${t.error ? "could not run" : `${t.total - t.skipped - t.failed} of ${t.total - t.skipped} passed`}`),
       t.error ? h("p", { class: "small", style: { color: "var(--fail)" } }, t.error) : null,
-      t.rejected?.length ? h("p", { class: "xsmall muted" }, `Not run (a user scenario cannot reuse a stock id): ${t.rejected.map((r) => r.id).join(", ")}`) : null,
+      t.rejected?.length ? h("p", { class: "xsmall muted" }, `Not run (a user scenario cannot reuse an upstream id): ${t.rejected.map((r) => r.id).join(", ")}`) : null,
       t.disabled?.length ? h("p", { class: "xsmall muted" }, `Disabled and logged: ${t.disabled.map((d) => `${d.id} (${d.reason})`).join(", ")}`) : null,
       h("ul", { class: "scenario-list" }, (t.scenarios || []).map(scenarioRow)))));
 }

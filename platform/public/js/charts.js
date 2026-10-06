@@ -98,7 +98,7 @@ const WIDGETS = {
     ]);
     const latest = rows[rows.length - 1];
     return figure("intent-timeline", `${rows.length} build-time records; latest ${latest.at.slice(0, 10)}: ${latest.request}`, svg,
-      h("ul", { class: "viz-legend" }, h("li", {}, h("i", { style: { background: "var(--link)" } }), "Customization"), h("li", {}, h("i", { class: "lg-multi" }), "Onboarding, stock, or other")),
+      h("ul", { class: "viz-legend" }, h("li", {}, h("i", { style: { background: "var(--link)" } }), "Customization"), h("li", {}, h("i", { class: "lg-multi" }), "Onboarding, upstream, or other")),
       table(["Date", "Agent", "Request", "Files"], rows.slice().reverse().map((r) => [r.at.slice(0, 10), r.agent, r.request, r.files])));
   },
 

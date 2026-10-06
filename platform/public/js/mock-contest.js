@@ -117,7 +117,7 @@ export function contestAt(scn, elapsed, { runId, repo, startedAt, includeAgent, 
     agentBranch: includeAgent ? `work/contest-${scn.contestId}/my-entry` : null,
     contestants,
     steps: [
-      step("Read the fork", "done", `main on stock; ${scn.seats.length} contestants: ${scn.seats.map((s) => s.label).join(", ")}`),
+      step("Read the fork", "done", `main on upstream; ${scn.seats.length} contestants: ${scn.seats.map((s) => s.label).join(", ")}`),
       step("Contestants work at the same time", contestants.every((c) => ["evaluated", "checking", "ready"].includes(c.status)) ? "done" : "running", scn.seats.filter((s) => s.kind !== "agent").map((s) => `${s.label} on ${s.branch}`).join("; ")),
     ],
   };

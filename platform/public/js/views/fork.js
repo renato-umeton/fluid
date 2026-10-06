@@ -12,7 +12,7 @@ let expiryTimer = null;
 let pushTimer = null;
 
 export const title = "My fork";
-export const sub = "Your personal repository, forked from a stock release. The gate reads stock tests at the pinned tag, so nothing here can weaken the floor.";
+export const sub = "Your personal repository, forked from an upstream release. Each wish here is a change plus its intent record. The gate reads upstream tests at the pinned tag, so nothing here can weaken the floor.";
 
 export function leave() {
   clearTimeout(healthTimer);
@@ -34,7 +34,7 @@ export async function render(root, app, params) {
   mount(root, h("div", { class: "fork-grid" },
     h("section", { class: "panel wide", "aria-labelledby": "health-heading" },
       h("div", { class: "panel-head" }, h("div", {}, h("h2", { id: "health-heading" }, "Health: yellow to green"),
-        h("p", {}, "Every change that passes the gate goes live on main in yellow. The stock end-to-end suite (plus your own scenarios) then runs against the live fork; 3 passes in a row turn it green, and a failure rolls main back to the last green commit."))),
+        h("p", {}, "Every change that passes the gate goes live on main in yellow. The upstream end-to-end suite (plus your own scenarios) then runs against the live fork; 3 passes in a row turn it green, and a failure rolls main back to the last green commit."))),
       healthBody),
     outsidePanel(fork),
     factsPanel(app, fork),
@@ -167,17 +167,17 @@ function factsPanel(app, fork) {
       h("dl", { class: "facts" },
         h("dt", {}, "Repo"), h("dd", {}, h("code", {}, fork.repo)),
         h("dt", {}, "Remote"), h("dd", {}, h("code", {}, fork.remote), " ", copy),
-        h("dt", {}, "Pinned stock"), h("dd", {}, h("code", {}, fork.stockTag)),
+        h("dt", {}, "Pinned upstream"), h("dd", {}, h("code", {}, fork.stockTag)),
         fork.head ? [h("dt", {}, "main"), h("dd", {}, h("code", {}, short(fork.head)))] : null,
-        h("dt", {}, "Configured τ"), h("dd", {}, typeof fork.tau === "number" ? fmtConf(fork.tau) : "not set (stock default)"),
-        h("dt", {}, "Effective τ"), h("dd", {}, h("strong", {}, eff.toFixed(2)), h("span", { class: "muted" }, ` (stock minimum ${min.toFixed(2)})`)),
+        h("dt", {}, "Configured τ"), h("dd", {}, typeof fork.tau === "number" ? fmtConf(fork.tau) : "not set (upstream default)"),
+        h("dt", {}, "Effective τ"), h("dd", {}, h("strong", {}, eff.toFixed(2)), h("span", { class: "muted" }, ` (upstream minimum ${min.toFixed(2)})`)),
         fork.preferences ? [h("dt", {}, "Preferences"), h("dd", {}, `auto_upgrade ${fork.preferences.auto_upgrade}, harvest_opt_in ${fork.preferences.harvest_opt_in}`)] : null,
       ),
       h("div", { class: "tau-meter" },
-        h("div", { class: "tau-track", role: "img", "aria-label": `Effective threshold ${eff.toFixed(2)}; stock minimum ${min.toFixed(2)}` },
+        h("div", { class: "tau-track", role: "img", "aria-label": `Effective threshold ${eff.toFixed(2)}; upstream minimum ${min.toFixed(2)}` },
           h("div", { class: "tau-fill", style: { width: `${eff * 100}%` } }),
           h("div", { class: "tau-min", style: { left: `calc(${min * 100}% - 1px)` } })),
-        h("p", { class: "xsmall muted" }, "Red mark: stock minimum, enforced by invariant inv-tau-config-floor. You may raise τ, never lower it."))));
+        h("p", { class: "xsmall muted" }, "Red mark: upstream minimum, enforced by invariant inv-tau-config-floor. You may raise τ, never lower it."))));
 }
 
 function branchesPanel(fork, gates) {
@@ -203,7 +203,7 @@ function ledgerPanel(records, highlight) {
   const body = records.length
     ? h("div", { class: "table-wrap" }, h("table", { class: "data" },
         h("caption", { class: "visually-hidden" }, "Run-time intent records, newest first"),
-        h("thead", {}, h("tr", {}, ["Time", "Answer", "Intent", "Confidence", "Signals", "Override", "Attestation", "Sources", "τ", "Fork commit", "Stock"].map((c) => h("th", { scope: "col" }, c)))),
+        h("thead", {}, h("tr", {}, ["Time", "Answer", "Intent", "Confidence", "Signals", "Override", "Attestation", "Sources", "τ", "Fork commit", "Upstream"].map((c) => h("th", { scope: "col" }, c)))),
         h("tbody", {}, records.map((r) => h("tr", { class: r.answer_id === highlight ? "hl" : "", id: `rec-${r.answer_id}` },
           h("td", {}, fmtTime(r.at)),
           h("td", {}, h("code", {}, r.answer_id)),
@@ -219,14 +219,14 @@ function ledgerPanel(records, highlight) {
     : h("p", { class: "empty" }, "No answers yet. Ask a question in the workspace and its record appears here.");
   return h("section", { class: "panel wide" },
     h("div", { class: "panel-head" }, h("div", {}, h("h2", {}, "Run-time ledger"),
-      h("p", {}, "One record per answer: the intent, why, any override or attestation, and the exact fork commit and stock tag. Buffered per user and committed daily to a ledger repository."))),
+      h("p", {}, "One record per answer: the intent, why, any override or attestation, and the exact fork commit and upstream tag. Buffered per user and committed daily to a ledger repository."))),
     h("div", { class: "panel-body" }, body));
 }
 
 function intentsPanel(intents) {
   return h("section", { class: "panel wide" },
     h("div", { class: "panel-head" }, h("div", {}, h("h2", {}, "Intent ledger"),
-      h("p", {}, "Build-time records in .intent/, one per change, linked from each commit by an Intent-Id trailer. Agents read these to repair and upgrade code they did not write."))),
+      h("p", {}, "Build-time records in .intent/, one per wish (a change plus its reason), linked from each commit by an Intent-Id trailer. Agents read these to repair and upgrade code they did not write."))),
     h("div", { class: "panel-body intent-list" }, intents.length ? intents.map((r) => renderIntent(r)) : h("p", { class: "empty" }, "No intent records.")));
 }
 

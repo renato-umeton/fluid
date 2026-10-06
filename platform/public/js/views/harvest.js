@@ -4,7 +4,7 @@ import { h, mount, statusTag } from "../dom.js";
 import { renderTimeline, renderIntent } from "./shared.js";
 
 export const title = "Harvest";
-export const sub = "Forks are a research channel for the mothership. The harvester reads intent records across opted-in forks, clusters similar customizations, and drafts the common ones as stock features.";
+export const sub = "Forks are a research channel for the central team. The harvester reads intent records across opted-in forks, clusters similar wishes, and drafts the common ones as upstream features.";
 
 let current = null;
 let selected = 0;
@@ -31,7 +31,7 @@ function paint(proposals) {
   if (selected >= proposals.length) selected = 0;
   mount(root, h("div", { class: "harvest" },
     h("section", { class: "panel" },
-      h("div", { class: "panel-head" }, h("div", {}, h("h2", {}, "Clusters"), h("p", {}, "Similar customizations, counted by fork.")), runBtn),
+      h("div", { class: "panel-head" }, h("div", {}, h("h2", {}, "Clusters"), h("p", {}, "Similar wishes, counted by fork.")), runBtn),
       h("div", { class: "panel-body stack" }, runPanel,
         proposals.length
           ? h("ul", { class: "cluster-list" }, proposals.map((p, i) => h("li", {},
@@ -55,7 +55,7 @@ function detail(p) {
     p.summary ? h("p", { class: "small" }, p.summary) : null,
     p.draftBranch
       ? h("div", { class: "explain", style: { borderColor: "var(--research)", background: "var(--research-bg)" } },
-          h("strong", {}, "Draft stock feature branch: "), h("code", {}, p.draftBranch),
+          h("strong", {}, "Draft upstream feature branch: "), h("code", {}, p.draftBranch),
           p.proposedFiles?.length ? h("div", { class: "file-list", style: { marginTop: "6px" } }, p.proposedFiles.map((f) => h("code", {}, f))) : null,
           p.retires ? h("p", { class: "small", style: { marginTop: "6px" } }, p.retires) : null)
       : h("p", { class: "small muted" }, "Not drafted. The harvester drafts only clusters above 5 forks that do not change clinical behavior or conflict with an invariant; the summary above gives the reason."),

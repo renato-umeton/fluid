@@ -145,7 +145,7 @@ function renderForkPill() {
   mount(document.getElementById("fork-pill"),
     healthBadge(f.health, { onclick: () => app.go("fork") }),
     h("span", {}, "Fork ", h("strong", {}, f.repo)),
-    h("span", {}, "on stock ", h("strong", {}, f.stockTag)),
+    h("span", {}, "on upstream ", h("strong", {}, f.stockTag)),
     h("span", {}, "τ ", h("strong", {}, app.effectiveTau().toFixed(2))),
     f.head ? h("span", { class: "hide-sm" }, "at ", h("strong", {}, short(f.head))) : null);
   watchHealth();

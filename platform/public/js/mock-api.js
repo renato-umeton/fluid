@@ -538,7 +538,7 @@ function gateSteps(run, failures) {
   return [
     {
       name: "Gate tier 1: invariants", ms: 1600,
-      pending: `${INVARIANT_PROBES} probes x ${SAMPLES} samples, read from stock at ${fork.stockTag}; every sample must pass`,
+      pending: `${INVARIANT_PROBES} probes x ${SAMPLES} samples, read from upstream at ${fork.stockTag}; every sample must pass`,
       done: (r, view) => {
         const f = failures.filter((x) => x.tier === "invariant");
         view.detail = f.length ? `${f.length} of ${INVARIANT_PROBES} probes failed: ${f.map((x) => x.probe).join(", ")}` : `${INVARIANT_PROBES} of ${INVARIANT_PROBES} probes passed on all ${SAMPLES} samples`;
@@ -632,7 +632,7 @@ function tauScript(target) {
     const failures = target < STOCK_MIN_TAU
       ? [{
           tier: "invariant", probe: "inv-tau-config-floor", kind: "config", file: "fluid.toml",
-          description: "Spec 6.1: the configured tau is at least the stock minimum 0.85. A fork that lowers tau fails here.",
+          description: "Spec 6.1: the configured tau is at least the upstream minimum 0.85. A fork that lowers tau fails here.",
           sample: 1, samples: SAMPLES, path: "thresholds.tau", op: "gte", expected: STOCK_MIN_TAU, actual: target,
         }]
       : [];
@@ -745,7 +745,7 @@ function uiScript(mapping) {
         name: "Write code and load it in an isolate", ms: 700,
         done: (r, v) => {
           run.diff = [{ path: "ui/preferences.json", status: db.ui[fork.repo] ? "modified" : "added", additions: 8, deletions: 0, summary: `Mapped: ${notes.join("; ")}` }];
-          v.detail = "ui/preferences.json matches the UI preferences schema; no runtime code changed, so answer cards keep the stock contract";
+          v.detail = "ui/preferences.json matches the UI preferences schema; no runtime code changed, so answer cards keep the upstream contract";
         },
       },
       {
@@ -825,7 +825,7 @@ function chartData() {
 
 const CATALOG = [
   { key: "redcap", who: ["research-coordinator", "hospitalist-researcher"], p: [0.55, 0.12], request: "Add a REDCap connector so research mode reports enrollment for my protocols", purpose: "Research mode can answer protocol enrollment questions", modes: ["research"], files: ["connectors/redcap.js", "policies/research.js"],
-    replay: "redcap", replayReason: "REDCap connector for IRB-2026-0142, IRB-2026-0219; app/index.ts patched again on the new stock" },
+    replay: "redcap", replayReason: "REDCap connector for IRB-2026-0142, IRB-2026-0219; app/index.ts patched again on the new upstream release" },
   // Replayable wishes (intent replay). plain-wording rewords the same card line every demo release rewords,
   // so under a merge it conflicts; replay grants it again on the new code.
   { key: "plain-wording", who: ["hospitalist-researcher", "department-administrator"], p: [0.3, 0.25], request: "Use plainer wording when the assistant is not sure which role I am in", purpose: "The multi-intent view explains itself in plain words", modes: [], files: ["app/cards.ts"],
@@ -921,7 +921,7 @@ function release(body) {
   if (!db.fleet) seedFleet(360);
   const tag = String(body?.tag ?? "").trim();
   if (!/^v\d+\.\d+\.\d+$/.test(tag)) throw new HttpError(400, "Tag must look like v1.1.0");
-  if (db.fleet.stockTags.includes(tag)) throw new HttpError(409, `Stock ${tag} already exists`);
+  if (db.fleet.stockTags.includes(tag)) throw new HttpError(409, `Upstream ${tag} already exists`);
   if (db.fleet.releasing) throw new HttpError(409, `Release ${db.fleet.releasing.tag} is still rolling out`);
   db.fleet.stockTags.push(tag);
   db.fleet.releasing = { tag, notes: body.notes ?? "", safety: Boolean(body.safety), startedAt: now() };
@@ -1001,7 +1001,7 @@ function createRepairRun(fork, conflict, tag, safety, stuck) {
     explanation: stuck
       ? `The upgrade to ${tag} fails ${k.probe.probe}. Intent ${conflict.record.id} ("${conflict.record.request}") cannot be kept without breaking that invariant, so the repair agent did not propose a fix. Your customization is preserved on upgrade/${tag}; the fork stays pinned to ${fork.pinnedTag}.`
       : `The upgrade to ${tag} fails ${k.probe.probe}. Intent ${conflict.record.id} says you wanted: "${conflict.record.purpose}". ${k.repair} The fork stays pinned to ${fork.pinnedTag} until you review ${branch}.`,
-    safety: safety ? `Safety release: after the grace period, the capability from ${conflict.record.id} runs in stock mode until this repair is merged. Your customization stays on its branch.` : null,
+    safety: safety ? `Safety release: after the grace period, the capability from ${conflict.record.id} runs in upstream mode until this repair is merged. Your customization stays on its branch.` : null,
     steps: [
       { name: `Merge stock ${tag} into upgrade/${tag}`, status: "done", detail: "No textual conflicts" },
       { name: "Gate on the upgrade branch", status: "failed", detail: `Tier 1 failed: ${k.probe.probe}` },
@@ -1106,7 +1106,7 @@ function outsidePushScript(run) {
     },
     {
       name: "Gate tier 1: invariants", ms: 1400,
-      done: (r, v) => { v.detail = `${INVARIANT_PROBES} of ${INVARIANT_PROBES} probes passed on all ${SAMPLES} samples, read from stock at ${fork.stockTag}`; },
+      done: (r, v) => { v.detail = `${INVARIANT_PROBES} of ${INVARIANT_PROBES} probes passed on all ${SAMPLES} samples, read from upstream at ${fork.stockTag}`; },
     },
     { name: "Gate tier 2: functional", ms: 1000, done: (r, v) => { v.detail = `${FUNCTIONAL_PROBES} of ${FUNCTIONAL_PROBES} probes passed`; } },
     {
@@ -1158,9 +1158,9 @@ const STOCK_SCENARIOS = [
   ["e2e-attestation-flow", "With an identified chart, a research request is held until the user attests; the attested answer and its ledger record carry the attestation.", 3],
   ["e2e-override-writes-ledger", "The user overrides a clinical answer to research: the override is written to the ledger record.", 3],
   ["e2e-no-dose-across-conversation", "A research conversation continues at the bedside: every clinical turn stays dose-free.", 3],
-  ["e2e-ledger-provenance", "Every answer writes a run-time record that names the live fork commit and the pinned stock tag.", 2],
+  ["e2e-ledger-provenance", "Every answer writes a run-time record that names the live fork commit and the pinned upstream tag.", 2],
   ["e2e-intent-records", "The fork's build-time intent ledger is readable.", 1],
-  ["e2e-fork-config-valid", "fluid.toml pins the live stock tag; ui/preferences.json matches the platform schema.", 2],
+  ["e2e-fork-config-valid", "fluid.toml pins the live upstream tag; ui/preferences.json matches the platform schema.", 2],
   ["e2e-redcap-enrollment", "With a REDCap connector, research reports enrollment and the bedside answer stays clinical.", 2],
 ];
 
@@ -1208,7 +1208,7 @@ function startMockYellow(fork, parentRun, landedBy = "customize") {
     setTimeout(() => {
       if (fork.health.runId !== yrun.id) return;
       yrun.passes.push(mockPass(pass, hasRedcap));
-      yrun.steps.push({ name: `Soak pass ${pass} of ${SOAK_PASSES}`, status: "done", detail: `All scenarios passed (stock ${STOCK_TAG} suite)` });
+      yrun.steps.push({ name: `Soak pass ${pass} of ${SOAK_PASSES}`, status: "done", detail: `All scenarios passed (upstream ${STOCK_TAG} suite)` });
       if (pass === 1) {
         yrun.browser = { status: "passed", detail: "4 checks passed", checks: [
           { name: "The app loads for the fork's user", passed: true, detail: `workspace loaded with ${fork.repo} in the top bar` },
@@ -1247,13 +1247,13 @@ function soakFleetFork(fork, rand) {
 // ---------- harvest ----------
 
 const HARVEST_DRAFTS = {
-  redcap: { cluster: "REDCap enrollment connector", draftBranch: "harvest/redcap-connector", proposedFiles: ["connectors/redcap.js", "policies/research.js", "tests/functional/redcap.json"], summary: "A stock REDCap connector with protocol-scoped enrollment answers in research mode, built from the fork implementations listed below." },
+  redcap: { cluster: "REDCap enrollment connector", draftBranch: "harvest/redcap-connector", proposedFiles: ["connectors/redcap.js", "policies/research.js", "tests/functional/redcap.json"], summary: "An upstream REDCap connector with protocol-scoped enrollment answers in research mode, built from the fork implementations listed below." },
   "budget-variance": { cluster: "Budget variance flags", draftBranch: "harvest/budget-variance", proposedFiles: ["policies/administrative.js", "tests/functional/variance.json"], summary: "Administrative answers flag budget lines over the variance policy threshold." },
-  signout: { cluster: "Sign-out list from the call schedule", draftBranch: null, proposedFiles: [], summary: "Clinical sign-out preparation. Needs clinical informatics review before a stock draft." },
+  signout: { cluster: "Sign-out list from the call schedule", draftBranch: null, proposedFiles: [], summary: "Clinical sign-out preparation. Needs clinical informatics review before an upstream draft." },
   "crosscheck-first": { cluster: "Cross-check before the number", draftBranch: null, proposedFiles: [], summary: "Research answers lead with source agreement." },
   "pt-date": { cluster: "P&T meeting date on formulary answers", draftBranch: null, proposedFiles: [], summary: "Formulary answers mention the next committee date." },
-  "compact-research": { cluster: "Shorter research answers", draftBranch: null, proposedFiles: [], summary: "Conflicts with the discrepancy invariant; not proposed for stock." },
-  "screen-map": { cluster: "Custom screen-label weighting", draftBranch: null, proposedFiles: [], summary: "Conflicts with hard-context floors; not proposed for stock." },
+  "compact-research": { cluster: "Shorter research answers", draftBranch: null, proposedFiles: [], summary: "Conflicts with the discrepancy invariant; not proposed for upstream." },
+  "screen-map": { cluster: "Custom screen-label weighting", draftBranch: null, proposedFiles: [], summary: "Conflicts with hard-context floors; not proposed for upstream." },
 };
 
 function startHarvest() {
@@ -1311,7 +1311,7 @@ function buildHarvest() {
         draftBranch: count > 5 ? draft.draftBranch : null,
         summary: draft.summary, proposedFiles: draft.proposedFiles,
         modes_affected: g.intents[0]?.modes_affected ?? [],
-        retires: draft.draftBranch ? `When this ships in stock, upgrade agents retire the matching custom code in ${count} forks, guided by these intent records.` : null,
+        retires: draft.draftBranch ? `When this ships in upstream, upgrade agents retire the matching custom code in ${count} forks, guided by these intent records.` : null,
       };
     })
     .sort((a, b) => b.count - a.count);
