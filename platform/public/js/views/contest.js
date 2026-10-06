@@ -134,6 +134,8 @@ function paint() {
     mount($("#contest-diff"), h("p", { class: "empty" }, "The behavior diff appears when every contestant has been checked."));
     return;
   }
+  // Polling repaints every section; keep the <details> the reader opened open.
+  const open = openDetailKeys(current.root);
   mount($("#contest-status"), statusTag(run.status));
   mount($("#contest-steps"),
     h("p", { class: "small", style: { marginBottom: "10px" } }, h("strong", {}, "Wish: "), run.request ?? ""),
@@ -142,6 +144,28 @@ function paint() {
   mount($("#contest-banner"), banner(run));
   mount($("#contest-columns"), columns(run, entry.children ?? {}));
   mount($("#contest-diff"), diffTable(run));
+  reopenDetails(current.root, open);
+}
+
+/** Keys for the open <details>: section id, summary text, and its position among equal summaries. */
+export function detailKeys(root) {
+  const seen = new Map();
+  return [...root.querySelectorAll("details")].map((d) => {
+    const section = d.closest("[id]")?.id ?? "";
+    const base = `${section}|${d.querySelector("summary")?.textContent ?? ""}`;
+    const n = seen.get(base) ?? 0;
+    seen.set(base, n + 1);
+    return { details: d, key: `${base}|${n}` };
+  });
+}
+
+function openDetailKeys(root) {
+  return new Set(detailKeys(root).filter((x) => x.details.open).map((x) => x.key));
+}
+
+function reopenDetails(root, open) {
+  if (open.size === 0) return;
+  for (const { details, key } of detailKeys(root)) if (open.has(key)) details.open = true;
 }
 
 function agentBox(run) {
