@@ -8,7 +8,7 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { fnv1a, gateInstanceId } from "../events/filter.ts";
 import { floorKey } from "../agents/harvest-cluster.ts";
-import { applyDraft, inspectChange, needsIntentCheck, OUTSIDE_SOURCE } from "../agents/outside-intent.ts";
+import { applyDraft, decideChange, inspectChange, needsIntentCheck, OUTSIDE_SOURCE } from "../agents/outside-intent.ts";
 import { intentPath } from "../agents/intent.ts";
 import { cloneRepo, fetchBranch, firstParent, headCommit, pushBranch } from "../git/ops.ts";
 import { newIntentId, userIdFromForkRepo } from "../lib/names.ts";
@@ -212,25 +212,24 @@ export class GateWorkflow extends WorkflowEntrypoint<Env, GateParams> {
 		const ws = await cloneRepo({ ...remote, ref: "main", singleBranch: true });
 		await fetchBranch(ws, remote, p.branch);
 		const seen = await inspectChange(ws, { branch: p.branch, commit: p.commit });
-		if (seen.status === "reuse") {
-			await log.step("Check the change", "done", `Drafted ${intentPath(seen.intentId)} at ${seen.head.slice(0, 7)} (an earlier attempt pushed it)`);
-			return { status: "drafted", commit: seen.head, intentId: seen.intentId };
+		const decision = decideChange(seen, draft);
+		if (decision.action === "reuse") {
+			await log.step("Check the change", "done", `Drafted ${intentPath(decision.intentId)} at ${decision.commit.slice(0, 7)} (an earlier attempt pushed it)`);
+			return { status: "drafted", commit: decision.commit, intentId: decision.intentId };
 		}
-		if (seen.status === "gone" || (draft && seen.moved)) {
-			const detail = `${p.branch} moved on to ${seen.head.slice(0, 7)}; the gate for that push decides`;
+		if (decision.action === "gone" || seen.status !== "ok") {
+			const detail = decision.action === "gone" ? decision.detail : "the branch moved on";
 			await log.step("Check the change", "info", detail);
 			return { status: "gone", detail };
 		}
 		const fleet = fleetStub(this.env);
 		if (seen.floor.length) for (const id of seen.addedIds) await fleet.setValue(floorKey(p.repo, id), seen.floor);
-		// Only a change from outside is held to the agent rule; platform workflows write their own agents' records.
-		const claims = draft ? seen.platformClaims : [];
-		if (seen.appendOnly.length || claims.length) {
-			const problems = [seen.appendOnly.length ? `modifies or deletes ${seen.appendOnly.slice(0, 5).join(", ")} (records are append-only)` : null, claims.length ? `adds ${claims.slice(0, 5).join(", ")} (a platform agent's name)` : null].filter(Boolean);
+		if (decision.action === "fail") {
+			const problems = [decision.appendOnly.length ? `modifies or deletes ${decision.appendOnly.slice(0, 5).join(", ")} (records are append-only)` : null, decision.platformClaims.length ? `adds ${decision.platformClaims.slice(0, 5).join(", ")} (a platform agent's name)` : null].filter(Boolean);
 			await log.step("Check the change", "failed", `This change ${problems.join(" and ")}; tier 1 fails.`);
-			return { status: "ok", appendOnly: seen.appendOnly, platformClaims: claims };
+			return { status: "ok", appendOnly: decision.appendOnly, platformClaims: decision.platformClaims };
 		}
-		if (!draft || seen.addedIds.length > 0 || seen.changes.length === 0) {
+		if (decision.action === "ok") {
 			await log.step("Check the change", "done", seen.addedIds.length ? `${p.branch} adds ${seen.addedIds.map(intentPath).join(", ")}` : seen.changes.length ? `${seen.changes.length} files changed; no record was changed or deleted` : `${p.branch} changes no files since main`);
 			return { status: "ok", appendOnly: [], platformClaims: [] };
 		}

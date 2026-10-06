@@ -131,6 +131,29 @@ export async function inspectChange(ws: Workspace, input: { branch: string; comm
 	};
 }
 
+export type ChangeDecision =
+	| { action: "gone"; detail: string }
+	| { action: "reuse"; commit: string; intentId: string }
+	| { action: "fail"; appendOnly: string[]; platformClaims: string[] }
+	| { action: "ok" }
+	| { action: "draft" };
+
+/**
+ * What the gate does with an inspected change. `draft` is set for changes
+ * from outside the platform. A changed or deleted record fails for every
+ * source; a record claiming a platform agent fails an outside change (and is
+ * never drafted around); a record is drafted only when an outside change adds
+ * no valid record at all.
+ */
+export function decideChange(seen: ChangeInspection, draft: boolean): ChangeDecision {
+	if (seen.status === "reuse") return { action: "reuse", commit: seen.head, intentId: seen.intentId };
+	if (seen.status === "gone" || (draft && seen.moved)) return { action: "gone", detail: `the branch moved on to ${seen.head.slice(0, 7)}; the gate for that push decides` };
+	const claims = draft ? seen.platformClaims : [];
+	if (seen.appendOnly.length || claims.length) return { action: "fail", appendOnly: seen.appendOnly, platformClaims: claims };
+	if (!draft || seen.addedIds.length > 0 || seen.changes.length === 0) return { action: "ok" };
+	return { action: "draft" };
+}
+
 /** Commits a drafted record onto the branch, on top of the gated commit. The caller pushes and gates it. */
 export async function applyDraft(ws: Workspace, input: { branch: string; commit: string; base: string | null; changes: FileChange[]; intentId: string; userId: string }): Promise<{ commit: string; intent: BuildTimeIntent; commits: number }> {
 	await checkoutBranch(ws, input.branch);
