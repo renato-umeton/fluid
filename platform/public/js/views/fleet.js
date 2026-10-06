@@ -6,7 +6,7 @@ import { baselineText, forkSummaryText, upgradePathCounts } from "../fleet-summa
 import { displayStatus, healthBadge, healthText } from "../health.js";
 
 export const title = "Fleet";
-export const sub = "The mothership view. A stock release fans out one upgrade run per fork; each fork moves only when all three test tiers pass on the new stock, then soaks in yellow until the end-to-end suite passes three times.";
+export const sub = "The central team's view. An upstream release fans out one upgrade run per fork; each fork moves only when all three test tiers pass on the new upstream, then soaks in yellow until the end-to-end suite passes three times.";
 
 const STATUSES = [
   ["pinned", "Pinned"],
@@ -70,7 +70,7 @@ function layout() {
   } },
     h("label", { class: "field" }, "Tag", tag),
     h("label", { class: "field" }, "Release notes", notes),
-    h("label", { class: "toggle-row" }, h("span", {}, "Safety release", h("span", { class: "xsmall muted", style: { display: "block" } }, "Tightens an invariant. Forks that fail run the affected capability in stock mode after a grace period.")), safety),
+    h("label", { class: "toggle-row" }, h("span", {}, "Safety release", h("span", { class: "xsmall muted", style: { display: "block" } }, "Tightens an invariant. Forks that fail run the affected capability in upstream mode after a grace period.")), safety),
     key ? h("label", { class: "field" }, "Admin secret (sent as x-fluid-admin)", key) : null,
     h("button", { class: "btn btn-primary", type: "submit" }, "Tag release and upgrade the fleet"),
     relMsg);
@@ -154,7 +154,7 @@ function paintAll() {
 
 function paintTags() {
   const el = current?.root.querySelector("#fleet-tags");
-  if (el) el.textContent = `${model.forks.size} forks. Stock tags: ${[...model.stockTags].sort(cmpTag).join(", ")}.`;
+  if (el) el.textContent = `${model.forks.size} forks. Upstream tags: ${[...model.stockTags].sort(cmpTag).join(", ")}.`;
 }
 
 function paintStream() {
@@ -191,7 +191,7 @@ function paintPaths() {
   mount(el, p.replay + p.merge === 0 ? [] : [
     `Upgraded to ${tag}: `,
     h("strong", {}, `${p.replay} by intent replay`),
-    ` (wishes granted again on fresh stock), ${p.merge} by merge. `,
+    ` (wishes granted again on fresh upstream code), ${p.merge} by merge. `,
     overlap ? h("button", { type: "button", class: "btn btn-quiet", onclick: () => select(overlap.repo) }, "Show a replayed fork that would have conflicted under merge") : null,
   ]);
 }
@@ -253,7 +253,7 @@ async function renderDrill(repo) {
   const head = h("dl", { class: "facts" },
     h("dt", {}, "Fork"), h("dd", {}, h("code", {}, repo)),
     h("dt", {}, "Persona"), h("dd", {}, f.persona || "n/a"),
-    h("dt", {}, "Pinned stock"), h("dd", {}, h("code", {}, f.pinnedTag)),
+    h("dt", {}, "Pinned upstream"), h("dd", {}, h("code", {}, f.pinnedTag)),
     h("dt", {}, "Status"), h("dd", {}, statusTag(f.status)),
     h("dt", {}, "Health"), h("dd", {}, healthBadge(f.health)),
     f.lastRun?.branch ? [h("dt", {}, "Branch"), h("dd", {}, h("code", {}, f.lastRun.branch))] : null);

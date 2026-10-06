@@ -14,8 +14,8 @@ describe("forkSummaryText", () => {
 		expect(forkSummaryText(fork, "v1.10.0", true)).toBe("Upgrade to v1.10.0 failed the gate. A repair branch is open for review; the fork stays pinned to v1.5.0.");
 	});
 
-	it("falls back to the latest stock tag while an upgrade runs", () => {
-		expect(forkSummaryText({ status: "upgrading", pinnedTag: "v1.5.0", lastRun: null }, "v1.10.0", false)).toBe("Upgrade agent is merging stock v1.10.0 into upgrade/v1.10.0.");
+	it("falls back to the latest upstream tag while an upgrade runs", () => {
+		expect(forkSummaryText({ status: "upgrading", pinnedTag: "v1.5.0", lastRun: null }, "v1.10.0", false)).toBe("Upgrade agent is merging upstream v1.10.0 into upgrade/v1.10.0.");
 	});
 });
 
@@ -28,11 +28,11 @@ describe("intent replay in the fleet", () => {
 		expect(wishesHeading(null)).toBeNull();
 	});
 
-	it("says a replayed upgrade rebuilt the fork from fresh stock", () => {
+	it("says a replayed upgrade rebuilt the fork from fresh upstream code", () => {
 		const fork = { status: "passed", pinnedTag: "v1.11.0", lastRun: { kind: "upgrade", tag: "v1.11.0", applied: true, path: "replay", replay } };
-		expect(forkSummaryText(fork, "v1.11.0", false)).toBe("Upgrade to v1.11.0 rebuilt this fork from fresh stock by replaying 2 of 2 wishes. All three tiers passed and it was applied.");
+		expect(forkSummaryText(fork, "v1.11.0", false)).toBe("Upgrade to v1.11.0 rebuilt this fork from fresh upstream code by replaying 2 of 2 wishes. All three tiers passed and it was applied.");
 		const waiting = { ...fork, lastRun: { ...fork.lastRun, applied: false } };
-		expect(forkSummaryText(waiting, "v1.11.0", false)).toBe("Upgrade to v1.11.0 rebuilt this fork from fresh stock by replaying 2 of 2 wishes. All three tiers passed. Waiting for the user's one-tap approval (auto_upgrade is off).");
+		expect(forkSummaryText(waiting, "v1.11.0", false)).toBe("Upgrade to v1.11.0 rebuilt this fork from fresh upstream code by replaying 2 of 2 wishes. All three tiers passed. Waiting for the user's one-tap approval (auto_upgrade is off).");
 	});
 
 	it("counts forks upgraded to a tag by replay and by merge", () => {
@@ -48,7 +48,7 @@ describe("baselineText", () => {
 	});
 
 	it("reports a passing baseline with its commit", () => {
-		expect(baselineText({ baseline: { passed: true, commit: "abcdef1234", stockTag: "v1.5.0", at: "2026-10-04T12:00:00Z" } })).toBe("Baseline: the end-to-end suite passed on main at abcdef1 (stock v1.5.0).");
+		expect(baselineText({ baseline: { passed: true, commit: "abcdef1234", stockTag: "v1.5.0", at: "2026-10-04T12:00:00Z" } })).toBe("Baseline: the end-to-end suite passed on main at abcdef1 (upstream v1.5.0).");
 	});
 
 	it("flags a failing baseline without rolling anything back", () => {

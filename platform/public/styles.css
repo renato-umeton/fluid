@@ -593,7 +593,7 @@ table.behavior-diff details ul { margin: 4px 0 0; padding-left: 16px; font-size:
 /* ---------- About ---------- */
 .about { display: grid; gap: 24px; max-width: 980px; }
 .about-lead { font-size: var(--fs-xl); font-weight: 500; letter-spacing: -0.015em; max-width: 46ch; line-height: 1.35; }
-.proposals { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.proposals { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
 .proposal { border-top: 3px solid var(--ink); padding-top: 12px; display: grid; gap: 6px; align-content: start; }
 .proposal p { color: var(--ink-2); font-size: var(--fs-sm); }
 .proposal .where { font-size: var(--fs-xs); color: var(--ink-3); }

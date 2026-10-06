@@ -1,32 +1,39 @@
-// About: the three proposals and how they map onto Cloudflare primitives.
+// About: the tagline, the four ideas, the proving ground, and how they map onto Cloudflare primitives.
 import { h, mount } from "../dom.js";
 
 export const title = "About Fluid";
 export const sub = "What the next Git platform looks like when every person gets their own fork.";
 
-const PROPOSALS = [
+const TAGLINE = "Everyone gets their own fork. Behavior decides what ships.";
+
+const IDEAS = [
   {
-    name: "A fork for every person",
-    text: "The central informatics team ships a stock release. Every user gets an Artifacts repository forked from it and customizes it with their own agent. Each fork deploys as that user's own Worker.",
-    where: "See it in My fork and the persona switcher.",
+    name: "Behavior is the merge rule",
+    text: "A change reaches main only when upstream's tests pass, your own tests pass, and a live soak stays clean. When several agents try the same wish, a behavior diff against main and a fixed rule pick the winner.",
+    where: "See it in Customize, Contest, and the yellow badge.",
   },
   {
-    name: "Intent as version-controlled data",
-    text: "Every change carries a build-time record of why it exists, linked from the commit. Every answer carries a run-time record of the role the user was in, the signals, and any override.",
+    name: "Living forks",
+    text: "Every person's fork keeps changing. They reshape it in plain words or with their own agent over plain git. On each release, intent replay grants every wish again on the new upstream code.",
+    where: "See it in My fork, Customize, and Fleet.",
+  },
+  {
+    name: "Git is the audit log for what software says",
+    text: "Every wish records why it exists in an intent record next to the code. Every answer records the fork commit and the upstream tag that produced it, and the soak checks that link.",
     where: "See it on every answer card and in both ledgers.",
   },
   {
-    name: "Behavioral regression as the merge rule",
-    text: "A fork merges or upgrades only when it passes the stock invariants and functional tests at its pinned tag, plus its own tests. Above that floor, customization is the user's call.",
-    where: "See it in Customize and Fleet.",
+    name: "Every commit runs",
+    text: "Any fork at any commit loads into its own isolate, with no build queue and no network. The tests run in a second isolate built only from upstream files, so a fork cannot grade itself.",
+    where: "See it in Fleet when a release fans out.",
   },
 ];
 
 const MAPPING = [
-  ["Stock repo, forks, ledgers", "Artifacts repositories in one namespace with US jurisdiction"],
-  ["Fork provisioning, reading stock tests at a tag", "Artifacts binding in Workers: get, fork, readFile, repo-scoped tokens"],
+  ["Upstream repo, forks, ledgers", "Artifacts repositories in one namespace with US jurisdiction"],
+  ["Fork provisioning, reading upstream tests at a tag", "Artifacts binding in Workers: get, fork, readFile, repo-scoped tokens"],
   ["Reacting to pushes and releases", "Artifacts event subscriptions delivered to Queues"],
-  ["Gate, customize, upgrade, repair, harvest", "Workflows"],
+  ["Gate, customize, contest, upgrade, repair, harvest", "Workflows"],
   ["Per-fork runtime and test targets", "Worker Loader runs each fork's code at any ref; Workers Builds with previews is the production path"],
   ["Run-time ledger buffer, fleet state", "Durable Objects"],
   ["Model calls with logging and routing", "Workers AI behind AI Gateway"],
@@ -35,9 +42,14 @@ const MAPPING = [
 
 export function render(root) {
   mount(root, h("div", { class: "about" },
-    h("p", { class: "about-lead" }, "A physician rounds in the morning, writes a paper at lunch, and reviews a budget in the afternoon. The same question has three right answers. Fluid makes the answer depend on intent, makes intent visible and overridable, and makes the safety floor impossible to customize away."),
-    h("div", { class: "proposals" }, PROPOSALS.map((p) => h("section", { class: "proposal" },
+    h("p", { class: "about-lead" }, TAGLINE),
+    h("div", { class: "proposals" }, IDEAS.map((p) => h("section", { class: "proposal" },
       h("h2", {}, p.name), h("p", {}, p.text), h("span", { class: "where" }, p.where)))),
+    h("section", { class: "panel" },
+      h("div", { class: "panel-head" }, h("h2", {}, "Proving ground: academic medicine")),
+      h("div", { class: "panel-body stack" },
+        h("p", {}, "We picked the domain where a wrong merge can hurt someone. A physician rounds in the morning, writes a paper in the afternoon, and reviews a budget in between. The same question has a different right answer in each role."),
+        h("p", {}, "Fluid makes the answer depend on intent, shows why, lets the user override it, and keeps upstream's safety floor out of reach of any customization. Nothing in the platform idea is medical."))),
     h("section", { class: "panel" },
       h("div", { class: "panel-head" }, h("h2", {}, "Built on Cloudflare")),
       h("div", { class: "panel-body table-wrap" }, h("table", { class: "data" },
