@@ -169,7 +169,7 @@ ADMIN_TOKEN=... FLUID_URL="$FLUID_URL" node scripts/e2e-yellow.mjs
 ## 10. Before you share the URL
 
 - `workers.dev` and preview URLs are on by default. Decide which ones you want public.
-- Write routes need a session cookie, and admin routes need the admin token. Per-client and global quotas limit forks, asks, and reads. Details are in `docs/IMPLEMENTATION_PLAN.md`, Stage 5.
+- Write routes need a session cookie, and admin routes need the admin token. Per-client and global quotas limit forks, asks, and reads. Details are in `docs/API.md`, under Limits and protections.
 
 ## Local development
 

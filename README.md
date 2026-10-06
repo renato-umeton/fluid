@@ -16,7 +16,7 @@ Live demo: https://fluid.renato83.workers.dev (synthetic data only). To deploy y
 
 ## Architecture
 
-One control plane Worker (`platform/`) serves the UI and the API. Stock and every fork live as Artifacts repositories in one US-jurisdiction namespace. Each fork's code runs on demand in its own Worker Loader isolate, at any branch or commit. Pushes arrive as Artifacts events on a Queue and start a gate Workflow. The gate runs the three test tiers and merges on a pass. Other Workflows run the customize, upgrade, repair, and harvest agents. Durable Objects hold the fleet state, the run timelines, and each user's run-time ledger. Models run on Workers AI behind AI Gateway, but every safety rule is plain code. Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+One control plane Worker (`platform/`) serves the UI and the API. Stock and every fork live as Artifacts repositories in one US-jurisdiction namespace. Each fork's code runs on demand in its own Worker Loader isolate, at any branch or commit. Pushes arrive as Artifacts events on a Queue and start a gate Workflow. The gate runs the three test tiers and fast-forwards main on a pass. The change then runs yellow under a stock end-to-end suite until three clean passes turn it green; a failure rolls main back. Other Workflows run the customize, upgrade, repair, and harvest agents. Durable Objects hold the fleet state, the run timelines, and each user's run-time ledger. Models run on Workers AI behind AI Gateway, but every safety rule is plain code. Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ```mermaid
 flowchart LR
@@ -60,6 +60,7 @@ To look at the UI with no account at all, serve `platform/public/` and open `/?m
 - [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md): the video script.
 - [docs/GATE_AND_AGENTS.md](docs/GATE_AND_AGENTS.md): workflows, gate integrity, merge rules, events.
 - [docs/UI.md](docs/UI.md): UI notes and mock mode.
+- [docs/API.md](docs/API.md): shared contracts, HTTP routes, limits.
 - [docs/SPIKE_FINDINGS.md](docs/SPIKE_FINDINGS.md): measured behavior of each primitive.
 - [docs/Fluid_ Personal Software for Academic Medicine.md](<docs/Fluid_ Personal Software for Academic Medicine.md>): the original spec.
 - [stock/README.md](stock/README.md): the stock release and its runtime contract.
