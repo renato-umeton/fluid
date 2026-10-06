@@ -18,7 +18,7 @@ import { replayExtra, replayRecordFor } from "../agents/replay.ts";
 import { fallbackSuggestion, mergeUserManifest, suggestTests, USER_MANIFEST, type Probe } from "../agents/suggester.ts";
 import { uiChange } from "../agents/ui-recipe.ts";
 import { behaviorTable, probeContentKey, type BehaviorTable, type Observation } from "../contest/behavior.ts";
-import { wishTestSet, type ManifestProbeLike } from "../contest/observe.ts";
+import { capObservations, wishTestSet, type ManifestProbeLike } from "../contest/observe.ts";
 import { behaviorFiles, CONTEST_LIMITS, contestantRunId, contestBranch, contestLockKey, entrantOf, lineup, type Seat } from "../contest/plan.ts";
 import { decideWinner, pickNotes, type Entrant } from "../contest/winner.ts";
 import { gateInstanceId } from "../events/filter.ts";
@@ -105,6 +105,7 @@ export class ContestWorkflow extends WorkflowEntrypoint<Env, ContestParams> {
 			const ready = [...prepared, ...(agent ? [agent] : [])].filter((c) => c.ok).length;
 			await log.step("Contestants work at the same time", ready > 0 ? "done" : "failed", `${ready} of ${seats.length} produced a change`);
 			await fleetStub(this.env).setContestStatus(p.repo, p.contestId, "evaluating");
+			await renewContest(this.env, p);
 			return true;
 		});
 
@@ -136,6 +137,7 @@ export class ContestWorkflow extends WorkflowEntrypoint<Env, ContestParams> {
 			for (const e of entrants) await this.noteContestant(p, e.label, decided.winner === e.label ? "winner; waiting for your pick" : decided.notes[e.label] ?? "did not win", false);
 			if (decided.winner) {
 				await fleetStub(this.env).setContestStatus(p.repo, p.contestId, "waiting");
+				await renewContest(this.env, p);
 				await log.status("waiting");
 				await log.step("Ship a contestant", "waiting", `Ship ${decided.winner} (the rule's choice) or another contestant that passed. Only the one you ship is gated in merge mode; the others stay as branches.`);
 			}
@@ -177,16 +179,17 @@ export class ContestWorkflow extends WorkflowEntrypoint<Env, ContestParams> {
 				return { ok: false as const, error: picked.error };
 			}
 			const run = await runsStub(this.env, p.runId).get();
-			const record = ((run?.contestants ?? []) as unknown as { label: string; branch?: string; commit?: string }[]).find((c) => c.label === pickedLabel);
-			if (!record?.branch || !record.commit) return { ok: false as const, error: `${pickedLabel} has no branch to ship` };
+			const record = shipTarget((run?.contestants ?? []) as unknown as ContestantRecord[], pickedLabel!);
+			if (!record.ok) return { ok: false as const, error: record.error };
 			await log.update({ picked: { label: pickedLabel, by: pickedLabel === verdict.winner ? "rule" : "you", reason: picked.reason, at: new Date().toISOString() }, notes: picked.notes });
 			for (const [label, note] of Object.entries(picked.notes)) {
 				await runsStub(this.env, p.runId).updateEntry("contestants", "label", label, { note });
 				await this.noteContestant(p, label, note, true);
 			}
 			await fleetStub(this.env).setContestStatus(p.repo, p.contestId, "shipping");
+			await renewContest(this.env, p);
 			// The pick goes through the normal merge gate: tiers again in merge mode, fast-forward, yellow soak, rollback.
-			const started = await startGateInstance(appExports(this.ctx).GateWorkflow, gateInstanceId(p.repo, record.branch, record.commit), { repo: p.repo, branch: record.branch, commit: record.commit, mode: "merge", source: pickedLabel === "agent" ? "import" : "contest", parentRunId: p.runId });
+			const started = await startGateInstance(appExports(this.ctx).GateWorkflow, gateInstanceId(p.repo, record.branch, record.commit), { repo: p.repo, branch: record.branch, commit: record.commit, mode: "merge", source: record.source, parentRunId: p.runId });
 			await log.update({ shipGateRunId: started.runId });
 			await log.status("running");
 			await log.step("Ship a contestant", "done", `${picked.reason} Gating ${record.branch} at ${record.commit.slice(0, 7)} in merge mode (${started.runId}).`);
@@ -384,7 +387,7 @@ export class ContestWorkflow extends WorkflowEntrypoint<Env, ContestParams> {
 			} else {
 				await runLog(this.env, p.runId).step("Check main as the baseline", "done", `main at ${target.commit.slice(0, 7)}: ${gate.passed ? "every tier passed" : `${gate.failures.length} failure(s)`}; ${observations.length} probes recorded`);
 			}
-			return { label: target.label, gate, observations };
+			return { label: target.label, gate, observations: capObservations(observations) };
 		});
 	}
 
@@ -414,6 +417,25 @@ export class ContestWorkflow extends WorkflowEntrypoint<Env, ContestParams> {
 	}
 }
 
+interface ContestantRecord {
+	label: string;
+	status?: string;
+	branch?: string;
+	commit?: string;
+}
+
+/**
+ * What the merge gate gets for the pick: the exact commit the contest checked
+ * (not whatever the branch points at now), and the gate source: "import" for
+ * the owner's agent (so a missing intent record is drafted and no repair
+ * agent starts), "contest" for a platform contestant.
+ */
+export function shipTarget(contestants: ContestantRecord[], label: string): { ok: true; branch: string; commit: string; source: "import" | "contest" } | { ok: false; error: string } {
+	const c = contestants.find((x) => x.label === label);
+	if (!c || c.status !== "evaluated" || !c.branch || !c.commit) return { ok: false, error: `${label} has no checked commit to ship` };
+	return { ok: true, branch: c.branch, commit: c.commit, source: label === "agent" ? "import" : "contest" };
+}
+
 /** Compact gate summary for a contestant column. */
 function brief(gate: GateResult): Record<string, unknown> {
 	const tier = (t: GateResult["tiers"][keyof GateResult["tiers"]]) => (t ? { passed: t.passed, total: t.total, failed: t.failed } : null);
@@ -431,6 +453,15 @@ export function capBehavior(table: BehaviorTable, max = MAX_BEHAVIOR_CHARS): Beh
 		perCell = perCell === 0 ? -1 : Math.floor(perCell / 2);
 	}
 	return { ...out, rows: out.rows.slice(0, 20), omitted: out.omitted + Math.max(0, out.rows.length - 20) };
+}
+
+/**
+ * Each phase (contestants ready, waiting for the pick, shipping) is shorter
+ * than the lease, so renewing it at each one keeps the fork's contest held
+ * until the contest ends, never past it.
+ */
+export async function renewContest(env: Env, p: ContestParams): Promise<void> {
+	await fleetStub(env).renewLock(contestLockKey(p.repo), CONTEST_LIMITS.lockTtlMs, p.runId);
 }
 
 /** The contest is over: the fork may start another one. */

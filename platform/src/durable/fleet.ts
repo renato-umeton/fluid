@@ -377,17 +377,32 @@ export class Fleet extends DurableObject<Env> {
 		return this.getValue(contestKey(repo)) as unknown as ContestState | null;
 	}
 
-	/** Gives the outside agent's seat to one import, once, and only while the join window is open. */
-	joinContest(repo: string, contestId: string, now = Date.now()): ReturnType<typeof joinDecision> {
+	/**
+	 * Gives the outside agent's seat to one import, once, and only while the
+	 * join window is open. A retry of the import that already took the seat
+	 * (same branch and commit) succeeds again, even after the window closed.
+	 */
+	joinContest(repo: string, contestId: string, now = Date.now(), entry?: { branch: string; commit: string }): ReturnType<typeof joinDecision> {
 		const state = this.contestState(repo);
+		if (entry && state?.contestId === contestId && state.agentJoined && state.agentEntry?.branch === entry.branch && state.agentEntry.commit === entry.commit) return { ok: true, runId: state.runId };
 		const decision = joinDecision(state, contestId, now);
-		if (decision.ok) this.openContest(repo, { ...state!, agentJoined: true });
+		if (decision.ok) this.openContest(repo, { ...state!, agentJoined: true, agentEntry: entry ?? null });
 		return decision;
 	}
 
 	setContestStatus(repo: string, contestId: string, status: ContestState["status"]): void {
 		const state = this.contestState(repo);
 		if (state?.contestId === contestId) this.openContest(repo, { ...state, status });
+	}
+
+	/** Extends a lease that `owner` still holds (not one that expired or someone else took). */
+	renewLock(key: string, ttlMs: number, owner: string, now = Date.now()): boolean {
+		const row = this.ctx.storage.sql.exec("SELECT v FROM kv WHERE k = ?", key).toArray()[0];
+		if (!row) return false;
+		const lease = JSON.parse(row.v as string) as { until: number; owner?: string };
+		if (lease.owner !== owner || lease.until <= now) return false;
+		this.setValue(key, { until: now + ttlMs, owner });
+		return true;
 	}
 
 	deleteValue(key: string): void {

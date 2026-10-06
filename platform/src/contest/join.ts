@@ -19,7 +19,7 @@ export async function contestJoinRefusal(env: Env, fork: string, inboxBranch: st
 export async function joinContest(env: Env, ctx: unknown, input: { fork: string; branch: string; commit: string; importRunId: string }): Promise<{ ok: true; runId: string } | { ok: false; reason: string }> {
 	const contestId = contestIdOfBranch(input.branch);
 	if (!contestId) return { ok: false, reason: `${input.branch} is not a contest branch` };
-	const decision = await fleetStub(env).joinContest(input.fork, contestId);
+	const decision = await fleetStub(env).joinContest(input.fork, contestId, Date.now(), { branch: input.branch, commit: input.commit });
 	if (!decision.ok) return decision;
 	await runsStub(env, decision.runId).updateEntry("contestants", "label", "agent", { status: "joined", branch: input.branch, commit: input.commit, importRunId: input.importRunId, readyAt: new Date().toISOString() });
 	await (await appExports(ctx).ContestWorkflow.get(decision.runId)).sendEvent({ type: "contest-joined", payload: { branch: input.branch, commit: input.commit } });

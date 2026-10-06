@@ -100,6 +100,8 @@ export interface ContestState {
 	includeAgent: boolean;
 	joinUntil: string | null;
 	agentJoined: boolean;
+	/** The import that took the agent seat, so a retry of the same import is recognized. */
+	agentEntry?: { branch: string; commit: string } | null;
 }
 
 /** Whether an import of work/inbox/contest-<id>/... may join that contest now. */

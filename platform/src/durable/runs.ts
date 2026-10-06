@@ -115,6 +115,16 @@ export class Runs extends DurableObject<Env> {
 		return this.touch({ [listKey]: list });
 	}
 
+	/** Sets `key` only when it has no value yet; returns whether this call set it (the first caller wins). */
+	setOnce(key: string, value: Json): boolean {
+		const run = this.read();
+		if (!run) throw new Error("setOnce: run does not exist");
+		if (RESERVED.has(key)) throw new Error(`setOnce: ${key} cannot be changed`);
+		if (run[key] !== undefined && run[key] !== null) return false;
+		this.touch({ [key]: value });
+		return true;
+	}
+
 	/** Merges fields into the run (status, branch, commit, suggestions, gate, ...). */
 	update(patch: Record<string, Json>): Run {
 		if (!this.read()) throw new Error("update: run does not exist");

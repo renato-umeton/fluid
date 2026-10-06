@@ -38,6 +38,14 @@ describe("joinContest", () => {
 		expect(t.sent).toEqual([{ workflow: "ContestWorkflow", id: RUN, event: { type: "contest-joined", payload: { branch: `work/inbox/contest-${ID}/mine`, commit: SHA } } }]);
 	});
 
+	it("succeeds again when the same import retries its join step", async () => {
+		const t = await setup();
+		const input = { fork: FORK, branch: `work/inbox/contest-${ID}/mine`, commit: SHA, importRunId: "run_import_x" };
+		await joinContest(t.env, t.ctx, input);
+		t.fleet.setContestStatus(FORK, ID, "evaluating");
+		expect(await joinContest(t.env, t.ctx, input)).toEqual({ ok: true, runId: RUN });
+	});
+
 	it("lets only one entry join", async () => {
 		const t = await setup();
 		await joinContest(t.env, t.ctx, { fork: FORK, branch: `work/inbox/contest-${ID}/one`, commit: SHA, importRunId: "run_import_1" });

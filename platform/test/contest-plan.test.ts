@@ -89,6 +89,26 @@ describe("Fleet contest seat", () => {
 		expect(fleet.contestState("user-a")?.status).toBe("evaluating");
 	});
 
+	it("treats a retried join of the same entry as success, and a different entry as a second one", () => {
+		const { instance: fleet } = construct(Fleet);
+		fleet.openContest("user-a", state);
+		const entry = { branch: "work/inbox/contest-1a2b3c4d5e6f/mine", commit: "c".repeat(40) };
+		expect(fleet.joinContest("user-a", "1a2b3c4d5e6f", at, entry)).toEqual({ ok: true, runId: "run_contest_1a2b3c4d5e6f" });
+		fleet.setContestStatus("user-a", "1a2b3c4d5e6f", "evaluating");
+		expect(fleet.joinContest("user-a", "1a2b3c4d5e6f", at, entry)).toEqual({ ok: true, runId: "run_contest_1a2b3c4d5e6f" });
+		expect(fleet.joinContest("user-a", "1a2b3c4d5e6f", at, { ...entry, commit: "d".repeat(40) })).toMatchObject({ ok: false });
+	});
+
+	it("renews the contest lease only for its owner", () => {
+		const { instance: fleet } = construct(Fleet);
+		const t0 = Date.parse("2026-10-06T12:00:00Z");
+		expect(fleet.tryLock("contest-lock:user-a", 1000, "run_a", t0)).toBe(true);
+		expect(fleet.renewLock("contest-lock:user-a", 60_000, "run_b", t0 + 500)).toBe(false);
+		expect(fleet.renewLock("contest-lock:user-a", 60_000, "run_a", t0 + 500)).toBe(true);
+		expect(fleet.tryLock("contest-lock:user-a", 1000, "run_b", t0 + 5000)).toBe(false);
+		expect(fleet.renewLock("contest-lock:user-a", 60_000, "run_a", t0 + 120_000)).toBe(false);
+	});
+
 	it("never changes another contest's state", () => {
 		const { instance: fleet } = construct(Fleet);
 		fleet.openContest("user-a", state);

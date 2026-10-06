@@ -108,6 +108,14 @@ describe("Runs.updateEntry", () => {
 		expect(runs.get()!.contestants).toEqual([{ label: "model-a", status: "planning" }, { label: "model-b", status: "ready", branch: "work/contest-x-model-b" }]);
 	});
 
+	it("setOnce keeps the first value (the first pick wins)", () => {
+		const { instance: runs } = construct(Runs);
+		runs.create({ id: "run_contest_z", kind: "contest" });
+		expect(runs.setOnce("pickRequested", "model-a")).toBe(true);
+		expect(runs.setOnce("pickRequested", "model-b")).toBe(false);
+		expect(runs.get()!.pickRequested).toBe("model-a");
+	});
+
 	it("appends an entry that is not there yet", () => {
 		const { instance: runs } = construct(Runs);
 		runs.create({ id: "run_contest_y", kind: "contest", fields: { contestants: [] } });

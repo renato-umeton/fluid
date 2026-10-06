@@ -617,7 +617,8 @@ route("POST", "/api/contests/:runId/pick", async (rc, { runId }) => {
 	if (run.status !== "waiting" || !Array.isArray(run.entrants)) throw new HttpError(409, "this contest is not waiting for a pick");
 	const check = pickNotes(run.entrants as never, label);
 	if (!check.ok) throw new HttpError(400, check.error);
-	await stub.update({ pickRequested: label });
+	// Two picks at once: the run object sets the pick once, so only the first is sent and shown.
+	if (!(await stub.setOnce("pickRequested", label))) throw new HttpError(409, "a contestant was already picked in this contest");
 	await (await appExports(rc.ctx).ContestWorkflow.get(runId!)).sendEvent({ type: "contest-pick", payload: { label } });
 	return json(await stub.get());
 });
