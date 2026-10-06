@@ -13,6 +13,7 @@ import { changedFiles, checkoutBranch, cloneRepo, commitChanges, commitsBetween,
 import { newIntentId, userIdFromForkRepo } from "../lib/names.ts";
 import { pinnedTagOf } from "../stock/releases.ts";
 import { runGate } from "../gate/run.ts";
+import { syncInboxMain } from "../forks/inbox.ts";
 import { mainMovedNote, planMainAdvance } from "../gate/advance.ts";
 import { gateBrief, type GateResult } from "../gate/tiers.ts";
 import { fleetStub } from "../stubs.ts";
@@ -134,7 +135,7 @@ export class GateWorkflow extends WorkflowEntrypoint<Env, GateParams> {
 				? await step.do("go yellow", async () => {
 						// The pin goes first: a fast rollback restores the old pin, and nothing after this step may overwrite it.
 						if (gate.stockTag) await setFleet(this.env, p.repo, { pinnedTag: gate.stockTag });
-						const source = origin.source === "customize" || origin.source === "repair-apply" || origin.source === "outside-push" ? origin.source : "gate";
+						const source = origin.source === "customize" || origin.source === "repair-apply" ? origin.source : origin.source === "outside-push" || origin.source === "import" ? "outside-push" : "gate";
 						const started = await startYellowRun(this.env, exports, { repo: p.repo, commit: p.commit, previous: merged.previous ?? null, source, parentRunId: origin.parentRunId ?? runId });
 						await log.step("Yellow: live on main, end-to-end soak", "info", `${p.commit.slice(0, 7)} is live with a yellow badge; ${started.runId} runs the end-to-end suite 3 times before the fork turns green`);
 						return started.runId;
@@ -145,6 +146,8 @@ export class GateWorkflow extends WorkflowEntrypoint<Env, GateParams> {
 				const pin = merged.ok && !merged.landed && gate.stockTag ? { pinnedTag: gate.stockTag } : {};
 				await setFleet(this.env, p.repo, { status: "pinned", ...pin, ...(merged.ok ? { pendingUpgrade: null } : {}), lastRun: { runId, kind: "gate", branch: p.branch, status: merged.ok ? "passed" : "failed", merged: merged.ok, ...gateBrief(gate) } });
 				if (origin.parentRunId) await notifyParent(this.env, exports, origin.parentRunId, "gate-finished", { gateRunId: runId, passed: true, merged: merged.ok, mergedCommit: merged.oid });
+				// An owner with an inbox can pull the new main from it (best effort; nothing waits on it).
+				if (merged.landed) await syncInboxMain(this.env, p.repo);
 				return true;
 			});
 			return { ...gateBrief(gate), merged: merged.ok };

@@ -417,13 +417,27 @@ export async function changedFiles(ws: Workspace, base: string | null, head: str
 	return changes.sort((x, y) => (x.path < y.path ? -1 : x.path > y.path ? 1 : 0));
 }
 
-/** Commits reachable from head but not from base, oldest first, at most `limit`. */
+/** How far back from base commitsBetween looks to recognize history the branch shares with it. */
+const BASE_HISTORY_WALK = 1000;
+
+/**
+ * Commits reachable from head but not from base, oldest first, at most
+ * `limit`. Bounded: base's history is read at most BASE_HISTORY_WALK commits
+ * deep, and at most 4 x limit commits are visited from head.
+ */
 export async function commitsBetween(ws: Workspace, base: string | null, head: string, limit = 50): Promise<{ oid: string; message: string }[]> {
+	const shared = new Set<string>();
+	if (base) for (const entry of await git.log({ fs: ws.fs, dir: ws.dir, ref: base, depth: BASE_HISTORY_WALK })) shared.add(entry.oid);
 	const out: { oid: string; message: string }[] = [];
-	for (const entry of await git.log({ fs: ws.fs, dir: ws.dir, ref: head, depth: limit * 4 })) {
-		if (base && (entry.oid === base || (await git.isDescendent({ fs: ws.fs, dir: ws.dir, oid: base, ancestor: entry.oid, depth: -1 })))) continue;
-		out.push({ oid: entry.oid, message: entry.commit.message });
-		if (out.length >= limit) break;
+	const queue = [head];
+	const seen = new Set<string>();
+	while (queue.length > 0 && out.length < limit && seen.size < limit * 4) {
+		const oid = queue.shift()!;
+		if (seen.has(oid) || shared.has(oid)) continue;
+		seen.add(oid);
+		const { commit } = await git.readCommit({ fs: ws.fs, dir: ws.dir, oid });
+		out.push({ oid, message: commit.message });
+		queue.push(...commit.parent);
 	}
 	return out.reverse();
 }

@@ -16,14 +16,14 @@ const MAX_COMMITS_LISTED = 20;
 const INTENT_FILE = /^\.intent\/([A-Za-z0-9._-]+)\.json$/;
 
 /**
- * Sources whose push may lack an intent record: the queue event of a push
+ * Sources whose push may lack an intent record: an import from the inbox, the queue event of a push
  * nobody on the platform made, and the owner's direct trigger. Re-gates of a
  * merge, check mode, and pushes made by platform workflows are skipped.
  */
 export function needsIntentCheck(p: Pick<GateParams, "branch" | "mode" | "regateOf">, source: GateParams["source"]): boolean {
 	if (p.mode !== "merge" || p.regateOf) return false;
 	if (p.branch.startsWith("repair/") || p.branch.startsWith("upgrade/")) return false;
-	return source === "event" || source === "direct";
+	return source === "event" || source === "direct" || source === "import";
 }
 
 /** Ids of intent records the branch adds that parse and name their own file. */

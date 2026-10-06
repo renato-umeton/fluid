@@ -28,8 +28,8 @@ export interface GateParams {
 	branch: string;
 	commit: string;
 	mode: "merge" | "check";
-	/** "outside-push": the commit the gate made after drafting an intent record for a push from outside the platform. */
-	source: "event" | "customize" | "direct" | "repair" | "repair-apply" | "seed" | "outside-push";
+	/** "import": a work branch copied from the fork's inbox. "outside-push": the commit the gate made after drafting an intent record for it. */
+	source: "event" | "customize" | "direct" | "repair" | "repair-apply" | "seed" | "outside-push" | "import";
 	runId?: string;
 	parentRunId?: string;
 	/** Set when this gate checks the merge of main into the branch after main moved (fast-forward-only main). */
