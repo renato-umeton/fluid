@@ -462,7 +462,7 @@ dialog::backdrop { background: rgba(15, 25, 30, 0.45); }
 .request-box form { display: grid; gap: 8px; }
 .examples { display: grid; gap: 6px; }
 .examples .btn { justify-content: flex-start; text-align: left; font-weight: 400; width: 100%; }
-/* ---------- Contest ---------- */
+/* Contest */
 .contest { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
 .contest .wide { grid-column: 1 / -1; }
 .contest > * { min-width: 0; }

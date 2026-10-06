@@ -284,7 +284,7 @@ function override(body) {
   return record;
 }
 
-// ---------- contests ----------
+// Contests
 
 function startContest(body) {
   requireSession();

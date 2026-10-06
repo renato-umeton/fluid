@@ -110,6 +110,35 @@ An upgrade run and the fork's `lastRun` in the fleet carry `path` (`"replay"` or
 `status` is `replayed`, `fallback` (not replayable), or `failed` (no longer applies). On the merge path `carried` is 0 and `reason` says why.
 
 
+### Contest run record
+
+`GET /api/runs/run_contest_<id>` returns the contest; each contestant's own timeline is `GET /api/runs/run_contest_<id>_<label>`.
+
+```json
+{ "kind": "contest", "status": "waiting", "request": "...", "contestId": "1a2b3c4d5e6f", "size": 3,
+  "includeAgent": false, "joinUntil": null, "agentBranch": null, "baseCommit": "...", "stockTag": "v1.11.0",
+  "contestants": [ { "label": "model-a", "kind": "model", "title": "Model plan A: smallest change",
+    "runId": "run_contest_1a2b3c4d5e6f_model-a", "status": "evaluated", "branch": "work/contest-1a2b3c4d5e6f-model-a",
+    "commit": "...", "intentId": "int_...", "summary": "...", "files": ["app/cards.ts"], "wishTests": 2,
+    "readyAt": "...", "latencyMs": 41000, "checkMs": 9000, "outside": 0,
+    "wish": { "passed": 2, "total": 2, "failing": [] },
+    "gate": { "passed": true, "firstFailure": null, "tiers": { "invariant": { "passed": true, "total": 57, "failed": 0 } } },
+    "note": "lost to ... because ..." } ],
+  "wishTests": [ { "id": "t-int_...-card-contract", "question": "..." } ],
+  "behavior": { "targetModes": ["research"], "omitted": 12,
+    "rows": [ { "id": "inv-...", "key": "invariant:inv-...", "tier": "invariant", "question": "...", "wish": false,
+      "main": { "passed": true },
+      "cells": { "model-a": { "passed": true, "changed": true, "scope": "target", "total": 1,
+        "changes": [ { "path": "body", "kind": "changed", "before": "...", "after": "..." } ] } } } ],
+    "counts": { "model-a": { "outside": 0, "inside": 1, "target": 3, "wishPassed": 2, "wishTotal": 2, "failingWish": [] } } },
+  "verdict": { "winner": "model-a", "reason": "model-a wins: ...", "ranking": [ { "label": "model-a", "eligible": true, "why": "..." } ],
+    "notes": { "model-b": "lost to model-a because ..." } },
+  "winner": "model-a", "picked": { "label": "model-a", "by": "rule", "reason": "...", "at": "..." },
+  "notes": { "model-b": "lost to model-a because ..." }, "shipGateRunId": "run_gate-..." }
+```
+
+`status` is `running`, `waiting` (for a pick), `passed` (the pick reached main), `failed` (no winner, or the pick did not pass its merge gate), or `cancelled` (no pick within an hour). A contestant's `status` moves through `queued`, `planning`, `ready`, `checking`, `evaluated`, or ends as `no change` with an `error`; the owner's agent starts as `waiting for your push` and becomes `joined`. A cell's `scope` is `wish`, `target` (wording in a mode the wish targets), or `outside`.
+
 ## HTTP routes
 
 | Method and path | Who | What it does |
@@ -132,6 +161,9 @@ An upgrade run and the fork's `lastRun` in the fleet carry `path` (`"replay"` or
 | `POST /api/ledger/commit` | owner | Commit pending records to the `ledger-<id>` repo |
 | `GET /api/intents/:repo` | anyone | Build-time intent records |
 | `POST /api/customize` | owner | Start a customization run |
+| `POST /api/contests` | owner | Start a contest for one wish: `{repo, request, size?: 2 or 3, includeAgent?: boolean}` -> `{runId, contestId, joinUntil, agentBranch}`. Costs `size` customizations |
+| `POST /api/contests/:runId/pick` | owner | Ship a contestant: `{label}`. Only one that passed every tier and every wish test, once per contest; it is then gated in merge mode |
+| `GET /api/forks/:repo/wishes` | anyone | Wishes in flight: work branches with the intent records they add and their status, plus runs that have not pushed yet |
 | `GET /api/runs/:runId` | session | Run timeline: steps, diff, suggestions, gate, yellow phase |
 | `POST /api/suggestions/:runId/decide` | owner | Accept, edit, or reject a suggested test |
 | `GET /api/gates/:repo` | anyone | Gate results history |
@@ -156,6 +188,7 @@ An upgrade run and the fork's `lastRun` in the fleet carry `path` (`"replay"` or
 
 - Per-client quotas run ahead of the global ones. A client is an IPv4 address or an IPv6 /64, and the admin is exempt. The limits: forks 3 per hour per client and 60 per hour overall, asks 30 per minute per client, and Artifacts-backed reads (`/api/me`, `/api/forks/:repo`, `/api/intents/:repo`) 60 per minute per client. Fork info is cached for 5 seconds.
 - Outside git tokens (`POST /api/forks/:repo/token`): only a normal session that owns the fork (not the admin header, not a yellow run's test session), 3 per hour per user, 6 per hour per client, and 60 per hour overall, one request per fork at a time (a second one gets a 409). Each token lasts one hour and can write only the fork's inbox repo; each request replaces the inbox with a fresh fork of `main`, which ends every earlier token, and the inbox is deleted 15 minutes after its token expires. The response is `no-store` and the token is never logged (only its id and expiry). Inboxes are not fleet forks and do not count toward the fork limits. Imports from the inbox: 10 per fork per hour and 200 per hour overall, each in its own workflow, capped at 8 MB downloaded, 5000 tree entries, 50 commits, 200 files, and 1 MB per file, with unsafe paths refused. A failed gate for an imported change opens no repair. See "Outside pushes" in `docs/GATE_AND_AGENTS.md`.
+- Contests: a contest of N counts as N customizations of the owner (10 an hour), and 30 contests an hour run across the platform. N is 2 or 3, one contest per fork at a time (a second gets a 409), the join window for the owner's agent is 5 minutes, and a contest waits at most an hour for a pick.
 - Fork claims are atomic in `Fleet.claimProvisioning`. A concurrent second request gets a 409, and failed attempts do not count toward the 500-fork cap.
 - Fleet streams are capped at 200 overall and 5 per client. A subscriber with more than 256 KB unread is dropped.
 - Ledger repos are created only for users with a fork, and the daily alarm stops when nothing is waiting.
