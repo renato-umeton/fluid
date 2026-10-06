@@ -101,6 +101,8 @@ const routes = [
   ["GET", /^\/api\/runs\/([^/]+)$/, (m) => publicRun(m[1])],
   ["POST", /^\/api\/suggestions\/([^/]+)\/decide$/, (m, body) => decide(m[1], body)],
   ["GET", /^\/api\/gates\/([^/]+)$/, (m) => db.gates[m[1]] ?? []],
+  ["POST", /^\/api\/forks\/([^/]+)\/token$/, (m) => mintToken(m[1])],
+  ["POST", /^\/api\/mock\/outside-push$/, (m, body) => startOutsidePush(body)],
   ["POST", /^\/api\/admin\/release$/, (m, body) => release(body)],
   ["POST", /^\/api\/admin\/fleet\/seed$/, (m, body) => ({ created: seedFleet(body?.count ?? 360) })],
   ["GET", /^\/api\/fleet$/, () => fleetView()],
@@ -515,7 +517,7 @@ function redcapScript(run) {
         fork.branches = fork.branches.filter((b) => b.name !== run.branch);
         fork.branches[0].commit = fork.head;
         db.intents[fork.repo].unshift({ ...run.intent, commit: fork.head.slice(0, 7), at: now() });
-        v.detail = `main is now ${fork.head.slice(0, 7)}; this fork's Worker serves the change`;
+        v.detail = `${mainMovedLine(run)}main is now ${fork.head.slice(0, 7)}; this fork's Worker serves the change`;
         startMockYellow(fork, run);
       },
     },
@@ -573,7 +575,7 @@ function tauScript(target) {
           fork.branches = fork.branches.filter((b) => b.name !== run.branch);
           fork.branches[0].commit = fork.head;
           db.intents[fork.repo].unshift({ ...run.intent, commit: fork.head.slice(0, 7), at: now() });
-          v.detail = `main is now ${fork.head.slice(0, 7)} with tau ${target}`;
+          v.detail = `${mainMovedLine(run)}main is now ${fork.head.slice(0, 7)} with tau ${target}`;
           startMockYellow(fork, run);
           return "done";
         },
@@ -667,7 +669,7 @@ function uiScript(mapping) {
           fork.branches = fork.branches.filter((b) => b.name !== run.branch);
           fork.branches[0].commit = fork.head;
           db.intents[fork.repo].unshift({ ...run.intent, commit: fork.head.slice(0, 7), at: now() });
-          v.detail = `main is now ${fork.head.slice(0, 7)}; the UI applies the new preferences`;
+          v.detail = `${mainMovedLine(run)}main is now ${fork.head.slice(0, 7)}; the UI applies the new preferences`;
           startMockYellow(fork, run);
         },
       },
@@ -875,6 +877,123 @@ function createRepairRun(fork, conflict, tag, safety, stuck) {
   return db.runs[id];
 }
 
+// ---------- bring your own agent ----------
+
+/** Mock of POST /api/forks/:repo/token: a fake one hour token and the same commands the platform returns. */
+function mintToken(repo) {
+  const persona = requireSession();
+  const fork = db.forks[repo];
+  if (!fork || repo !== persona.forkRepo) throw new HttpError(403, "you can get a token only for your own fork");
+  const secret = `art_v2_mock${hex(40)}`;
+  const expires = Date.now() + 3600 * 1000;
+  const authed = fork.remote.replace("https://", `https://x:${secret}@`);
+  return {
+    repo, remote: fork.remote, token: `${secret}?expires=${Math.floor(expires / 1000)}`, expiresAt: new Date(expires).toISOString(), branchPrefix: "work/",
+    commands: [`git clone ${authed} ${repo}`, `cd ${repo}`, "git checkout -b work/my-change", 'git add -A && git commit -m "Describe the change"', "git push origin work/my-change"],
+  };
+}
+
+/**
+ * Mock only: an outside agent pushes two commits with no intent record, to work/my-change or straight to
+ * main. A push to main is undone by the main guard and kept on work/outside-main-<sha>. Then the gate
+ * drafts the intent record, runs the three tiers, fast-forwards main, and the change soaks in yellow.
+ */
+function startOutsidePush(body) {
+  const persona = requireSession();
+  const fork = db.forks[body?.repo];
+  if (!fork) throw new HttpError(404, `Fork ${body?.repo} not found`);
+  const target = body?.target === "main" ? "main" : "work";
+  const pushed = hex(40);
+  const branch = target === "main" ? `work/outside-main-${pushed.slice(0, 7)}` : "work/my-change";
+  const id = `run_${hex(10)}`;
+  const run = {
+    id, kind: "gate", status: "running", repo: fork.repo, branch, commit: pushed, source: "outside-push", startedAt: now(), intent: null, gate: null,
+    steps: [], _ctx: { persona, fork, branch, pushed, target, intentId: nextIntentId() }, _script: null, _idx: 0, _until: 0,
+  };
+  run._script = outsidePushScript(run);
+  run.steps = run._script.map((s) => ({ name: s.name, detail: s.pending ?? "", status: "pending" }));
+  db.runs[id] = run;
+  ensureTicker();
+  return { runId: id };
+}
+
+const OUTSIDE_COMMITS = ["Add a plain-language summary line to research answers", "Add a tier 3 test for the summary line"];
+
+function outsidePushScript(run) {
+  const { fork, branch, pushed, target, intentId, persona } = run._ctx;
+  const guard = target === "main"
+    ? [{
+        name: "Outside push to main", ms: 1000,
+        done: (r, v) => { v.detail = `main moved to ${pushed.slice(0, 7)} outside the gate. main only moves through the gate, so the main guard pushed it back to ${fork.head.slice(0, 7)} and kept the commits on ${branch}.`; },
+      }]
+    : [];
+  return [
+    ...guard,
+    {
+      name: `Push received on ${branch}`, ms: 800,
+      done: (r, v) => {
+        fork.branches = fork.branches.filter((b) => b.name !== branch);
+        fork.branches.push({ name: branch, commit: pushed, role: "outside", gate: "pending" });
+        v.detail = `${pushed.slice(0, 7)} from an outside agent: ${OUTSIDE_COMMITS.length} commits (${OUTSIDE_COMMITS.join("; ")})`;
+      },
+    },
+    {
+      name: "Check the intent record", ms: 1100,
+      done: (r, v) => {
+        run.commit = hex(40);
+        run.intent = {
+          id: intentId, author: "outside agent", agent: "outside-agent", source: "outside-push", pushed_by: `user:${persona.id}`, branch,
+          request: OUTSIDE_COMMITS.join("; "),
+          purpose: `Pushed to ${branch} from outside the platform; this record was drafted by the gate from the commit messages and the files touched. Edit it to say why the change exists.`,
+          modes_affected: ["research"], files: [`.intent/${intentId}.json`, "app/cards.ts", "tests/user/manifest.json"], tests_added: ["tests/user/manifest.json"], stock_tag: fork.stockTag,
+        };
+        const entry = fork.branches.find((b) => b.name === branch);
+        if (entry) entry.commit = run.commit;
+        v.detail = `No record on ${branch}: drafted .intent/${intentId}.json (source outside-push) from ${OUTSIDE_COMMITS.length} commit messages and 2 files touched, committed as ${run.commit.slice(0, 7)}`;
+      },
+    },
+    {
+      name: "Gate tier 1: invariants", ms: 1400,
+      done: (r, v) => { v.detail = `${INVARIANT_PROBES} of ${INVARIANT_PROBES} probes passed on all ${SAMPLES} samples, read from stock at ${fork.stockTag}`; },
+    },
+    { name: "Gate tier 2: functional", ms: 1000, done: (r, v) => { v.detail = `${FUNCTIONAL_PROBES} of ${FUNCTIONAL_PROBES} probes passed`; } },
+    {
+      name: "Gate tier 3: user tests", ms: 800,
+      done: (r, v) => {
+        v.detail = "2 of 2 user tests passed (including the one the outside push added)";
+        run.gate = gateResult({ commit: run.commit, ref: branch, userTests: 2 });
+        db.gates[fork.repo].unshift(run.gate);
+        fork.lastGate = run.gate;
+        const entry = fork.branches.find((b) => b.name === branch);
+        if (entry) entry.gate = "passed";
+      },
+    },
+    {
+      name: "Merge to main", ms: 800,
+      done: (r, v) => {
+        fork.head = run.commit;
+        fork.branches = fork.branches.filter((b) => b.name !== branch);
+        fork.branches[0].commit = fork.head;
+        db.intents[fork.repo].unshift({ ...run.intent, commit: fork.head.slice(0, 7), at: now() });
+        run.mergedCommit = fork.head;
+        // A customization still in flight on this fork finds main moved: its gate merges main in and gates again.
+        for (const other of Object.values(db.runs)) {
+          if (other.kind === "customize" && other.repo === fork.repo && (other.status === "running" || other.status === "waiting")) other._ctx.mainMoved = { commit: fork.head, runId: run.id };
+        }
+        v.detail = `main fast-forwarded to ${fork.head.slice(0, 7)}`;
+        startMockYellow(fork, run, "outside-push");
+      },
+    },
+  ];
+}
+
+/** A customize run whose main moved under it (an outside push landed first): its gate re-merged main and gated again. */
+function mainMovedLine(run) {
+  const moved = run._ctx.mainMoved;
+  if (!moved) return "";
+  return `main moved to ${moved.commit.slice(0, 7)} by an outside push (${moved.runId}); main was merged into ${run.branch} and the merge passed the gate. `;
+}
+
 // ---------- yellow to green ----------
 
 const SOAK_PASSES = 3;
@@ -897,8 +1016,8 @@ function greenHealth(commit) {
   return { health: "green", commit, lastGreenCommit: commit, runId: null, pass: 0, of: SOAK_PASSES, since: now(), source: null, failure: null, browser: null, rolledBackFrom: null };
 }
 
-function yellowHealth(commit, previous) {
-  return { health: "yellow", commit, lastGreenCommit: previous?.health === "green" ? (previous.commit ?? previous.lastGreenCommit) : previous?.lastGreenCommit ?? null, runId: `run_yel-${hex(8)}`, pass: 0, of: SOAK_PASSES, since: now(), source: "customize", failure: null, browser: null, rolledBackFrom: null };
+function yellowHealth(commit, previous, landedBy = "customize") {
+  return { health: "yellow", commit, lastGreenCommit: previous?.health === "green" ? (previous.commit ?? previous.lastGreenCommit) : previous?.lastGreenCommit ?? null, runId: `run_yel-${hex(8)}`, pass: 0, of: SOAK_PASSES, since: now(), source: landedBy, failure: null, browser: null, rolledBackFrom: null };
 }
 
 function addHistory(repo, event, commit, runId, detail) {
@@ -920,13 +1039,13 @@ function mockPass(pass, hasRedcap) {
 }
 
 /** Simulates the yellow soak after a mock customization lands on main: three passes, browser checks once, then green. */
-function startMockYellow(fork, parentRun) {
-  const health = yellowHealth(fork.head, fork.health);
+function startMockYellow(fork, parentRun, landedBy = "customize") {
+  const health = yellowHealth(fork.head, fork.health, landedBy);
   fork.health = health;
   const hasRedcap = /redcap/i.test(parentRun?._ctx?.text ?? "");
-  const yrun = { id: health.runId, kind: "yellow", repo: fork.repo, status: "running", commit: fork.head, pass: 0, of: SOAK_PASSES, health: "yellow", passes: [], browser: null, steps: [{ name: `Live on main in yellow at ${fork.head.slice(0, 7)}`, status: "done", detail: "Landed by customize; the end-to-end suite runs 3 times against the live fork, with the browser checks once" }], createdAt: now(), updatedAt: now() };
+  const yrun = { id: health.runId, kind: "yellow", repo: fork.repo, status: "running", commit: fork.head, pass: 0, of: SOAK_PASSES, health: "yellow", passes: [], browser: null, steps: [{ name: `Live on main in yellow at ${fork.head.slice(0, 7)}`, status: "done", detail: `Landed by ${landedBy}; the end-to-end suite runs 3 times against the live fork, with the browser checks once` }], createdAt: now(), updatedAt: now() };
   db.runs[yrun.id] = yrun;
-  addHistory(fork.repo, "yellow", fork.head, yrun.id, `Live on main in yellow after the gate (customize); last green ${String(health.lastGreenCommit ?? "unknown").slice(0, 7)}`);
+  addHistory(fork.repo, "yellow", fork.head, yrun.id, `Live on main in yellow after the gate (${landedBy}); last green ${String(health.lastGreenCommit ?? "unknown").slice(0, 7)}`);
   const mirror = () => {
     if (!parentRun) return;
     parentRun.yellowRunId = yrun.id;

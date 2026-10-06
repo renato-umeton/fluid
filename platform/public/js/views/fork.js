@@ -1,11 +1,15 @@
 // My fork: repository facts, branches, gate history, build-time and run-time ledgers.
-import { api } from "../api.js";
+import { api, state as apiState } from "../api.js";
 import { h, mount, short, fmtConf, fmtTime, modeBadge, statusTag, MODE_LABEL } from "../dom.js";
-import { renderIntent } from "./shared.js";
+import { renderIntent, renderTimeline } from "./shared.js";
+import { expiryText, maskCommand, secondsLeft } from "../outside-agent.js";
 import { renderHealth } from "../health.js";
 
 const HEALTH_POLL_MS = 3000;
+const PUSH_POLL_MS = 1000;
 let healthTimer = null;
+let expiryTimer = null;
+let pushTimer = null;
 
 export const title = "My fork";
 export const sub = "Your personal repository, forked from a stock release. The gate reads stock tests at the pinned tag, so nothing here can weaken the floor.";
@@ -13,6 +17,10 @@ export const sub = "Your personal repository, forked from a stock release. The g
 export function leave() {
   clearTimeout(healthTimer);
   healthTimer = null;
+  clearInterval(expiryTimer);
+  expiryTimer = null;
+  clearTimeout(pushTimer);
+  pushTimer = null;
 }
 
 export async function render(root, app, params) {
@@ -28,6 +36,7 @@ export async function render(root, app, params) {
       h("div", { class: "panel-head" }, h("div", {}, h("h2", { id: "health-heading" }, "Health: yellow to green"),
         h("p", {}, "Every change that passes the gate goes live on main in yellow. The stock end-to-end suite (plus your own scenarios) then runs against the live fork; 3 passes in a row turn it green, and a failure rolls main back to the last green commit."))),
       healthBody),
+    outsidePanel(fork),
     factsPanel(app, fork),
     branchesPanel(fork, gates),
     ledgerPanel(ledger, highlight),
@@ -50,6 +59,100 @@ async function paintHealth(el, app, repo) {
   } catch (err) {
     mount(el, h("p", { class: "small muted" }, `Health is unavailable: ${err.message}`));
   }
+}
+
+/**
+ * Connect your own agent: a one hour git token for this fork and the commands to use it.
+ * Pushes go to work/ branches and through the gate; a push to main is undone by the platform.
+ */
+function outsidePanel(fork) {
+  const status = h("p", { class: "small muted", role: "status" });
+  const access = h("div", { class: "stack" });
+  const pushOut = h("div", { class: "stack" });
+  const getToken = h("button", { type: "button", class: "btn btn-primary" }, "Get a one hour git token");
+  getToken.addEventListener("click", async () => {
+    getToken.disabled = true;
+    mount(status, "Minting a token for your fork...");
+    try {
+      const minted = await api.outsideToken(fork.repo);
+      mount(status);
+      showAccess(access, minted);
+      getToken.textContent = "Get a new token (the old one stops working)";
+    } catch (err) {
+      mount(status, err.message);
+    } finally {
+      getToken.disabled = false;
+    }
+  });
+  const simulate = apiState.mock
+    ? [
+        h("button", { type: "button", class: "btn", onclick: () => startSimulatedPush(fork, "work", pushOut) }, "Simulate an outside push"),
+        h("button", { type: "button", class: "btn btn-quiet", onclick: () => startSimulatedPush(fork, "main", pushOut) }, "Simulate a push to main"),
+      ]
+    : null;
+  return h("section", { class: "panel wide", "aria-labelledby": "outside-heading" },
+    h("div", { class: "panel-head" }, h("div", {}, h("h2", { id: "outside-heading" }, "Connect your own agent"),
+      h("p", {}, "Work on this fork with your own agent or editor over plain git. Push to a work/ branch: the gate decides what reaches main, exactly as for changes made here. A push straight to main is undone, and its commits are kept on a work/ branch for the gate."))),
+    h("div", { class: "panel-body stack" },
+      h("div", { class: "row" }, getToken, simulate),
+      status, access, pushOut));
+}
+
+function showAccess(el, minted) {
+  clearInterval(expiryTimer);
+  const expiry = h("span", { class: "tag warn" }, expiryText(minted.expiresAt));
+  let revealed = false;
+  const lines = minted.commands.map((command) => {
+    const text = h("code", { class: "cmd" }, maskCommand(command));
+    const copy = h("button", { type: "button", class: "btn btn-quiet", "aria-label": `Copy: ${maskCommand(command)}` }, "Copy");
+    copy.addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(command); copy.textContent = "Copied"; } catch { copy.textContent = "Copy failed"; }
+    });
+    return { command, text, row: h("li", { class: "cmd-row" }, text, copy) };
+  });
+  const reveal = h("button", { type: "button", class: "btn btn-quiet" }, "Show token");
+  reveal.addEventListener("click", () => {
+    revealed = !revealed;
+    for (const line of lines) line.text.textContent = revealed ? line.command : maskCommand(line.command);
+    reveal.textContent = revealed ? "Hide token" : "Show token";
+  });
+  mount(el,
+    h("div", { class: "row" }, expiry, h("span", { class: "small muted" }, `Write access to ${minted.repo} only. Push to branches that start with ${minted.branchPrefix}.`), reveal),
+    h("ol", { class: "cmd-list" }, lines.map((l) => l.row)),
+    h("p", { class: "xsmall muted" }, "The token is part of the clone URL, so git stores it in the clone's .git/config until it expires. Getting a new token stops the old one. A branch with no .intent/<id>.json gets one drafted from your commit messages before it is gated."));
+  expiryTimer = setInterval(() => {
+    if (!expiry.isConnected) { clearInterval(expiryTimer); expiryTimer = null; return; }
+    expiry.textContent = expiryText(minted.expiresAt);
+    if (secondsLeft(minted.expiresAt) === 0) { expiry.className = "tag fail"; clearInterval(expiryTimer); expiryTimer = null; }
+  }, 1000);
+}
+
+/** Mock mode: an outside agent pushes; follow the run through the gate and the yellow soak to green. */
+async function startSimulatedPush(fork, target, el) {
+  clearTimeout(pushTimer);
+  mount(el, h("p", { class: "small muted" }, "Pushing from the outside agent..."));
+  try {
+    const { runId } = await api.simulateOutsidePush(fork.repo, target);
+    await followPush(runId, el);
+  } catch (err) {
+    mount(el, h("p", { class: "small muted" }, err.message));
+  }
+}
+
+async function followPush(runId, el) {
+  if (!el.isConnected) return;
+  const run = await api.run(runId);
+  const yellow = run.yellow
+    ? h("p", { class: "small" }, h("strong", {}, run.yellow.health === "green" ? "Green" : `Yellow: soak pass ${run.yellow.pass} of ${run.yellow.of}`),
+        ` at ${short(run.yellow.commit)} (${run.yellow.runId})`)
+    : null;
+  mount(el,
+    h("div", { class: "row" }, h("strong", {}, `Run ${run.id}`), statusTag(run.status), run.branch ? h("code", {}, run.branch) : null),
+    renderTimeline(run.steps),
+    yellow,
+    run.intent ? renderIntent(run.intent) : null);
+  const settled = (run.status === "passed" || run.status === "failed") && (!run.yellow || run.yellow.health !== "yellow");
+  if (!settled) pushTimer = setTimeout(() => followPush(runId, el), PUSH_POLL_MS);
 }
 
 function factsPanel(app, fork) {
