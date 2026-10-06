@@ -627,7 +627,8 @@ route("POST", "/api/forks/:repo/token", async (rc, { repo }) => {
 	await takeQuota(rc.env, "global", "outside-token", LIMITS.outsideTokensGlobalPerHour, 3600);
 	const key = outsideGrantKey(name);
 	const lock = `lock:${key}`;
-	if (!(await fleet.tryLock(lock, 30_000))) throw new HttpError(409, "a token for this fork is being minted right now; try again in a few seconds");
+	const owner = crypto.randomUUID();
+	if (!(await fleet.tryLock(lock, 30_000, owner))) throw new HttpError(409, "a token for this fork is being minted right now; try again in a few seconds");
 	try {
 		const previous = (await fleet.getValue(key)) as OutsideGrant | null;
 		const inbox = inboxRepoName(name);
@@ -647,7 +648,7 @@ route("POST", "/api/forks/:repo/token", async (rc, { repo }) => {
 		console.log(`outside token minted for ${inbox} (token id ${minted.tokenId}, expires ${minted.access.expiresAt})`);
 		return json(minted.access, 201);
 	} finally {
-		await fleet.unlock(lock);
+		await fleet.unlock(lock, owner);
 	}
 });
 
