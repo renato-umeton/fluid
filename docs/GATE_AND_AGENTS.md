@@ -8,7 +8,7 @@ All agent work runs in Workflows, declared in `platform/cloudflare.config.ts` an
 
 | Workflow | Name | One instance per | What it does |
 | :-- | :-- | :-- | :-- |
-| `GateWorkflow` | `fluid-gate` | push (repo, branch, commit) | Runs tiers 1 to 3 against the pushed commit. On a pass `main` fast-forwards to that commit (see "Main only fast-forwards"); on a fail `main` is untouched and a repair starts. `repair/*` branches are only checked, unless the user applies one. |
+| `GateWorkflow` | `fluid-gate` | push (repo, branch, commit) | Drafts an intent record first for an outside push that has none (see "Outside pushes"). Runs tiers 1 to 3 against the pushed commit. On a pass `main` fast-forwards to that commit (see "Main only fast-forwards"); on a fail `main` is untouched and a repair starts. `repair/*` branches are only checked, unless the user applies one. |
 | `CustomizeWorkflow` | `fluid-customize` | user request | Plans the change (a recipe or the agent model), checks its imports and loads it in an isolate (a model-written change gets up to 2 repairs, see "Customization checks and repairs"), writes `.intent/<id>.json`, has the suggester propose tier 3 tests, waits for the user's decisions, commits on `work/<slug>` with an `Intent-Id:` trailer, records the gate link, pushes, starts the gate, and waits for the gate's (and any repair's) event. |
 | `RepairWorkflow` | `fluid-repair` | failed gate or yellow rollback | Opens `repair/<short-sha>` with `.repair/<short-sha>.md`, a repair intent record (`relies_on` lists the records it used), and a fix when a rule applies (restore tau, revert a customization that broke the clinical or research floor). A yellow repair works differently (see "Yellow to green"). It checks the fix in check mode and never merges it; the user applies it. |
 | `ReleaseWorkflow` | `fluid-release` | release | Starts one upgrade per fork that still needs the tag, in batches of 20 with a 1 second pause between batches. |
@@ -64,6 +64,25 @@ The planner prompt states that look and layout (fonts, density, colors, tabs, ch
 - **Upgrades.** With `auto_upgrade`, the upgrade fast-forwards `main` to the gated `upgrade/<tag>` commit. If `main` moved, it merges `main` into `upgrade/<tag>` and gates again (at most 2 extra rounds).
 - **One-tap approval.** A passed upgrade without `auto_upgrade` is stored as the fork's `pendingUpgrade` (`{tag, commit, runId}`), apart from `lastRun`, which later runs overwrite. `POST /api/forks/:repo/upgrade` fast-forwards `main` to that commit and refuses with 409 when `main` is no longer an ancestor of it.
 - **Customizations.** Before committing, the customization checks the planned files against `main`'s current files. A recipe (REDCap, tau) is applied again on the current files; a model plan whose files changed on `main` is refused with "run the request again". A retried commit step reuses a pushed commit whose `Intent-Id` matches instead of committing again.
+
+## Outside pushes
+
+A fork's owner can push with their own agent or editor, using a one hour token from `POST /api/forks/:repo/token` (`platform/src/forks/outside.ts`). Artifacts tokens are `read` or `write` and scoped to one repo; they cannot be scoped to branches. So the token can push to any branch, and the platform protects `main` itself.
+
+- **Work branches.** A push to `work/*` (or any branch other than `main`, `upgrade/*`, and `repair/*`) starts the gate like every other push. Pushes to `upgrade/*` and `repair/*` are not gated, as before: an upgrade lands only its own gated commit, and a repair lands only when the owner applies it, which gates it.
+- **Drafted intent.** Before the tiers run, a gate started by a push event or the owner's direct trigger checks that the branch adds a valid `.intent/<id>.json` since it left `main` (the file parses and its `id` matches its name). If it does not, the gate drafts one (`platform/src/agents/outside-intent.ts`): `author: "outside agent"`, `agent: "outside-agent"`, `source: "outside-push"`, `pushed_by` the owner, the commit subjects as `request`, the files touched as `files`, changed `tests/user/` files as `tests_added`, modes inferred from `policies/` paths, and the short commit ids. It commits the record onto the branch with an `Intent-Id` trailer, pushes without force, records the gate link, and starts the gate for that commit (source `outside-push`). The first gate run ends there with `draftedIntent` and `regateRunId`; a retried step reuses its own drafted commit. To write your own record instead, add `.intent/<id>.json` to the branch and the gate leaves it as it is.
+- **Tier 3 and harvest.** Tier 3 runs the fork's `tests/user/manifest.json` at the drafted commit, including tests the outside push added. The harvester reads `outside-agent` records like other customizations; the floor files rule still keeps them out of drafts when they touch the floor.
+- **Yellow.** The change soaks in yellow like any other, with source `outside-push` in the fork's health.
+- **main guard.** Every push the platform makes to `main` (gate fast-forward, auto upgrade, one-tap upgrade, yellow rollback, onboarding, seeding, and the guard's own restore) first records the move as `mainmove_<repo>_<from>_<to>` in the Runs namespace (`platform/src/forks/main-guard.ts`). The queue consumer hands every push to `main` of a user fork to the guard. For a fork that was ever given an outside token (fleet value `outside:<repo>`, written before the first token is minted and never removed), a move with no record is undone: the guard checks that `main` is still at the pushed commit, records its own move, force pushes `main` back to the commit before the push, and pushes the pushed commit to `work/outside-main-<sha>`, where the gate decides on it. A deleted `main` is restored the same way. The guard writes a run (`run_guard_<sha>_<hash>`) with these steps. Forks that never had an outside token are not checked.
+
+Limits of this protection:
+
+- `main` is wrong for a few seconds (queue delivery is about 3 seconds). An ask in that window answers from the pushed commit, and a yellow soak that checks `main` then cancels itself; an admin re-check (`POST /api/admin/yellow/:repo`) starts a new one.
+- If the push rewrote history so the earlier commit is no longer in the repo (a force push of unrelated history, with no other branch holding it), the guard cannot restore `main`. It marks the fork failed and says so in its run; an admin resets `main`.
+- The check before the force push and the push itself are separate requests, so a push that lands between them can be overwritten. The pushed commits are still on `work/outside-main-<sha>`.
+- The token can also delete or rewrite other branches of the fork, including `repair/*` and `upgrade/*` branches. That only affects the owner's own fork, and nothing reaches `main` without a gate.
+
+**Concurrency.** An outside push and a customize run can race on the same fork. Whichever passes its gate first fast-forwards `main`. The other gate finds `main` moved (`platform/src/gate/advance.ts`): changes to other files are merged into its branch and gated again; changes to the same lines stop the run with the conflicting files, and `main` stays as it is. The gate names an outside push in its "Merge to main" step and adds a "main moved during the gate" step to the waiting customize run. A customize run that is still waiting on test decisions applies its recipe again on the new `main`, or refuses a model plan whose files changed (see "Main only fast-forwards"). `platform/test/outside-concurrency.test.ts` covers these cases.
 
 ## Yellow to green
 
@@ -146,6 +165,7 @@ GET  /api/runs/:runId               -> Run
 POST /api/suggestions/:runId/decide {testId, decision, edited?} -> Run     edit sends edited: {assert: [...]}
 GET  /api/gates/:repo               -> GateResult[] (newest first, last 20)
 POST /api/gates/:repo               {branch, commit?} -> {runId, created}  direct gate trigger (local dev has no queue delivery)
+POST /api/forks/:repo/token         -> {repo, remote, token, expiresAt, branchPrefix, commands}   one hour git write token for the owner
 POST /api/forks/:repo/upgrade       -> one-tap fast-forward to the fork's pendingUpgrade
 POST /api/forks/:repo/repairs/:sha/apply -> {runId, branch, commit}       gate repair/<sha> in merge mode; main fast-forwards on pass
 POST /api/admin/stock/publish       {tag?, notes?, safety?}               publish the bundled stock source
@@ -195,7 +215,7 @@ In both cases the gate decides whether the result ships.
 
 - namespaces other than `fluid`
 - repos that do not start with `user-`
-- pushes to `main` (the gate's own merges)
+- pushes to `main` (never gated; the main guard checks them, see "Outside pushes")
 - tag pushes
 - `upgrade/*` branches (the upgrade workflow gates them itself)
 - `repair/*` branches (the repair workflow checks them; applying one is an explicit request)

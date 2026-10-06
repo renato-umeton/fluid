@@ -100,6 +100,7 @@ As in spec section 8, stored at `.intent/<id>.json`, commit trailer `Intent-Id: 
 | `GET /api/forks/:repo` | anyone | Fork info: remote, pinned tag, tau, branches, last gate |
 | `GET /api/forks/:repo/health` | anyone | Yellow or green state, soak progress, history |
 | `GET /api/forks/:repo/ui` | anyone | Validated `ui/preferences.json` from main |
+| `POST /api/forks/:repo/token` | owner | A one hour git write token for the fork, for your own agent: `{repo, remote, token, expiresAt, branchPrefix: "work/", commands}`. Revokes the fork's previous outside token |
 | `POST /api/forks/:repo/upgrade` | owner | One-tap upgrade to a passed release |
 | `POST /api/forks/:repo/repairs/:sha/apply` | owner | Gate a repair branch and fast-forward main on pass |
 | `POST /api/ask` | session | Ask the user's fork (or stock); returns an answer card. `reaskOf` (an earlier `answer_id`) marks an override or attestation re-ask of the same question and is recorded as `reask_of` |
@@ -131,6 +132,7 @@ As in spec section 8, stored at `.intent/<id>.json`, commit trailer `Intent-Id: 
 ## Limits and protections
 
 - Per-client quotas run ahead of the global ones. A client is an IPv4 address or an IPv6 /64, and the admin is exempt. The limits: forks 3 per hour per client and 60 per hour overall, asks 30 per minute per client, and Artifacts-backed reads (`/api/me`, `/api/forks/:repo`, `/api/intents/:repo`) 60 per minute per client. Fork info is cached for 5 seconds.
+- Outside git tokens (`POST /api/forks/:repo/token`): only a normal session that owns the fork (not the admin header, not a yellow run's test session), 3 per hour per user, 6 per hour per client, and 60 per hour overall. Each token lasts one hour, is scoped to that one repo, and minting a new one revokes the previous one. The response is `no-store` and the token is never logged (only its id and expiry). Artifacts cannot scope a token to branches, so main is protected by the platform: see "Outside pushes" in `docs/GATE_AND_AGENTS.md`.
 - Fork claims are atomic in `Fleet.claimProvisioning`. A concurrent second request gets a 409, and failed attempts do not count toward the 500-fork cap.
 - Fleet streams are capped at 200 overall and 5 per client. A subscriber with more than 256 KB unread is dropped.
 - Ledger repos are created only for users with a fork, and the daily alarm stops when nothing is waiting.

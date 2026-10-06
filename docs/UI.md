@@ -33,6 +33,14 @@ A fork can change how the control plane looks for its owner through one declarat
 - **Mock mode** serves `GET /api/forks/:repo/ui` and `GET /api/me/charts` from the in-browser data and routes and simulates requests with `js/ui-recipe.js`, a copy of the platform's recipe matching and UI mapping. Tests check that every rule is the same and that both route, map, and merge requests the same way, so the same request works with `?mock=1`. A request that maps to nothing fails with a "Not mapped" message, changes nothing, and lists requests that do work.
 
 
+## Connect your own agent
+
+**My fork** has a **Connect your own agent** panel (`js/views/fork.js`, text helpers in `js/outside-agent.js`).
+
+- **Get a one hour git token** calls `POST /api/forks/:repo/token` and shows the expiry as a countdown, the branch prefix (`work/`), and the commands: `git clone` with the token in the URL, `cd`, `git checkout -b work/my-change`, a commit, and `git push origin work/my-change`. The token's secret is hidden on screen (`art_v2_****`) until **Show token**; each **Copy** button copies the real command. Getting a new token stops the old one.
+- The panel says that the gate decides what reaches main, that a push to main is undone and kept on a work branch, and that a branch with no intent record gets one drafted from its commit messages.
+- **Mock mode** serves the token route with a fake token and adds two buttons: **Simulate an outside push** (to `work/my-change`) and **Simulate a push to main** (the main guard undoes it and keeps the commits on `work/outside-main-<sha>`). The panel follows the run: push received, drafted intent record, tiers 1 to 3, merge to main, then the yellow soak to green, with the drafted record below. The change also appears in the fork's branches, gate history, intent ledger, and health. A mock customization that is still running when the simulated push lands says in its merge step that main moved under it by an outside push and was merged in and gated again. For a demo video: `/?mock=1#fork`, pick a persona, get a token, then simulate a push.
+
 ## Yellow to green health
 
 Every change that lands on a fork's `main` is live in yellow until the end-to-end suite passes three times in a row (`docs/GATE_AND_AGENTS.md`, "Yellow to green"). `js/health.js` renders it with `h()` only.

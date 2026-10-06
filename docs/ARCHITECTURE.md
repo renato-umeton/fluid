@@ -132,7 +132,8 @@ flowchart TB
 
 ### Abuse limits for the public demo
 
-- **Code.** `platform/src/durable/quota.ts` and `platform/src/api/routes.ts`. Per-client and global quotas on sessions, forks, asks, and Artifacts-backed reads. JSON-only POST bodies capped at 64 KB, same-origin checks, request ids on every error. The AI Gateway caps all model traffic at 300 requests per minute.
+- **Code.** `platform/src/durable/quota.ts` and `platform/src/api/routes.ts`. Per-client and global quotas on sessions, forks, asks, Artifacts-backed reads, and outside git tokens (3 per hour per user, 6 per client, 60 overall).
+- **Outside git access.** A token from `POST /api/forks/:repo/token` lasts one hour, writes only to the owner's fork, and replaces the fork's previous outside token. Artifacts cannot scope it to branches, so the main guard (`platform/src/forks/main-guard.ts`) undoes any push to `main` the platform did not make, and every other branch reaches `main` only through the gate. Details and limits in `docs/GATE_AND_AGENTS.md`, "Outside pushes". JSON-only POST bodies capped at 64 KB, same-origin checks, request ids on every error. The AI Gateway caps all model traffic at 300 requests per minute.
 
 ## Cloudflare primitives used
 
