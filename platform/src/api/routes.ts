@@ -307,6 +307,7 @@ route("POST", "/api/ask", async (rc) => {
 	if (typeof context !== "object" || context === null || Array.isArray(context)) throw new HttpError(400, "context must be an object");
 	if (body.explicitMode !== undefined && body.explicitMode !== null && !MODES.includes(body.explicitMode as string)) throw new HttpError(400, `explicitMode must be one of ${MODES.join(", ")}`);
 	if (body.attestation !== undefined && typeof body.attestation !== "boolean") throw new HttpError(400, "attestation must be a boolean");
+	if (body.reaskOf !== undefined && body.reaskOf !== null && (typeof body.reaskOf !== "string" || body.reaskOf.length > 100)) throw new HttpError(400, "reaskOf must be an answer_id");
 	const ref = askRef(body.ref, isAdmin(rc));
 	await takeQuota(rc.env, `user:${session.userId}`, "ask", LIMITS.asksPerUserPerMinute, 60);
 	await takeClientQuota(rc, "ask", LIMITS.asksPerClientPerMinute, 60);
@@ -315,7 +316,10 @@ route("POST", "/api/ask", async (rc) => {
 	if (body.explicitMode) request.explicitMode = body.explicitMode;
 	if (body.attestation !== undefined) request.attestation = body.attestation;
 	if (Array.isArray(body.history)) request.history = (body.history as unknown[]).slice(-10);
-	const card = await serveAsk({ env: rc.env, exports: exportsOf(rc.ctx) }, { repo, ref, request, useModel: body.useModel === true, userId: session.userId, fallback: ref === "main" });
+	// A re-ask after an override or an attestation belongs to the question it re-asks (charts count questions).
+	const reaskOf = typeof body.reaskOf === "string" && body.reaskOf ? await ledgerStub(rc.env, session.userId).questionOf(body.reaskOf) : undefined;
+	if (reaskOf === null) throw new HttpError(404, `answer ${body.reaskOf as string} is not in your ledger`);
+	const card = await serveAsk({ env: rc.env, exports: exportsOf(rc.ctx) }, { repo, ref, request, useModel: body.useModel === true, userId: session.userId, fallback: ref === "main", ...(reaskOf ? { reaskOf } : {}) });
 	return json(card);
 });
 

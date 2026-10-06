@@ -22,7 +22,9 @@ export interface RunTimeRecord {
 	sources: string[];
 	fork_commit: string;
 	stock_tag: string;
-	[key: string]: Json;
+	/** Set by the platform on a re-ask (override or attestation): the answer_id of the question's first answer. */
+	reask_of?: string;
+	[key: string]: Json | undefined;
 }
 
 export interface LedgerEntry {
@@ -84,6 +86,13 @@ export class UserLedger extends DurableObject<Env> {
 	get(answerId: string): LedgerEntry | null {
 		const row = this.ctx.storage.sql.exec("SELECT at, repo, record, dirty FROM records WHERE answer_id = ?", answerId).toArray()[0];
 		return row ? toEntry(row) : null;
+	}
+
+	/** The question an answer belongs to (its first answer's id, following reask_of), or null if unknown. */
+	questionOf(answerId: string): string | null {
+		const record = this.get(answerId)?.record;
+		if (!record) return null;
+		return typeof record.reask_of === "string" && record.reask_of !== "" ? record.reask_of : record.answer_id;
 	}
 
 	/** Records the user's mode override on an earlier answer. Returns the updated record, or null if unknown. */

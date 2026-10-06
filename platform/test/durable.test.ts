@@ -153,6 +153,14 @@ describe("UserLedger", () => {
 		expect(state.alarmAt).toBeNull();
 	});
 
+	it("names the question an answer belongs to, following a re-ask to its first answer", async () => {
+		const { env } = ledgerEnv({ hasFork: true });
+		const { instance: ledger } = construct(UserLedger, env);
+		await ledger.append("u1", "user-u1", record("a1"));
+		await ledger.append("u1", "user-u1", { ...record("a2"), reask_of: "a1" });
+		expect([ledger.questionOf("a1"), ledger.questionOf("a2"), ledger.questionOf("nope")]).toEqual(["a1", "a1", null]);
+	});
+
 	it("schedules the first commit when a record arrives", async () => {
 		const { env } = ledgerEnv({ hasFork: true });
 		const { instance: ledger, state } = construct(UserLedger, env);

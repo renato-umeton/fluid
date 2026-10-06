@@ -93,7 +93,7 @@ As in spec section 8, stored at `.intent/<id>.json`, commit trailer `Intent-Id: 
 | `GET /api/forks/:repo/ui` | anyone | Validated `ui/preferences.json` from main |
 | `POST /api/forks/:repo/upgrade` | owner | One-tap upgrade to a passed release |
 | `POST /api/forks/:repo/repairs/:sha/apply` | owner | Gate a repair branch and fast-forward main on pass |
-| `POST /api/ask` | session | Ask the user's fork (or stock); returns an answer card |
+| `POST /api/ask` | session | Ask the user's fork (or stock); returns an answer card. `reaskOf` (an earlier `answer_id`) marks an override or attestation re-ask of the same question and is recorded as `reask_of` |
 | `POST /api/override` | session | Record an override on a run-time record |
 | `GET /api/ledger/:userId` | owner | Run-time intent records |
 | `POST /api/ledger/commit` | owner | Commit pending records to the `ledger-<id>` repo |

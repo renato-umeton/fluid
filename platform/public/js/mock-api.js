@@ -255,6 +255,9 @@ async function ask(body) {
     throw new HttpError(400, err.message);
   }
   card.ledger.at = now();
+  const first = body.reaskOf ? db.records[body.reaskOf] : null;
+  if (body.reaskOf && !first) throw new HttpError(404, `Answer ${body.reaskOf} not found in the ledger`);
+  if (first) card.ledger.reask_of = first.reask_of ?? first.answer_id;
   db.ledgers[db.userId].unshift(card.ledger);
   db.records[card.answer_id] = card.ledger;
   return card;
@@ -697,14 +700,22 @@ function chartData() {
   const byIntent = Object.fromEntries(intents.map((k) => [k, { total: 0, overridden: 0 }]));
   const kinds = {};
   let overridden = 0;
+  // One answer per question: re-asks (override, attestation) fold into their first answer.
+  const questions = new Map();
   for (const r of records) {
+    const id = r.reask_of ?? r.answer_id;
+    if (!questions.has(id)) questions.set(id, []);
+    questions.get(id).push(r);
+  }
+  for (const [id, group] of questions) {
+    const r = group.find((x) => x.answer_id === id) ?? group[group.length - 1];
     if (!intents.includes(r.intent)) continue;
     const day = String(r.at ?? now()).slice(0, 10);
     (days[day] ??= zero())[r.intent]++;
     confidence[Math.min(9, Math.max(0, Math.floor(Number(r.confidence) * 10)))][r.intent]++;
     byIntent[r.intent].total++;
-    if (r.override) { byIntent[r.intent].overridden++; overridden++; }
-    for (const src of r.sources ?? []) { const k = String(src).split(":")[0] || "other"; kinds[k] = (kinds[k] ?? 0) + 1; }
+    if (r.override && !r.reask_of) { byIntent[r.intent].overridden++; overridden++; }
+    for (const src of new Set(group.flatMap((x) => x.sources ?? []))) { const k = String(src).split(":")[0] || "other"; kinds[k] = (kinds[k] ?? 0) + 1; }
   }
   const total = intents.reduce((n, k) => n + byIntent[k].total, 0);
   return {

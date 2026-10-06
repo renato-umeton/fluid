@@ -248,7 +248,7 @@ async function ask(question, extra = {}, note) {
   session.thread.push(item);
   renderThread();
   try {
-    item.card = await api.ask({ repo: app.fork.repo, question, context, explicitMode: extra.explicitMode, attestation: extra.attestation });
+    item.card = await api.ask({ repo: app.fork.repo, question, context, explicitMode: extra.explicitMode, attestation: extra.attestation, reaskOf: extra.reaskOf });
   } catch (err) {
     item.error = `The fork could not answer: ${err.message}`;
   }
@@ -260,11 +260,16 @@ async function ask(question, extra = {}, note) {
 
 async function overrideTo(item, card, mode) {
   try {
-    await api.override(card.ledger?.answer_id ?? card.answer_id, mode);
+    await api.override(answerIdOf(card), mode);
   } catch (err) {
     console.warn("Fluid: override record not stored", err);
   }
-  await ask(item.question, { context: item.context, explicitMode: mode }, `Answer again as ${MODE_LABEL[mode]}; override logged on ${card.answer_id}`);
+  await ask(item.question, { context: item.context, explicitMode: mode, reaskOf: answerIdOf(card) }, `Answer again as ${MODE_LABEL[mode]}; override logged on ${card.answer_id}`);
+}
+
+/** The ledger answer_id of a card; re-asks send it as reaskOf so they count as the same question. */
+function answerIdOf(card) {
+  return card.ledger?.answer_id ?? card.answer_id;
 }
 
 function attest(item, card) {
@@ -272,7 +277,7 @@ function attest(item, card) {
   dialog.returnValue = "";
   dialog.onclose = () => {
     if (dialog.returnValue !== "confirm") return;
-    ask(item.question, { context: item.context, explicitMode: card.mode === "multi" ? "research" : card.mode, attestation: true },
+    ask(item.question, { context: item.context, explicitMode: card.mode === "multi" ? "research" : card.mode, attestation: true, reaskOf: answerIdOf(card) },
       "Attested: not making a decision for a patient right now");
   };
   dialog.showModal();

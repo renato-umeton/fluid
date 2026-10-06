@@ -81,6 +81,41 @@ describe("aggregateCharts", () => {
 	});
 });
 
+describe("aggregateCharts counts one answer per question", () => {
+	// Ledger order is newest first, as UserLedger.list returns it.
+	const q = (id: string, at: string, intent: string, extra: Partial<RunTimeRecord> = {}) => entry(at, intent, 0.9, { answer_id: id, ...extra });
+	const session = [
+		q("a5", "2026-10-03T10:05:00Z", "research", { override: "research", attestation: true, reask_of: "a4", sources: ["fda:label"] }),
+		q("a4", "2026-10-03T10:04:00Z", "research", { attestation: false }),
+		q("a3", "2026-10-03T10:03:00Z", "administrative", { override: "administrative", reask_of: "a2" }),
+		q("a2", "2026-10-03T10:02:00Z", "clinical", { override: "administrative" }),
+		q("a1", "2026-10-03T10:01:00Z", "clinical"),
+		q("a0", "2026-10-03T10:00:00Z", "administrative"),
+	];
+	const data = aggregateCharts({ repo: "user-a", ledger: session, intents: [], gates: [] });
+
+	it("folds an override re-ask and an attestation re-ask into their questions", () => {
+		expect(data.answers).toBe(4);
+	});
+
+	it("counts an overridden question once, and an attestation re-ask not at all", () => {
+		expect({ total: data.overrides.total, overridden: data.overrides.overridden }).toEqual({ total: 4, overridden: 1 });
+	});
+
+	it("charts each question under the intent it was first answered with", () => {
+		expect(data.answersByIntent).toEqual([{ day: "2026-10-03", clinical: 2, research: 1, administrative: 1, multi: 0 }]);
+	});
+
+	it("keeps the sources cited by a re-ask", () => {
+		expect(data.sourcesByKind).toEqual([{ kind: "fda", count: 1 }]);
+	});
+
+	it("still counts a re-ask whose first answer has aged out of the window", () => {
+		const out = aggregateCharts({ repo: "user-a", ledger: [q("b2", "2026-10-03T11:00:00Z", "research", { override: "research", reask_of: "gone" })], intents: [], gates: [] });
+		expect({ answers: out.answers, overridden: out.overrides.overridden }).toEqual({ answers: 1, overridden: 0 });
+	});
+});
+
 describe("intentDate", () => {
 	it("returns null when nothing names a date", () => {
 		expect(intentDate({ id: "custom" } as BuildTimeIntent)).toBeNull();

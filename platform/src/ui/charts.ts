@@ -42,6 +42,25 @@ export function intentDate(record: BuildTimeIntent): string | null {
 	return m ? `${m[1]}-${m[2]}-${m[3]}T00:00:00.000Z` : null;
 }
 
+/** The question an answer belongs to: re-asks (override, attestation) name their first answer in reask_of. */
+export function questionId(record: LedgerEntry["record"]): string {
+	return typeof record.reask_of === "string" && record.reask_of !== "" ? record.reask_of : record.answer_id;
+}
+
+/**
+ * One group per user question. `first` is the question's first answer, or its oldest
+ * re-ask when the first answer is outside the window. Entries arrive newest first.
+ */
+function groupByQuestion(entries: LedgerEntry[]): { first: LedgerEntry; entries: LedgerEntry[] }[] {
+	const groups = new Map<string, LedgerEntry[]>();
+	for (const entry of entries) {
+		const id = questionId(entry.record);
+		if (!groups.has(id)) groups.set(id, []);
+		groups.get(id)!.push(entry);
+	}
+	return [...groups.entries()].map(([id, group]) => ({ first: group.find((e) => e.record.answer_id === id) ?? group[group.length - 1]!, entries: group }));
+}
+
 export function aggregateCharts(input: { repo: string; ledger: LedgerEntry[]; intents: BuildTimeIntent[]; gates: GateResult[]; now?: Date }): ChartData {
 	const now = input.now ?? new Date();
 	const entries = input.ledger.filter((e) => e.repo === input.repo).slice(0, CHART_LIMITS.ledger);
@@ -52,22 +71,26 @@ export function aggregateCharts(input: { repo: string; ledger: LedgerEntry[]; in
 	const kinds = new Map<string, number>();
 	let overridden = 0;
 	let answers = 0;
-	for (const entry of entries) {
-		const intent = intentOf(entry.record.intent);
+	for (const question of groupByQuestion(entries)) {
+		const first = question.first;
+		const intent = intentOf(first.record.intent);
 		if (!intent) continue;
 		answers++;
-		const day = String(entry.at).slice(0, 10);
+		const day = String(first.at).slice(0, 10);
 		if (!days.has(day)) days.set(day, zero());
 		days.get(day)![intent]++;
-		const c = Number(entry.record.confidence);
+		const c = Number(first.record.confidence);
 		if (Number.isFinite(c)) confidence[Math.min(CHART_LIMITS.bins - 1, Math.max(0, Math.floor(c * CHART_LIMITS.bins)))]![intent]++;
 		byIntent[intent].total++;
-		if (entry.record.override) {
+		// Only the first answer's override marks the question: a re-ask carries its explicit mode in
+		// `override` too, and an attestation re-ask is not an override at all.
+		if (first.record.override && first.record.reask_of === undefined) {
 			byIntent[intent].overridden++;
 			overridden++;
 		}
-		for (const source of Array.isArray(entry.record.sources) ? entry.record.sources : []) {
-			const kind = String(source).split(":")[0] || "other";
+		const sources = new Set(question.entries.flatMap((e) => (Array.isArray(e.record.sources) ? e.record.sources.map(String) : [])));
+		for (const source of sources) {
+			const kind = source.split(":")[0] || "other";
 			kinds.set(kind, (kinds.get(kind) ?? 0) + 1);
 		}
 	}

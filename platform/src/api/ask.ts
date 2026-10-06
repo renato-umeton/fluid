@@ -18,6 +18,8 @@ export interface ServeAskInput {
 	userId: string;
 	/** Apply the safety fallback (production main only). */
 	fallback: boolean;
+	/** On a re-ask (override or attestation), the first answer of the same question; recorded as reask_of. */
+	reaskOf?: string;
 }
 
 export type ServedCard = AnswerCardLike & { fork: Record<string, unknown> };
@@ -43,6 +45,7 @@ export async function serveAsk(deps: RuntimeDeps, input: ServeAskInput): Promise
 		card = markSafety(result.card, SAFETY_SIGNALS.clinicalDose, `Safety guard: this fork's answer computed a clinical dose, which the floor forbids, so stock ${pinned} answered instead.`);
 		served = { repo: STOCK_REPO, ref: pinned, fallback: null };
 	}
+	if (input.reaskOf) card = { ...card, ledger: { ...card.ledger, reask_of: input.reaskOf } };
 	await ledgerStub(env, input.userId).append(input.userId, repo, card.ledger as unknown as RunTimeRecord);
 	return { ...card, fork: { repo, ref: result.ref, commit: result.sha, ...(served.repo !== repo ? { servedBy: { repo: served.repo, ref: served.ref } } : {}), ...(served.fallback ? { safetyFallback: served.fallback } : {}) } };
 }
