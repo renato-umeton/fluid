@@ -38,6 +38,8 @@ const db = {
   ledgers: {},
   intents: {},
   gates: {},
+  /** Last few import outcomes per fork, newest first (GET /api/forks/:repo/imports). */
+  imports: {},
   runs: {},
   fleet: null,
   harvest: [],
@@ -113,6 +115,7 @@ const routes = [
   ["POST", /^\/api\/suggestions\/([^/]+)\/decide$/, (m, body) => decide(m[1], body)],
   ["GET", /^\/api\/gates\/([^/]+)$/, (m) => db.gates[m[1]] ?? []],
   ["POST", /^\/api\/forks\/([^/]+)\/token$/, (m) => mintToken(m[1])],
+  ["GET", /^\/api\/forks\/([^/]+)\/imports$/, (m) => ({ imports: db.imports[m[1]] ?? [] })],
   ["POST", /^\/api\/mock\/outside-push$/, (m, body) => startOutsidePush(body)],
   ["POST", /^\/api\/admin\/release$/, (m, body) => release(body)],
   ["POST", /^\/api\/admin\/fleet\/seed$/, (m, body) => ({ created: seedFleet(body?.count ?? 360) })],
@@ -1047,8 +1050,13 @@ function startOutsidePush(body) {
   const persona = requireSession();
   const fork = db.forks[body?.repo];
   if (!fork) throw new HttpError(404, `Fork ${body?.repo} not found`);
-  const target = body?.target === "main" ? "main" : "work";
+  const target = body?.target === "main" ? "main" : body?.target === "refused" ? "refused" : "work";
   const pushed = hex(40);
+  if (target === "refused") {
+    // Over the file cap: refused before any run, so only the import list shows it.
+    noteImport(fork.repo, { branch: "work/big-change", commit: pushed, status: "refused", reason: "the branch changes 240 files; at most 200 are imported", runId: null });
+    return { runId: null };
+  }
   const branch = target === "main" ? "main" : "work/my-change";
   const id = `run_import_${hex(10)}`;
   const run = {
@@ -1060,6 +1068,11 @@ function startOutsidePush(body) {
   db.runs[id] = run;
   ensureTicker();
   return { runId: id };
+}
+
+/** Mock copy of forks/import-log.ts: newest first, at most 5. */
+function noteImport(repo, note) {
+  db.imports[repo] = [{ at: now(), ...note, commit: note.commit.slice(0, 7) }, ...(db.imports[repo] ?? [])].slice(0, 5);
 }
 
 const OUTSIDE_COMMITS = ["Add a plain-language summary line to research answers", "Add a tier 3 test for the summary line"];
@@ -1086,6 +1099,7 @@ function outsidePushScript(run) {
         fork.branches = fork.branches.filter((b) => b.name !== branch);
         fork.branches.push({ name: branch, commit: pushed, role: "imported", gate: "pending" });
         run.branch = branch;
+        noteImport(fork.repo, { branch: inboxBranch, commit: pushed, status: "imported", reason: `imported as ${branch} and sent to the gate`, runId: run.id });
         v.detail = `${OUTSIDE_COMMITS.length} commits, 2 files, within the caps (50 commits, 200 files, 1 MB per file, 8 MB download); pushed to ${branch} in ${fork.repo}`;
       },
     },

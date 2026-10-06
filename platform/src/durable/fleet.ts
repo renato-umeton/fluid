@@ -5,6 +5,7 @@ import { DurableObject } from "cloudflare:workers";
 import type { Json } from "../lib/json.ts";
 import { upsertWishNote, wishNotesKey, type WishNote } from "../contest/wishes.ts";
 import { contestKey, joinDecision, type ContestState } from "../contest/plan.ts";
+import { addImportNote, importLogKey, type ImportNote } from "../forks/import-log.ts";
 import type { BaselineRecord } from "../yellow/baseline.ts";
 import { cancelRun, initialHealth, recordBrowser, recordFailure, recordPass, startYellow, type BrowserSummary, type HealthEvent, type HealthFailure, type HealthState, type Transition } from "../yellow/state.ts";
 
@@ -277,6 +278,7 @@ export class Fleet extends DurableObject<Env> {
 	remove(repo: string): boolean {
 		this.ctx.storage.sql.exec("DELETE FROM health_history WHERE repo = ?", repo);
 		this.ctx.storage.sql.exec("DELETE FROM gates WHERE repo = ?", repo);
+		this.ctx.storage.sql.exec("DELETE FROM kv WHERE k = ?", importLogKey(repo));
 		const removed = this.ctx.storage.sql.exec("DELETE FROM forks WHERE repo = ? RETURNING repo", repo).toArray().length > 0;
 		if (removed) this.broadcast({ type: "removed", repo });
 		return removed;
@@ -361,6 +363,18 @@ export class Fleet extends DurableObject<Env> {
 		const list = upsertWishNote(this.wishNotes(repo), note, now);
 		this.setValue(wishNotesKey(repo), list as unknown as Json);
 		return list;
+	}
+
+	/** Records one import outcome for a fork (forks/import-log.ts): the last few, newest first. */
+	noteImport(repo: string, note: ImportNote): ImportNote[] {
+		const list = addImportNote(this.importNotes(repo), note);
+		this.setValue(importLogKey(repo), list as unknown as Json);
+		return list;
+	}
+
+	importNotes(repo: string): ImportNote[] {
+		const value = this.getValue(importLogKey(repo));
+		return Array.isArray(value) ? (value as unknown as ImportNote[]) : [];
 	}
 
 	wishNotes(repo: string): WishNote[] {

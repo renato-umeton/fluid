@@ -793,6 +793,13 @@ route("POST", "/api/forks/:repo/token", async (rc, { repo }) => {
 	}
 });
 
+// The last few imports from the fork's inbox and why any was refused (forks/import-log.ts). Owner or admin.
+route("GET", "/api/forks/:repo/imports", async (rc, { repo }) => {
+	const name = repoParam(repo!);
+	await requireForkAccess(rc, name);
+	return json({ imports: await fleetStub(rc.env).importNotes(name) });
+});
+
 /**
  * A mint that lost its lease before writing its grant: its token is revoked
  * (always safe). The inbox is deleted only when no request holds the lease

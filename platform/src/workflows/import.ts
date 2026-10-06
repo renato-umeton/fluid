@@ -11,6 +11,7 @@ import { contestJoinRefusal, joinContest } from "../contest/join.ts";
 import { contestIdOfBranch } from "../contest/plan.ts";
 import { liveImportIO, runImport, takeImportQuota, type ImportOutcome } from "../forks/inbox.ts";
 import { outsideGrantKey, type OutsideGrant } from "../forks/outside.ts";
+import type { ImportNote } from "../forks/import-log.ts";
 import { RepoNotFoundError } from "../runtime/repo-files.ts";
 import { fleetStub, quotaStub } from "../stubs.ts";
 import { appExports, ensureRun, guarded, runLog, startGateInstance, steps, type ImportParams } from "./common.ts";
@@ -46,6 +47,7 @@ export class ImportWorkflow extends WorkflowEntrypoint<Env, ImportParams> {
 		if (!ready.ok) {
 			if (!ready.reason) return { status: "skipped" };
 			console.warn(`import of ${p.branch} at ${p.commit.slice(0, 7)} from ${p.inbox} refused: ${ready.reason}`);
+			await this.note(step, p, "refused", ready.reason, null);
 			return { status: "refused", reason: ready.reason };
 		}
 		await step.do("start", async () => {
@@ -66,6 +68,7 @@ export class ImportWorkflow extends WorkflowEntrypoint<Env, ImportParams> {
 
 		if (outcome.status === "refused") {
 			await step.do("finish refused", async () => this.refuse(p.runId, outcome.reason));
+			await this.note(step, p, "refused", outcome.reason, p.runId);
 			return { status: "refused" };
 		}
 		if (outcome.status === "moved") {
@@ -80,19 +83,20 @@ export class ImportWorkflow extends WorkflowEntrypoint<Env, ImportParams> {
 		const branch = outcome.branch;
 		if (contestIdOfBranch(branch)) {
 			// A contest entry is not gated on its own: it joins the contest, which gates it in check mode with the others.
-			await step.do("join the contest", async () => {
+			const joined = await step.do("join the contest", async () => {
 				await log.step("Import from your inbox", "done", `${branch} in ${p.fork} at ${p.commit.slice(0, 7)}`);
 				const joined = await joinContest(this.env, this.ctx, { fork: p.fork, branch, commit: p.commit, importRunId: p.runId });
 				if (!joined.ok) {
 					const detail = `Not in the contest: ${joined.reason}. ${branch} stays in your fork; nothing is gated.`;
 					await log.step("Join the contest", "failed", detail);
 					await log.status("failed", { error: detail, forkBranch: branch });
-					return true;
+					return { ok: false as const, detail };
 				}
 				await log.step("Join the contest", "done", `Your agent's entry joined ${joined.runId}; the contest checks it next to the other contestants, and only the one you ship is gated in merge mode`);
 				await log.status("passed", { contestRunId: joined.runId, forkBranch: branch });
-				return true;
+				return { ok: true as const, detail: `imported as ${branch} and joined contest ${joined.runId}` };
 			});
+			await this.note(step, p, joined.ok ? "imported" : "not joined", joined.detail, p.runId);
 			return { status: "imported", branch };
 		}
 		await step.do("start the gate", async () => {
@@ -102,7 +106,23 @@ export class ImportWorkflow extends WorkflowEntrypoint<Env, ImportParams> {
 			await log.status("passed", { gateRunId: started.runId, forkBranch: branch });
 			return true;
 		});
+		await this.note(step, p, "imported", `imported as ${branch} and sent to the gate`, p.runId);
 		return { status: "imported", branch };
+	}
+
+	/**
+	 * Records the outcome in the fork's import log (the last few, shown to the
+	 * owner in My fork). Best effort: a failure to record never fails the import.
+	 */
+	private async note(step: ReturnType<typeof steps>, p: ImportParams, status: ImportNote["status"], reason: string | null, runId: string | null): Promise<void> {
+		try {
+			await step.do(`note the outcome (${status})`, async () => {
+				await fleetStub(this.env).noteImport(p.fork, { at: new Date().toISOString(), branch: p.branch, commit: p.commit, status, reason, runId });
+				return true;
+			});
+		} catch (error) {
+			console.warn(`import outcome for ${p.fork} not recorded: ${error instanceof Error ? error.message : String(error)}`);
+		}
 	}
 
 	private async refuse(runId: string, reason: string): Promise<boolean> {

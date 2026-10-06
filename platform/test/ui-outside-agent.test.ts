@@ -1,6 +1,26 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error plain ES module from the static UI
-import { expiryText, maskCommand, secondsLeft } from "../public/js/outside-agent.js";
+import { expiryText, importNoteView, maskCommand, secondsLeft } from "../public/js/outside-agent.js";
+
+describe("import outcome lines", () => {
+	const note = { at: "2026-10-06T12:00:00.000Z", branch: "work/my-change", commit: "abcdef1", runId: null };
+
+	it("says a refused push was not imported, and why", () => {
+		expect(importNoteView({ ...note, status: "refused", reason: "the branch changes 240 files; at most 200 are imported" })).toEqual({ tag: "Refused", state: "fail", text: "work/my-change at abcdef1: not imported. The branch changes 240 files; at most 200 are imported." });
+	});
+
+	it("says what happened to an imported push", () => {
+		expect(importNoteView({ ...note, status: "imported", reason: "imported as work/inbox/my-change and sent to the gate" })).toEqual({ tag: "Imported", state: "pass", text: "work/my-change at abcdef1: imported as work/inbox/my-change and sent to the gate." });
+	});
+
+	it("marks a contest entry that did not join", () => {
+		expect(importNoteView({ ...note, status: "not joined", reason: "Not in the contest: the join window closed." })).toMatchObject({ tag: "Not in the contest", state: "warn" });
+	});
+
+	it("copes with a missing reason", () => {
+		expect(importNoteView({ ...note, status: "refused", reason: null }).text).toBe("work/my-change at abcdef1: not imported.");
+	});
+});
 
 const AT = Date.parse("2026-10-06T12:00:00Z");
 
