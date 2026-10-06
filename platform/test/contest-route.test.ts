@@ -63,6 +63,31 @@ describe("POST /api/contests", () => {
 		}
 	});
 
+	it("keeps the contest when create throws but the workflow instance exists", async () => {
+		const t = setup();
+		const created: string[] = [];
+		const flaky = { create: async (o: { id: string }) => { created.push(o.id); throw new Error("connection reset after create"); }, get: async (id: string) => { if (!created.includes(id)) throw new Error("instance not found"); return { id, status: async () => ({ status: "running" }) }; } };
+		const ctx = { waitUntil: () => undefined, exports: new Proxy({}, { get: () => flaky }) } as unknown as ExecutionContext;
+		vi.spyOn(console, "warn").mockImplementation(() => undefined);
+		const res = await start({ ...t, ctx }, { size: 2 });
+		expect(res.status).toBe(202);
+		const body = (await res.json()) as { runId: string; contestId: string };
+		expect(t.fleet.contestState(FORK)).toMatchObject({ contestId: body.contestId, status: "open" });
+		expect(t.fleet.getValue(contestLockKey(FORK))).toMatchObject({ owner: body.runId });
+		expect((await runsStub(t.env, body.runId).get())!.status).toBe("running");
+	});
+
+	it("abandons the contest when create throws and no instance exists", async () => {
+		const t = setup();
+		const missing = { create: async () => { throw new Error("workflows unavailable"); }, get: async () => { throw new Error("instance not found"); } };
+		const ctx = { waitUntil: () => undefined, exports: new Proxy({}, { get: () => missing }) } as unknown as ExecutionContext;
+		vi.spyOn(console, "error").mockImplementation(() => undefined);
+		vi.spyOn(console, "warn").mockImplementation(() => undefined);
+		expect((await start({ ...t, ctx }, { size: 2 })).status).toBe(500);
+		expect(t.fleet.contestState(FORK)?.status).toBe("done");
+		expect(t.fleet.getValue(contestLockKey(FORK))).toBeNull();
+	});
+
 	it("counts a contest as N customizations and releases the fork when the quota refuses", async () => {
 		const t = setup();
 		for (let i = 0; i < 3; i++) {
@@ -117,6 +142,21 @@ describe("POST /api/contests/:runId/pick", () => {
 		expect(res.status).toBe(200);
 		expect(t.sent).toEqual([{ workflow: "ContestWorkflow", id: runId, event: { type: "contest-pick", payload: { label: "model-b" } } }]);
 		expect((await worker.fetch(post(`/api/contests/${runId}/pick`, { cookie }, { label: "model-a" }), t.env, t.ctx)).status).toBe(409);
+	});
+
+	it("clears the pick when it could not be sent, so the owner can pick again", async () => {
+		const t = setup();
+		const runId = await waiting(t);
+		const cookie = await cookieFor({ userId: USER });
+		const failing = { get: async () => ({ sendEvent: async () => { throw new Error("instance unreachable"); } }) };
+		const ctx = { waitUntil: () => undefined, exports: new Proxy({}, { get: () => failing }) } as unknown as ExecutionContext;
+		vi.spyOn(console, "error").mockImplementation(() => undefined);
+		const res = await worker.fetch(post(`/api/contests/${runId}/pick`, { cookie }, { label: "model-b" }), t.env, ctx);
+		expect(res.status).toBe(500);
+		expect((await runsStub(t.env, runId).get())!.pickRequested ?? null).toBeNull();
+		const again = await worker.fetch(post(`/api/contests/${runId}/pick`, { cookie }, { label: "model-a" }), t.env, t.ctx);
+		expect(again.status).toBe(200);
+		expect(t.sent).toEqual([{ workflow: "ContestWorkflow", id: runId, event: { type: "contest-pick", payload: { label: "model-a" } } }]);
 	});
 
 	it("refuses a contestant that did not pass", async () => {

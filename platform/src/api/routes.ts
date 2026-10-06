@@ -584,7 +584,14 @@ route("POST", "/api/contests", async (rc) => {
 	try {
 		await runsStub(rc.env, runId).create({ id: runId, kind: "contest", repo, status: "running", fields: { request: cleanText(request, 1000), contestId, size: options.size, includeAgent: options.includeAgent, joinUntil, agentBranch, contestants } });
 		await fleet.openContest(repo, { contestId, runId, status: "open", includeAgent: options.includeAgent, joinUntil, agentJoined: false });
-		await appExports(rc.ctx).ContestWorkflow.create({ id: runId, params: { runId, contestId, repo, request, userId: session?.userId ?? userIdFromForkRepo(repo) ?? "admin", persona: entry.persona, size: options.size, includeAgent: options.includeAgent } });
+		const params = { runId, contestId, repo, request, userId: session?.userId ?? userIdFromForkRepo(repo) ?? "admin", persona: entry.persona, size: options.size, includeAgent: options.includeAgent };
+		try {
+			await appExports(rc.ctx).ContestWorkflow.create({ id: runId, params });
+		} catch (error) {
+			// create can fail after the instance was made (a dropped connection): if it exists, the contest is running.
+			if (!(await workflowInstanceExists(rc, runId))) throw error;
+			console.warn(`contest ${runId}: create reported ${scrubText(String(error))}, but the instance exists; keeping the contest`);
+		}
 	} catch (error) {
 		// Nothing runs this contest: close it so no inbox push can join it, free the fork, and give the quota back.
 		await abandonContest(rc.env, { repo, contestId, runId, subject, size: options.size }, error).catch((cleanup) => console.error(`contest ${runId} cleanup failed: ${scrubText(String(cleanup))}`));
@@ -592,6 +599,16 @@ route("POST", "/api/contests", async (rc) => {
 	}
 	return json({ runId, contestId, joinUntil, agentBranch }, 202);
 });
+
+/** Whether a ContestWorkflow instance with this id exists (get throws for an unknown id). */
+async function workflowInstanceExists(rc: RouteContext, id: string): Promise<boolean> {
+	try {
+		await appExports(rc.ctx).ContestWorkflow.get(id);
+		return true;
+	} catch {
+		return false;
+	}
+}
 
 function contestQuota(env: Env): QuotaAccess {
 	return {
@@ -627,7 +644,13 @@ route("POST", "/api/contests/:runId/pick", async (rc, { runId }) => {
 	if (!check.ok) throw new HttpError(400, check.error);
 	// Two picks at once: the run object sets the pick once, so only the first is sent and shown.
 	if (!(await stub.setOnce("pickRequested", label))) throw new HttpError(409, "a contestant was already picked in this contest");
-	await (await appExports(rc.ctx).ContestWorkflow.get(runId!)).sendEvent({ type: "contest-pick", payload: { label } });
+	try {
+		await (await appExports(rc.ctx).ContestWorkflow.get(runId!)).sendEvent({ type: "contest-pick", payload: { label } });
+	} catch (error) {
+		// The pick never reached the contest: clear it so the owner can pick again.
+		await stub.update({ pickRequested: null }).catch((cleanup) => console.error(`contest ${runId} pick reset failed: ${scrubText(String(cleanup))}`));
+		throw error;
+	}
 	return json(await stub.get());
 });
 
