@@ -91,8 +91,9 @@ export async function replayFirst<T>(deps: {
  * `previous` here is the commit's first parent, a fallback only: the yellow
  * run's previous commit is a rollback target for a fork with no green commit
  * yet, so the caller prefers main's head recorded before the push
- * (mainBeforePush), since a replay of several wishes has first parents that
- * were never on main.
+ * (mainBeforePush). The first parent is main only for the first gated
+ * commit: after main moved and was merged into the branch for another gate,
+ * the gated commit's first parent is the branch's earlier head, never on main.
  */
 export async function mainHoldsCommit(ws: Workspace, commit: string, healthCommit: string | null): Promise<{ landed: boolean; previous: string | null } | null> {
 	if (!(await branchContains(ws, "main", commit))) return null;

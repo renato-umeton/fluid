@@ -32,7 +32,8 @@ async function forkWithReplay() {
 	await writeFiles(ws, { "fluid.toml": 'stock_tag = "v1.1.0"\n' });
 	const before = await commitChanges(ws, { message: "main" });
 	await checkoutBranch(ws, `replay/${TAG}`, { create: true, from: "main" });
-	// Two replayed wishes: two commits, so the replay commit's first parent was never on main.
+	// The gated commit's first parent is a branch commit that was never on main, as after
+	// main moved and was merged into the branch for another gate.
 	await writeFiles(ws, { "fluid.toml": 'stock_tag = "v1.2.0"\n' });
 	await commitChanges(ws, { message: "replay: stock" });
 	await writeFiles(ws, { "app/wording.ts": "mine\n" });
