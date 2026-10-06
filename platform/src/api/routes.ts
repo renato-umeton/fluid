@@ -547,14 +547,15 @@ route("POST", "/api/contests", async (rc) => {
 	const entry = await fleetStub(rc.env).get(repo);
 	if (!entry) throw new HttpError(404, `fork ${repo} is not in the fleet`);
 	const fleet = fleetStub(rc.env);
-	if (!(await fleet.tryLock(contestLockKey(repo), CONTEST_LIMITS.lockTtlMs))) throw new HttpError(409, "a contest is already running on this fork; ship one of its contestants or wait for it to end");
-	const refused = await takeContestQuota((subject, bucket, limit, window) => quotaStub(rc.env, subject).take(bucket, limit, window), `user:${session?.userId ?? "admin"}`, options.size, LIMITS.customizationsPerUserPerHour);
-	if (refused) {
-		await fleet.unlock(contestLockKey(repo));
-		throw new HttpError(429, refused);
-	}
+	// The contest run owns the fork's contest lease; only it releases it when it ends.
 	const contestId = newContestId();
 	const runId = contestRunId(contestId);
+	if (!(await fleet.tryLock(contestLockKey(repo), CONTEST_LIMITS.lockTtlMs, runId))) throw new HttpError(409, "a contest is already running on this fork; ship one of its contestants or wait for it to end");
+	const refused = await takeContestQuota((subject, bucket, limit, window) => quotaStub(rc.env, subject).take(bucket, limit, window), `user:${session?.userId ?? "admin"}`, options.size, LIMITS.customizationsPerUserPerHour);
+	if (refused) {
+		await fleet.unlock(contestLockKey(repo), runId);
+		throw new HttpError(429, refused);
+	}
 	const joinUntil = options.includeAgent ? new Date(Date.now() + CONTEST_LIMITS.joinWindowMs).toISOString() : null;
 	const agentBranch = options.includeAgent ? agentInboxBranch(contestId) : null;
 	const seats = lineup({ recipe: matchRecipe(request) !== null, size: options.size, includeAgent: options.includeAgent });
@@ -677,7 +678,7 @@ route("POST", "/api/forks/:repo/upgrade", async (rc, { repo }) => {
 
 // Bring your own agent: a one hour write token for the inbox of the session's own fork (never for
 // the fork itself). Every request replaces the inbox with a fresh Artifacts fork of the fork's main, which
-// also ends the previous token; a cleanup workflow deletes it after expiry. work/* pushes to it are
+// also ends the previous token (it is revoked first as well); a cleanup workflow deletes it after expiry. work/* pushes to it are
 // imported into the fork and gated (forks/inbox.ts, workflows/import.ts). One mint per fork at a time.
 route("POST", "/api/forks/:repo/token", async (rc, { repo }) => {
 	const name = repoParam(repo!);
@@ -693,12 +694,14 @@ route("POST", "/api/forks/:repo/token", async (rc, { repo }) => {
 	await takeQuota(rc.env, "global", "outside-token", LIMITS.outsideTokensGlobalPerHour, 3600);
 	const key = outsideGrantKey(name);
 	const lock = `lock:${key}`;
-	if (!(await fleet.tryLock(lock, 30_000))) throw new HttpError(409, "a token for this fork is being minted right now; try again in a few seconds");
+	const owner = crypto.randomUUID();
+	if (!(await fleet.tryLock(lock, 30_000, owner))) throw new HttpError(409, "a token for this fork is being minted right now; try again in a few seconds");
 	try {
 		const previous = (await fleet.getValue(key)) as OutsideGrant | null;
 		const inbox = inboxRepoName(name);
+		// Deleting the inbox should end its tokens too; revoking the last one first does not rely on that.
+		if (previous?.tokenId) await revokePreviousToken(rc.env, previous.inbox, previous.tokenId);
 		using handle = await freshInbox(rc.env, name, inbox);
-		// The old inbox and every token for it are gone, so there is nothing left to revoke.
 		const minted = await mintOutsideToken(handle, { fork: name, inbox }, null);
 		const at = new Date().toISOString();
 		const grant: OutsideGrant = { repo: name, inbox, userId: session.userId, tokenId: minted.tokenId, firstAt: previous?.firstAt ?? at, mintedAt: at, expiresAt: minted.access.expiresAt };
@@ -712,9 +715,19 @@ route("POST", "/api/forks/:repo/token", async (rc, { repo }) => {
 		console.log(`outside token minted for ${inbox} (token id ${minted.tokenId}, expires ${minted.access.expiresAt})`);
 		return json(minted.access, 201);
 	} finally {
-		await fleet.unlock(lock);
+		await fleet.unlock(lock, owner);
 	}
 });
+
+/** Revokes the previous outside token on the inbox it was made for. Best effort: a failure is logged, never thrown. */
+async function revokePreviousToken(env: Env, inbox: string, tokenId: string): Promise<void> {
+	try {
+		using handle = await openRepo(env.ARTIFACTS, inbox);
+		if (!(await handle.revokeToken(tokenId))) console.warn(`previous outside token ${tokenId} for ${inbox} was not revoked: not found (already expired or revoked)`);
+	} catch (error) {
+		console.warn(`previous outside token ${tokenId} for ${inbox} was not revoked: ${scrubText(error instanceof Error ? error.message : String(error))}`);
+	}
+}
 
 /** Replaces the fork's inbox with a new Artifacts fork of the fork's main (no other branches), so nothing from earlier tokens remains. */
 async function freshInbox(env: Env, fork: string, inbox: string): Promise<ArtifactsRepo> {

@@ -345,13 +345,14 @@ export class Fleet extends DurableObject<Env> {
 
 	/**
 	 * A short lease on `key` (one holder at a time, for example token minting
-	 * per fork). The object runs one call at a time, so the check and the set
-	 * cannot interleave. A lease that was never released expires after ttlMs.
+	 * per fork), held by `owner`. The object runs one call at a time, so the
+	 * check and the set cannot interleave. A lease that was never released
+	 * expires after ttlMs.
 	 */
-	tryLock(key: string, ttlMs: number, now = Date.now()): boolean {
+	tryLock(key: string, ttlMs: number, owner: string, now = Date.now()): boolean {
 		const row = this.ctx.storage.sql.exec("SELECT v FROM kv WHERE k = ?", key).toArray()[0];
 		if (row && (JSON.parse(row.v as string) as { until: number }).until > now) return false;
-		this.setValue(key, { until: now + ttlMs });
+		this.setValue(key, { until: now + ttlMs, owner });
 		return true;
 	}
 
@@ -393,8 +394,15 @@ export class Fleet extends DurableObject<Env> {
 		this.ctx.storage.sql.exec("DELETE FROM kv WHERE k = ?", key);
 	}
 
-	unlock(key: string): void {
+	/**
+	 * Releases the lease only while `owner` holds it. A holder whose lease
+	 * expired and was taken by someone else leaves the new lease alone.
+	 */
+	unlock(key: string, owner: string): boolean {
+		const row = this.ctx.storage.sql.exec("SELECT v FROM kv WHERE k = ?", key).toArray()[0];
+		if (!row || (JSON.parse(row.v as string) as { owner?: string }).owner !== owner) return false;
 		this.ctx.storage.sql.exec("DELETE FROM kv WHERE k = ?", key);
+		return true;
 	}
 
 	/** Several values in one call (missing keys are left out). */

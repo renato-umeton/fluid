@@ -17,7 +17,7 @@ import { acceptModelResolutions, fallbackResolution, MERGE_SCHEMA, mergePrompt, 
 import { replaySummary, wishesCarriedText, type ReplaySummary } from "../agents/replay.ts";
 import { fnv1a } from "../events/filter.ts";
 import { buildReplayBranch, hasWishes, prepareReplay, replayBranchName } from "../forks/replay-branch.ts";
-import { checkoutBranch, cloneRepo, commitChanges, fastForward, fetchBranch, fetchStockTag, firstParent, headCommit, mergeInto, mergeWithResolver, pushBranch, readWorkspaceFile, writeFiles, type ConflictVersions } from "../git/ops.ts";
+import { branchContains, checkoutBranch, cloneRepo, commitChanges, fastForward, fetchBranch, fetchStockTag, firstParent, headCommit, mergeInto, mergeWithResolver, pushBranch, readWorkspaceFile, writeFiles, type ConflictVersions, type Workspace } from "../git/ops.ts";
 import { preferencesOf, readIntents, type BuildTimeIntent } from "../forks/provision.ts";
 import { runGate } from "../gate/run.ts";
 import { gateBrief, type GateResult } from "../gate/tiers.ts";
@@ -80,6 +80,20 @@ export async function replayFirst<T>(deps: {
 	const landed = await deps.land(replay);
 	if (landed.passed) return { outcome: landed.outcome, path: "replay" };
 	return deps.merge(await deps.fallback(replay, landed.why));
+}
+
+/**
+ * After the replay's apply step gave up: whether main (checked out in `ws`)
+ * already holds the gated commit, because a try pushed main and then failed.
+ * Null means it does not, and the upgrade may fall back to merging. As in
+ * a retried apply, the change counts as landed (a yellow run starts, from
+ * the commit's first parent) only while main is at the commit and the
+ * fork's health does not name it yet.
+ */
+export async function mainHoldsCommit(ws: Workspace, commit: string, healthCommit: string | null): Promise<{ landed: boolean; previous: string | null } | null> {
+	if (!(await branchContains(ws, "main", commit))) return null;
+	const landed = landedEarlier({ mainHead: await headCommit(ws, "main"), commit, healthCommit });
+	return { landed, previous: landed ? await firstParent(ws, commit) : null };
 }
 
 type TargetFork = { repo: string; status: string; pinnedTag: string; lastRun: { tag?: unknown; kind?: string } | null; pendingUpgrade: { tag: string } | null; health?: { health: string } };
@@ -354,7 +368,9 @@ export class UpgradeWorkflow extends WorkflowEntrypoint<Env, UpgradeParams> {
 	 * the merge path's. With `failSoft` (the replay attempt), a gate or apply
 	 * step that gives up after its retries, a moved main that conflicts, or
 	 * too many regates is returned as `error` instead of thrown, so the
-	 * upgrade can fall back to the merge path. main has not moved then.
+	 * upgrade can fall back to the merge path. main has not moved then: after
+	 * an apply step that gave up, main is checked first, and a commit already
+	 * on it is landed (yellow run) instead (mainHoldsCommit).
 	 */
 	private async gateAndLand(
 		step: Steps,
@@ -402,8 +418,21 @@ export class UpgradeWorkflow extends WorkflowEntrypoint<Env, UpgradeParams> {
 				}
 				return this.advanceMain(p.repo, branch, at, p.tag, p.runId);
 			}));
-			if (!applyStep.ok) return { passed: false, gate, commit, error: applyStep.error };
-			const applied = applyStep.value;
+			let applied: Awaited<ReturnType<UpgradeWorkflow["advanceMain"]>>;
+			if (applyStep.ok) applied = applyStep.value;
+			else {
+				// A try may have pushed main before it failed: a replay already on main is landed, never merged over.
+				// This check is not soft: when it cannot tell, the upgrade fails rather than merging.
+				const held = await step.do(`${input.prefix}check main${suffix}`, GIT_STEP, async () => {
+					const remote = await repoRemote(this.env, p.repo, "read");
+					const ws = await cloneRepo({ ...remote, ref: "main", singleBranch: true });
+					const found = await mainHoldsCommit(ws, at, (await fleetStub(this.env).health(p.repo))?.commit ?? null);
+					if (found) await log.step("Merge to main", "done", `main already holds ${at.slice(0, 7)} (an apply try pushed it before failing)${found.landed ? "; its yellow run starts now" : ""}`);
+					return found;
+				});
+				if (!held) return { passed: false, gate, commit, error: applyStep.error };
+				applied = { applied: true, regate: null, previous: held.previous, landed: held.landed };
+			}
 			if (applied.regate) {
 				if (round === MAX_REGATES) {
 					const message = `main kept moving during the upgrade to ${p.tag}; run the release again`;

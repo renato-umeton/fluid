@@ -31,6 +31,7 @@ describe("POST /api/contests", () => {
 		const run = await runsStub(t.env, body.runId).get();
 		expect((run!.contestants as { label: string }[]).map((c) => c.label)).toEqual(["model-a", "model-b", "agent"]);
 		expect(t.fleet.contestState(FORK)).toMatchObject({ contestId: body.contestId, status: "open", includeAgent: true, agentJoined: false });
+		expect(t.fleet.getValue(contestLockKey(FORK))).toMatchObject({ owner: body.runId });
 	});
 
 	it("runs one contest per fork at a time", async () => {
@@ -51,12 +52,12 @@ describe("POST /api/contests", () => {
 		const t = setup();
 		for (let i = 0; i < 3; i++) {
 			expect((await start(t, { size: 3 })).status).toBe(202);
-			t.fleet.unlock(contestLockKey(FORK));
+			t.fleet.deleteValue(contestLockKey(FORK));
 		}
 		const refused = await start(t, { size: 2 });
 		expect(refused.status).toBe(429);
 		expect(((await refused.json()) as { error: string }).error).toMatch(/counts as 2 customizations/);
-		expect(t.fleet.tryLock(contestLockKey(FORK), 1000)).toBe(true);
+		expect(t.fleet.tryLock(contestLockKey(FORK), 1000, "next")).toBe(true);
 	});
 });
 

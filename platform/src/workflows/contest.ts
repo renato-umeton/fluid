@@ -437,6 +437,5 @@ export function capBehavior(table: BehaviorTable, max = MAX_BEHAVIOR_CHARS): Beh
 export async function releaseContest(env: Env, p: ContestParams): Promise<void> {
 	const fleet = fleetStub(env);
 	await fleet.setContestStatus(p.repo, p.contestId, "done");
-	const state = await fleet.contestState(p.repo);
-	if (!state || state.contestId === p.contestId) await fleet.unlock(contestLockKey(p.repo));
+	await fleet.unlock(contestLockKey(p.repo), p.runId);
 }

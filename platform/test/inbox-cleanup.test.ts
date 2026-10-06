@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import worker from "../src/index.ts";
 import { INBOX_GRACE_MS, inboxCleanupDelayMs, inboxCleanupDue, outsideGrantKey, type OutsideGrant } from "../src/forks/outside.ts";
+import { InboxCleanupWorkflow } from "../src/workflows/inbox-cleanup.ts";
 import { apiEnv, post, workerContext } from "./helpers/api-env.ts";
 
 const grant = (over: Partial<OutsideGrant> = {}): OutsideGrant => ({ repo: "user-a", inbox: "inbox-user-a", userId: "a", tokenId: "tok_1", firstAt: "", mintedAt: "", expiresAt: "2026-10-06T13:00:00.000Z", ...over });
@@ -43,5 +44,38 @@ describe("fork deletion removes the inbox and its grant", () => {
 		expect(await res.json()).toMatchObject({ deleted: 1 });
 		expect(t.artifacts.repos.has(`inbox-${repo}`)).toBe(false);
 		expect(t.fleet.getValue(outsideGrantKey(repo))).toBeNull();
+	});
+});
+
+describe("InboxCleanupWorkflow", () => {
+	function run(t: ReturnType<typeof apiEnv>) {
+		const workflow = new InboxCleanupWorkflow();
+		(workflow as unknown as { env: Env }).env = t.env;
+		const step = { sleep: async () => undefined, do: async (_name: string, ...rest: unknown[]) => (rest.at(-1) as () => Promise<unknown>)() };
+		return workflow.run({ payload: { fork: "user-a", inbox: "inbox-user-a", tokenId: "tok_1", expiresAt: "2026-10-06T13:00:00.000Z" }, timestamp: new Date() } as never, step as never);
+	}
+
+	it("deletes the inbox and grant, and releases its lease", async () => {
+		const t = apiEnv();
+		t.artifacts.add("inbox-user-a");
+		t.fleet.setValue(outsideGrantKey("user-a"), grant() as never);
+		expect(await run(t)).toEqual({ deleted: true });
+		expect(t.artifacts.repos.has("inbox-user-a")).toBe(false);
+		expect(t.fleet.getValue(`lock:${outsideGrantKey("user-a")}`)).toBeNull();
+	});
+
+	it("leaves a lease that another holder took after its own expired", async () => {
+		const t = apiEnv();
+		const lock = `lock:${outsideGrantKey("user-a")}`;
+		t.artifacts.add("inbox-user-a");
+		t.fleet.setValue(outsideGrantKey("user-a"), grant() as never);
+		const remove = t.artifacts.binding.delete;
+		t.artifacts.binding.delete = async (name: string) => {
+			t.fleet.setValue(lock, { until: 0, owner: "expired" } as never);
+			expect(t.fleet.tryLock(lock, 30_000, "minting")).toBe(true);
+			return remove(name);
+		};
+		await run(t);
+		expect(t.fleet.getValue(lock)).toMatchObject({ owner: "minting" });
 	});
 });
