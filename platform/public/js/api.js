@@ -1,4 +1,4 @@
-// Client for the platform HTTP API (docs/IMPLEMENTATION_PLAN.md, "Platform HTTP API").
+// Client for the platform HTTP API (route table in docs/API.md).
 // Mock mode: ?mock=1, or automatically when GET /api/personas does not return JSON.
 
 const ADMIN_KEY = "fluid.adminKey";
