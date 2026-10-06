@@ -86,6 +86,29 @@ Invariants: every sample passes. Functional: majority. User tier: user-defined, 
 
 As in spec section 8, stored at `.intent/<id>.json`, commit trailer `Intent-Id: <id>`.
 
+Records the customization agent and seeded customizations write may carry an optional `replay` field, which says how to run the change again on fresh stock (intent replay, see `docs/GATE_AND_AGENTS.md`):
+
+```json
+{ "replay": { "kind": "tau", "params": { "value": 0.9 } } }
+{ "replay": { "kind": "ui", "params": { "look": "crimson", "tab": { "title": "Charts", "widgets": ["override-rate"] } } } }
+{ "replay": { "kind": "redcap", "params": { "protocols": ["IRB-2026-0142", "IRB-2026-0219"] } } }
+{ "replay": { "kind": "framing", "params": { "line": "      : `Not sure which role you are in ...`," } } }
+{ "replay": { "kind": "model", "request": "Show a budget variance summary in administrative answers" } }
+```
+
+`tau`, `ui`, `redcap`, and `framing` are replayable. `model` is not: a fork with a model change upgrades by merge. The field is optional, so older records stay valid, and a malformed field reads as no replay.
+
+An upgrade run and the fork's `lastRun` in the fleet carry `path` (`"replay"` or `"merge"`) and, for a fork with wishes, `replay`:
+
+```json
+{ "tag": "v1.11.0", "path": "replay", "carried": 2, "total": 2,
+  "wishes": [ { "intentId": "int_...", "status": "replayed", "kind": "framing", "request": "...",
+                "reason": "multi-intent framing line set to this fork's wording in app/cards.ts",
+                "stockAlsoChanged": ["app/cards.ts"] } ] }
+```
+
+`status` is `replayed`, `fallback` (not replayable), or `failed` (no longer applies). On the merge path `carried` is 0 and `reason` says why.
+
 
 ## HTTP routes
 
@@ -116,7 +139,7 @@ As in spec section 8, stored at `.intent/<id>.json`, commit trailer `Intent-Id: 
 | `GET /api/fleet/stream` | anyone | Server-sent events for fleet changes |
 | `GET /api/harvest` | anyone | Harvest proposals |
 | `POST /api/admin/stock/publish` | admin | Publish a stock release tag |
-| `POST /api/admin/release` | admin | Tag a release and upgrade the fleet |
+| `POST /api/admin/release` | admin | Tag a release and upgrade the fleet; each upgrade tries intent replay first unless the body sets `replay: false` |
 | `POST /api/admin/fleet/seed` | admin | Seed synthetic forks |
 | `POST /api/admin/fleet/cleanup` | admin | Delete seeded forks |
 | `POST /api/admin/fleet/baseline` | admin | Dry-run the end-to-end suite on every fork and flag failures |
