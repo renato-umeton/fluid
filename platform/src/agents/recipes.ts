@@ -4,6 +4,7 @@
 // fields that explain the change.
 import { parseToml, setTomlValue } from "../lib/toml.ts";
 import { UI_PREFERENCES_PATH } from "../ui/preferences.ts";
+import type { ReplaySpec } from "./replay.ts";
 import { hasCodeContent, parseUiRequest, uiChange } from "./ui-recipe.ts";
 
 export type Recipe = { kind: "redcap" } | { kind: "tau"; value: number; direction: "lower" | "raise" | "set" } | { kind: "ui" };
@@ -19,6 +20,8 @@ export interface PlannedChange {
 	recipe: Recipe["kind"] | "model" | "admin-test";
 	/** For requests mapped onto a fixed vocabulary (UI preferences): what each part of the request became. */
 	mapped?: string[];
+	/** How to run this change again on fresh stock (intent replay). Absent when it cannot be replayed. */
+	replay?: ReplaySpec;
 }
 
 const TAU_WORDS = /\b(tau|τ|threshold|confidence)\b|τ/i;
@@ -64,6 +67,7 @@ export function tauChange(fluidToml: string, recipe: Extract<Recipe, { kind: "ta
 		files: { "fluid.toml": setTomlValue(fluidToml, "thresholds", "tau", target) },
 		notes: { "fluid.toml": `tau = ${current} becomes tau = ${target}` },
 		recipe: "tau",
+		replay: { kind: "tau", params: { value: target } },
 	};
 }
 
@@ -97,6 +101,7 @@ export function redcapChange(input: { indexSource: string; protocols: string[] }
 			"app/index.ts": "Research answers about my protocols carry an enrollment section",
 		},
 		recipe: "redcap",
+		replay: { kind: "redcap", params: { protocols: [...input.protocols] } },
 	};
 }
 
@@ -211,18 +216,19 @@ export function replanOnMovedMain(input: {
 	before: Record<string, string | null | undefined>;
 	current: Record<string, string | null | undefined>;
 	protocols: string[];
-}): { files: Record<string, string>; replanned: string[] } | { error: string } {
+}): { files: Record<string, string>; replanned: string[]; replay?: ReplaySpec } | { error: string } {
 	const moved = Object.keys(input.change.files).filter((path) => (input.current[path] ?? null) !== (input.before[path] ?? null));
-	if (moved.length === 0) return { files: input.change.files, replanned: [] };
+	if (moved.length === 0) return { files: input.change.files, replanned: [], ...(input.change.replay ? { replay: input.change.replay } : {}) };
 	const recipe = matchRecipe(input.request);
+	const again = (change: PlannedChange) => ({ files: change.files, replanned: moved, ...(change.replay ? { replay: change.replay } : {}) });
 	if (input.change.recipe === "redcap" && recipe?.kind === "redcap") {
-		return { files: redcapChange({ indexSource: input.current["app/index.ts"] ?? "", protocols: input.protocols }).files, replanned: moved };
+		return again(redcapChange({ indexSource: input.current["app/index.ts"] ?? "", protocols: input.protocols }));
 	}
 	if (input.change.recipe === "tau" && recipe?.kind === "tau") {
-		return { files: tauChange(input.current["fluid.toml"] ?? "", recipe).files, replanned: moved };
+		return again(tauChange(input.current["fluid.toml"] ?? "", recipe));
 	}
 	if (input.change.recipe === "ui" && recipe?.kind === "ui") {
-		return { files: uiChange(input.current[UI_PREFERENCES_PATH] ?? null, input.request).files, replanned: moved };
+		return again(uiChange(input.current[UI_PREFERENCES_PATH] ?? null, input.request));
 	}
 	return { error: `main changed ${moved.join(", ")} after the change was planned; run the request again on the new main` };
 }

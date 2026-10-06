@@ -56,6 +56,11 @@ const MULTI_FRAMING_ENDINGS = [
 	"each plausible intent gets its own labeled answer.`,",
 ];
 
+/** Index of the multi-intent framing line among the lines of stock's app/cards.ts, or -1. */
+export function framingLineIndex(lines: string[]): number {
+	return lines.findIndex((line) => line.startsWith(MULTI_FRAMING_PREFIX) || line.includes("is below the threshold ${decision.tau}; "));
+}
+
 export interface OverlayProbe {
 	id: string;
 	[key: string]: unknown;
@@ -88,7 +93,7 @@ export function demoReleaseFiles(files: Record<string, string>, tag?: string): {
 	const text = files[path];
 	if (text === undefined) throw new Error("stock has no app/cards.ts");
 	const lines = text.split("\n");
-	const index = lines.findIndex((line) => line.startsWith(MULTI_FRAMING_PREFIX) || line.includes("is below the threshold ${decision.tau}; "));
+	const index = framingLineIndex(lines);
 	if (index === -1) throw new Error("demo release: the multi-intent framing line was not found in app/cards.ts");
 	const current = lines[index]!.replace(/\s*\/\/ wording revised in \S+$/, "");
 	const ending = MULTI_FRAMING_ENDINGS.find((e) => !current.endsWith(e)) ?? MULTI_FRAMING_ENDINGS[0]!;
