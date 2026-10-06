@@ -17,3 +17,20 @@ export function expiryText(expiresAt, now = Date.now()) {
 export function maskCommand(command) {
   return String(command).replace(/(art_v\d+_)[A-Za-z0-9_-]+/g, "$1****");
 }
+
+const NOTE_TAGS = {
+  imported: { tag: "Imported", state: "pass" },
+  refused: { tag: "Refused", state: "fail" },
+  "not joined": { tag: "Not in the contest", state: "warn" },
+};
+
+/** One import outcome from GET /api/forks/:repo/imports, as a tag and a plain sentence. */
+export function importNoteView(note) {
+  const kind = NOTE_TAGS[note.status] ?? { tag: String(note.status), state: "warn" };
+  const where = `${note.branch} at ${note.commit}`;
+  const reason = typeof note.reason === "string" ? note.reason.trim().replace(/\.$/, "") : "";
+  if (note.status === "refused") {
+    return { ...kind, text: reason ? `${where}: not imported. ${reason[0].toUpperCase()}${reason.slice(1)}.` : `${where}: not imported.` };
+  }
+  return { ...kind, text: `${where}: ${reason || note.status}.` };
+}

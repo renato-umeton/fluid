@@ -183,8 +183,50 @@ describe("the mint lease", () => {
 			}
 			return fork(name);
 		};
-		expect((await mint(t, { cookie: await cookieFor({ userId: USER }) })).status).toBe(201);
+		expect((await mint(t, { cookie: await cookieFor({ userId: USER }) })).status).toBe(409);
 		expect(t.fleet.getValue(lock)).toMatchObject({ owner: "next" });
+	});
+
+	it("writes no grant when the lease was taken over, revokes its own token, and leaves the inbox to the new holder", async () => {
+		const t = await setup();
+		const lock = `lock:${outsideGrantKey(FORK)}`;
+		const get = t.artifacts.binding.get;
+		t.artifacts.binding.get = async (name: string) => {
+			const handle = await get(name);
+			if (name !== INBOX) return handle;
+			return { ...handle, createToken: async (scope: string, ttl: number) => {
+				const token = await handle.createToken(scope, ttl);
+				// While this mint creates its token, its lease expires and another request takes it.
+				t.fleet.setValue(lock, { until: 0, owner: "expired" } as never);
+				expect(t.fleet.tryLock(lock, 30_000, "next")).toBe(true);
+				return token;
+			} };
+		};
+		const res = await mint(t, { cookie: await cookieFor({ userId: USER }) });
+		expect(res.status).toBe(409);
+		expect(((await res.json()) as { error: string }).error).toMatch(/another token request/);
+		expect(t.fleet.getValue(outsideGrantKey(FORK))).toBeNull();
+		expect(t.artifacts.repos.get(INBOX)!.tokens[0]!.revoked).toBe(true);
+		expect(t.artifacts.repos.has(INBOX)).toBe(true);
+	});
+
+	it("deletes the fresh inbox when the lease is gone and nobody else holds it", async () => {
+		const t = await setup();
+		const lock = `lock:${outsideGrantKey(FORK)}`;
+		const get = t.artifacts.binding.get;
+		t.artifacts.binding.get = async (name: string) => {
+			const handle = await get(name);
+			if (name !== INBOX) return handle;
+			return { ...handle, createToken: async (scope: string, ttl: number) => {
+				const token = await handle.createToken(scope, ttl);
+				t.fleet.deleteValue(lock);
+				return token;
+			} };
+		};
+		vi.spyOn(console, "warn").mockImplementation(() => undefined);
+		expect((await mint(t, { cookie: await cookieFor({ userId: USER }) })).status).toBe(409);
+		expect(t.fleet.getValue(outsideGrantKey(FORK))).toBeNull();
+		expect(t.artifacts.repos.has(INBOX)).toBe(false);
 	});
 
 	it("is released by the mint that holds it", async () => {

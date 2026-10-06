@@ -18,7 +18,7 @@ import { mainMovedNote, planMainAdvance } from "../gate/advance.ts";
 import { gateBrief, type GateResult } from "../gate/tiers.ts";
 import { fleetStub } from "../stubs.ts";
 import { landedEarlier } from "../yellow/landing.ts";
-import { appExports, asJson, ensureRun, GATE_STEP, gateLinkOf, GIT_STEP, guarded, linkGateParent, notifyParent, repoRemote, runLog, setFleet, startGateInstance, startInstance, startYellowRun, steps, type GateParams } from "./common.ts";
+import { appExports, asJson, ensureRun, GATE_STEP, gateLinkOf, GIT_STEP, guarded, linkGateParent, mainBeforePush, notifyParent, recordMainBeforePush, repoRemote, runLog, setFleet, startGateInstance, startInstance, startYellowRun, steps, type GateParams } from "./common.ts";
 
 export function gateRunId(instanceId: string): string {
 	return `run_${instanceId}`;
@@ -261,6 +261,7 @@ export class GateWorkflow extends WorkflowEntrypoint<Env, GateParams> {
 		const mainBefore = await headCommit(ws, "main");
 		const plan = await planMainAdvance(ws, { branch: p.branch, commit: p.commit, message: `Merge main into ${p.branch}\n\nmain moved to ${mainBefore.slice(0, 7)} while ${p.branch} was gated. main only fast-forwards to a gated commit, so this merge is gated before it can reach main (gate run ${runId}).` });
 		if (plan.outcome === "fast-forward") {
+			await recordMainBeforePush(this.env, runId, p.commit, plan.previous);
 			await pushBranch(ws, remote, "main");
 			await log.step("Merge to main", "done", `main fast-forwarded to ${p.commit.slice(0, 7)}`);
 			return { ok: true, oid: p.commit, regate: null, previous: plan.previous, landed: true };
@@ -269,7 +270,7 @@ export class GateWorkflow extends WorkflowEntrypoint<Env, GateParams> {
 			// A retried step after a successful push: main is at the commit but its yellow run never started.
 			if (landedEarlier({ mainHead: plan.mainHead, commit: p.commit, healthCommit: (await fleetStub(this.env).health(p.repo))?.commit ?? null })) {
 				await log.step("Merge to main", "done", `main is already at ${p.commit.slice(0, 7)} (an earlier attempt pushed it); its yellow run starts now`);
-				return { ok: true, oid: p.commit, regate: null, previous: await firstParent(ws, p.commit), landed: true };
+				return { ok: true, oid: p.commit, regate: null, previous: (await mainBeforePush(this.env, runId, p.commit)) ?? (await firstParent(ws, p.commit)), landed: true };
 			}
 			await log.step("Merge to main", "done", `main already contains ${p.commit.slice(0, 7)}`);
 			return { ok: true, oid: plan.mainHead, regate: null };

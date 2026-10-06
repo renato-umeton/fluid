@@ -6,6 +6,7 @@
 // (answer ids, the fork commit) are ignored. Everything is capped, so the
 // result fits in a run record.
 import type { Json } from "../lib/json.ts";
+import { fnv1a } from "../events/filter.ts";
 
 export const BEHAVIOR_LIMITS = {
 	/** Characters kept from one string in a card. */
@@ -43,8 +44,10 @@ export interface Observation {
 	passed: boolean | null;
 	question: string | null;
 	card: Json | null;
-	/** The card was dropped to keep the step output small (contest/observe.ts, capObservations): compare by result only. */
+	/** The card was dropped to keep the step output small (contest/observe.ts, capObservations). */
 	dropped?: true;
+	/** Hash of the dropped card (cardHash), so it still compares with main's; without it, the probe compares by result only. */
+	cardHash?: string;
 }
 
 export interface FieldChange {
@@ -136,6 +139,23 @@ export function compactCard(card: unknown, depth = 0): Json {
 	return String(card);
 }
 
+/** A short, stable hash of a stored (already compacted) card, kept when the card itself is dropped. */
+export function cardHash(card: Json | null): string {
+	return fnv1a(requestKey(card));
+}
+
+/**
+ * Compares two stored cards when at least one was dropped: by hash when both
+ * hashes are known (a mismatch is one change), otherwise not at all.
+ */
+function diffByHash(base: Observation | undefined, seen: Observation): { changes: FieldChange[]; total: number } {
+	const hashOf = (o: Observation | undefined) => (o?.dropped ? o.cardHash : o ? cardHash(o.card) : undefined);
+	const before = hashOf(base);
+	const after = hashOf(seen);
+	if (!before || !after || before === after) return { changes: [], total: 0 };
+	return { changes: [{ path: "card (too large to keep; compared by hash)", kind: "changed", before: `hash ${before}`, after: `hash ${after}` }], total: 1 };
+}
+
 /** Leaf values by dotted path (list items by index). An empty object or list is a leaf of its own. */
 function flatten(value: Json, prefix: string, out: Map<string, Json>): Map<string, Json> {
 	if (value !== null && typeof value === "object") {
@@ -215,7 +235,7 @@ export function behaviorTable(main: Observation[], candidates: { label: string; 
 				const full = diffCards(null, seen.card, Number.POSITIVE_INFINITY);
 				cell = { passed: seen.passed, changed: true, scope: "own", total: full.total, changes: full.changes.slice(0, BEHAVIOR_LIMITS.maxChangesPerCell) };
 			} else {
-				const full = base?.dropped || seen.dropped ? { changes: [], total: 0 } : diffCards(base?.card ?? null, seen.card, Number.POSITIVE_INFINITY);
+				const full = base?.dropped || seen.dropped ? diffByHash(base, seen) : diffCards(base?.card ?? null, seen.card, Number.POSITIVE_INFINITY);
 				const sameResult = seen.passed === (base?.passed ?? null);
 				cell = { passed: seen.passed, changed: full.total > 0 || !sameResult, total: full.total, changes: full.changes.slice(0, BEHAVIOR_LIMITS.maxChangesPerCell) };
 				if (cell.changed && !wish && sameResult && base && targetModes.includes(modeOf(base.card) ?? "") && full.changes.every((c) => WORDING_PATH.test(c.path))) cell.scope = "target";

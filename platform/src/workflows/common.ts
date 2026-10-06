@@ -375,6 +375,29 @@ export async function repoRemote(env: Env, repo: string, scope: "read" | "write"
 	return { url: info.remote, token: token.plaintext };
 }
 
+/**
+ * Records main's head just before a push moves main to `commit`, in run
+ * `runId`. If the push lands and its caller then fails, a retry finds main
+ * already at the commit and reads this back (mainBeforePush) as the yellow
+ * run's previous commit, its rollback target for a fork with no green commit
+ * yet. The gated commit's first parent is no substitute: after a regate it is
+ * a branch commit that was never on main. Best effort: a failure is logged and
+ * the retry falls back to the first parent.
+ */
+export async function recordMainBeforePush(env: Env, runId: string, commit: string, previous: string): Promise<void> {
+	try {
+		await runsStub(env, runId).update({ mainBeforePush: { commit, previous } });
+	} catch (error) {
+		console.warn(`run ${runId}: main's head before the push was not recorded: ${errorText(error)}`);
+	}
+}
+
+/** main's head recorded before run `runId` pushed `commit` to main, or null. */
+export async function mainBeforePush(env: Env, runId: string, commit: string): Promise<string | null> {
+	const recorded = (await runsStub(env, runId).get())?.mainBeforePush as { commit?: unknown; previous?: unknown } | null | undefined;
+	return recorded?.commit === commit && typeof recorded.previous === "string" ? recorded.previous : null;
+}
+
 export function errorText(error: unknown): string {
 	return (error instanceof Error ? error.message : String(error)).replace(/art_v\d+_[A-Za-z0-9_-]+(\?expires=\d+)?/g, "<redacted-token>").slice(0, 500);
 }

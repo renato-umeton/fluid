@@ -48,7 +48,8 @@ async function call(method, path, body, { admin = false } = {}) {
   try { data = text ? JSON.parse(text) : null; } catch { data = { error: text }; }
   if (!res.ok) {
     const message = data?.error || data?.message || res.statusText;
-    throw new Error(`${method} ${path} failed (${res.status}): ${message}`);
+    // status and body let the UI explain a refusal (public/js/start-failure.js).
+    throw Object.assign(new Error(`${method} ${path} failed (${res.status}): ${message}`), { status: res.status, body: data });
   }
   return data;
 }
@@ -87,6 +88,8 @@ export const api = {
   gates: (repo) => call("GET", `/api/gates/${enc(repo)}`),
   /** A one hour git write token for the session's own fork, with clone and push commands. */
   outsideToken: (repo) => call("POST", `/api/forks/${enc(repo)}/token`, {}),
+  /** The fork's last few imports from its inbox and why any was refused (owner only). */
+  imports: (repo) => call("GET", `/api/forks/${enc(repo)}/imports`),
   /** Mock mode only: a push from an outside agent to its inbox, on work/my-change (imported) or on main (ignored). */
   simulateOutsidePush: (repo, target) => call("POST", "/api/mock/outside-push", { repo, target }),
   /** Gate repair/<sha> in merge mode; main fast-forwards to it only if it passes. */

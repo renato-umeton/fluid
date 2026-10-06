@@ -32,7 +32,7 @@ import { headOf, isNotFound, openRepo, readTextFile } from "../runtime/repo-file
 import { parseUiPreferences, UI_PREFERENCES_PATH } from "../ui/preferences.ts";
 import { aggregateCharts, CHART_LIMITS } from "../ui/charts.ts";
 import { DEMO_OVERLAY, demoReleaseFiles, keepFloorTightening } from "../stock/releases.ts";
-import { appExports, ensureRun, repoRemote, startGateInstance, startYellowRun } from "../workflows/common.ts";
+import { appExports, ensureRun, mainBeforePush, recordMainBeforePush, repoRemote, startGateInstance, startYellowRun } from "../workflows/common.ts";
 import { rerunTargets, upgradeTargets } from "../workflows/upgrade.ts";
 import { decodeParam, HttpError, json, readJson, requireJsonPost, requireString } from "./http.ts";
 import { askRef, parsePreferences } from "./validate.ts";
@@ -140,8 +140,16 @@ function requireAdmin(rc: RouteContext): void {
 async function takeQuota(env: Env, subject: string, bucket: string, limit: number, windowSeconds: number): Promise<void> {
 	const decision = await quotaStub(env, subject).take(bucket, limit, windowSeconds);
 	if (!decision.allowed) {
-		throw new HttpError(429, `rate limit for ${bucket} reached; retry in ${decision.retryAfterSeconds}s`, { retryAfterSeconds: decision.retryAfterSeconds }, { "retry-after": String(decision.retryAfterSeconds) });
+		const extra = { reason: "rate-limit", bucket, scope: quotaScope(subject), limit, windowSeconds, retryAfterSeconds: decision.retryAfterSeconds };
+		throw new HttpError(429, `rate limit for ${bucket} reached; retry in ${decision.retryAfterSeconds}s`, extra, { "retry-after": String(decision.retryAfterSeconds) });
 	}
+}
+
+/** Whose quota ran out, so the UI can say why: this client, this user, or the whole platform. */
+function quotaScope(subject: string): "client" | "user" | "global" {
+	if (subject.startsWith("client:")) return "client";
+	if (subject.startsWith("user:")) return "user";
+	return "global";
 }
 
 function clientId(rc: RouteContext): string {
@@ -576,7 +584,14 @@ route("POST", "/api/contests", async (rc) => {
 	try {
 		await runsStub(rc.env, runId).create({ id: runId, kind: "contest", repo, status: "running", fields: { request: cleanText(request, 1000), contestId, size: options.size, includeAgent: options.includeAgent, joinUntil, agentBranch, contestants } });
 		await fleet.openContest(repo, { contestId, runId, status: "open", includeAgent: options.includeAgent, joinUntil, agentJoined: false });
-		await appExports(rc.ctx).ContestWorkflow.create({ id: runId, params: { runId, contestId, repo, request, userId: session?.userId ?? userIdFromForkRepo(repo) ?? "admin", persona: entry.persona, size: options.size, includeAgent: options.includeAgent } });
+		const params = { runId, contestId, repo, request, userId: session?.userId ?? userIdFromForkRepo(repo) ?? "admin", persona: entry.persona, size: options.size, includeAgent: options.includeAgent };
+		try {
+			await appExports(rc.ctx).ContestWorkflow.create({ id: runId, params });
+		} catch (error) {
+			// create can fail after the instance was made (a dropped connection): if it exists, the contest is running.
+			if (!(await workflowInstanceExists(rc, runId))) throw error;
+			console.warn(`contest ${runId}: create reported ${scrubText(String(error))}, but the instance exists; keeping the contest`);
+		}
 	} catch (error) {
 		// Nothing runs this contest: close it so no inbox push can join it, free the fork, and give the quota back.
 		await abandonContest(rc.env, { repo, contestId, runId, subject, size: options.size }, error).catch((cleanup) => console.error(`contest ${runId} cleanup failed: ${scrubText(String(cleanup))}`));
@@ -584,6 +599,16 @@ route("POST", "/api/contests", async (rc) => {
 	}
 	return json({ runId, contestId, joinUntil, agentBranch }, 202);
 });
+
+/** Whether a ContestWorkflow instance with this id exists (get throws for an unknown id). */
+async function workflowInstanceExists(rc: RouteContext, id: string): Promise<boolean> {
+	try {
+		await appExports(rc.ctx).ContestWorkflow.get(id);
+		return true;
+	} catch {
+		return false;
+	}
+}
 
 function contestQuota(env: Env): QuotaAccess {
 	return {
@@ -619,7 +644,13 @@ route("POST", "/api/contests/:runId/pick", async (rc, { runId }) => {
 	if (!check.ok) throw new HttpError(400, check.error);
 	// Two picks at once: the run object sets the pick once, so only the first is sent and shown.
 	if (!(await stub.setOnce("pickRequested", label))) throw new HttpError(409, "a contestant was already picked in this contest");
-	await (await appExports(rc.ctx).ContestWorkflow.get(runId!)).sendEvent({ type: "contest-pick", payload: { label } });
+	try {
+		await (await appExports(rc.ctx).ContestWorkflow.get(runId!)).sendEvent({ type: "contest-pick", payload: { label } });
+	} catch (error) {
+		// The pick never reached the contest: clear it so the owner can pick again.
+		await stub.update({ pickRequested: null }).catch((cleanup) => console.error(`contest ${runId} pick reset failed: ${scrubText(String(cleanup))}`));
+		throw error;
+	}
 	return json(await stub.get());
 });
 
@@ -701,7 +732,11 @@ route("POST", "/api/forks/:repo/upgrade", async (rc, { repo }) => {
 	const ff = await fastForwardToPending(ws, pending, (branch) => fetchBranch(ws, remote, branch));
 	const previous = ff.previous;
 	if (ff.outcome === "diverged") throw new HttpError(409, `main moved since ${ff.branch} was gated at ${pending.commit.slice(0, 7)}; a new upgrade run is needed`);
-	if (ff.outcome === "fast-forward") await pushBranch(ws, remote, "main");
+	if (ff.outcome === "fast-forward") {
+		// Kept on the upgrade run: a repeated tap after a push whose response was lost still knows where main was.
+		await recordMainBeforePush(rc.env, pending.runId, pending.commit, previous);
+		await pushBranch(ws, remote, "main");
+	}
 	// A repeated tap after a push whose response was lost finds main at the commit with no yellow run for it yet.
 	const landed = ff.outcome === "fast-forward" || landedEarlier({ mainHead: ff.oid, commit: pending.commit, healthCommit: entry.health.commit });
 	const lastRun: RunSummary = entry.lastRun?.runId === pending.runId ? { ...entry.lastRun, applied: true, at: new Date().toISOString() } : { runId: pending.runId, kind: "upgrade", tag: pending.tag, status: "passed", applied: true, commit: pending.commit, at: new Date().toISOString() };
@@ -709,7 +744,7 @@ route("POST", "/api/forks/:repo/upgrade", async (rc, { repo }) => {
 	// The pending upgrade stays until the yellow run has started, so a repeated tap can still start it.
 	await fleet.update(name, { pinnedTag: pending.tag });
 	// The approved upgrade is live: it soaks in yellow like every other change that lands on main.
-	const yellow = landed ? await startYellowRun(rc.env, appExports(rc.ctx), { repo: name, commit: pending.commit, previous: ff.outcome === "fast-forward" ? previous : await firstParent(ws, pending.commit), source: "one-tap", parentRunId: pending.runId }) : null;
+	const yellow = landed ? await startYellowRun(rc.env, appExports(rc.ctx), { repo: name, commit: pending.commit, previous: ff.outcome === "fast-forward" ? previous : ((await mainBeforePush(rc.env, pending.runId, pending.commit)) ?? (await firstParent(ws, pending.commit))), source: "one-tap", parentRunId: pending.runId }) : null;
 	const updated = await fleet.update(name, { status: "passed", pendingUpgrade: null, lastRun });
 	forkInfoCache.delete(name);
 	return json({ repo: name, tag: pending.tag, commit: pending.commit, fork: updated, yellowRunId: yellow?.runId ?? null });
@@ -744,7 +779,11 @@ route("POST", "/api/forks/:repo/token", async (rc, { repo }) => {
 		const minted = await mintOutsideToken(handle, { fork: name, inbox }, null);
 		const at = new Date().toISOString();
 		const grant: OutsideGrant = { repo: name, inbox, userId: session.userId, tokenId: minted.tokenId, firstAt: previous?.firstAt ?? at, mintedAt: at, expiresAt: minted.access.expiresAt };
-		await fleet.setValue(key, grant as unknown as Json);
+		// A slow mint can outlive its 30 second lease; if another request took it, that request owns the inbox now.
+		if (!(await fleet.setValueIfHeld(lock, owner, key, grant as unknown as Json))) {
+			await abandonMint(rc.env, { lock, key, inbox, tokenId: minted.tokenId });
+			throw new HttpError(409, "another token request for this fork took over while this one was minting; get a new token");
+		}
 		try {
 			await appExports(rc.ctx).InboxCleanupWorkflow.create({ id: `inboxgc-${fnv1a(name)}-${fnv1a(minted.tokenId)}`, params: { fork: name, inbox, tokenId: minted.tokenId, expiresAt: minted.access.expiresAt } });
 		} catch (error) {
@@ -757,6 +796,33 @@ route("POST", "/api/forks/:repo/token", async (rc, { repo }) => {
 		await fleet.unlock(lock, owner);
 	}
 });
+
+// The last few imports from the fork's inbox and why any was refused (forks/import-log.ts). Owner or admin.
+route("GET", "/api/forks/:repo/imports", async (rc, { repo }) => {
+	const name = repoParam(repo!);
+	await requireForkAccess(rc, name);
+	return json({ imports: await fleetStub(rc.env).importNotes(name) });
+});
+
+/**
+ * A mint that lost its lease before writing its grant: its token is revoked
+ * (always safe). The inbox is deleted only when no request holds the lease
+ * and no grant names it, because the inbox name is shared and a request that
+ * took over is building, or has built, its own inbox under that name.
+ * Best effort: failures are logged, never thrown.
+ */
+async function abandonMint(env: Env, m: { lock: string; key: string; inbox: string; tokenId: string }): Promise<void> {
+	await revokePreviousToken(env, m.inbox, m.tokenId);
+	try {
+		const fleet = fleetStub(env);
+		const holder = (await fleet.getValue(m.lock)) as { until?: number } | null;
+		const held = holder !== null && (holder.until ?? 0) > Date.now();
+		if (held || (await fleet.getValue(m.key)) !== null) return;
+		await deleteRepoIfPresent(env, m.inbox);
+	} catch (error) {
+		console.warn(`inbox ${m.inbox} left after a lost mint lease: ${scrubText(error instanceof Error ? error.message : String(error))}`);
+	}
+}
 
 /** Revokes the previous outside token on the inbox it was made for. Best effort: a failure is logged, never thrown. */
 async function revokePreviousToken(env: Env, inbox: string, tokenId: string): Promise<void> {

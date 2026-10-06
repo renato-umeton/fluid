@@ -2,7 +2,7 @@
 import { api, state as apiState } from "../api.js";
 import { h, mount, short, fmtConf, fmtTime, modeBadge, statusTag, MODE_LABEL } from "../dom.js";
 import { renderIntent, renderTimeline } from "./shared.js";
-import { expiryText, maskCommand, secondsLeft } from "../outside-agent.js";
+import { expiryText, importNoteView, maskCommand, secondsLeft } from "../outside-agent.js";
 import { renderHealth } from "../health.js";
 
 const HEALTH_POLL_MS = 3000;
@@ -84,18 +84,41 @@ function outsidePanel(fork) {
       getToken.disabled = false;
     }
   });
+  const recent = h("div", { class: "stack", "aria-live": "polite" });
+  const refreshImports = () => paintImports(recent, fork.repo);
   const simulate = apiState.mock
     ? [
-        h("button", { type: "button", class: "btn", onclick: () => startSimulatedPush(fork, "work", pushOut) }, "Simulate a push to the inbox"),
-        h("button", { type: "button", class: "btn btn-quiet", onclick: () => startSimulatedPush(fork, "main", pushOut) }, "Simulate a push to inbox main"),
+        h("button", { type: "button", class: "btn", onclick: () => startSimulatedPush(fork, "work", pushOut, refreshImports) }, "Simulate a push to the inbox"),
+        h("button", { type: "button", class: "btn btn-quiet", onclick: () => startSimulatedPush(fork, "main", pushOut, refreshImports) }, "Simulate a push to inbox main"),
+        h("button", { type: "button", class: "btn btn-quiet", onclick: () => startSimulatedPush(fork, "refused", pushOut, refreshImports) }, "Simulate a push over the caps"),
       ]
     : null;
+  refreshImports();
   return h("section", { class: "panel wide", "aria-labelledby": "outside-heading" },
     h("div", { class: "panel-head" }, h("div", {}, h("h2", { id: "outside-heading" }, "Connect your own agent"),
       h("p", {}, "Work on this fork with your own agent or editor over plain git. Your token writes only to your inbox, a separate copy of your fork. Push a work/ branch there: the platform imports it into your fork, and the gate decides what reaches main, exactly as for changes made here. Pushes to main, tags, and other branches in the inbox are ignored."))),
     h("div", { class: "panel-body stack" },
       h("div", { class: "row" }, getToken, simulate),
-      status, access, pushOut));
+      status, access, pushOut, recent));
+}
+
+/** The last few imports from the inbox, including refused ones, which leave no run behind when the quota refuses them. */
+async function paintImports(el, repo) {
+  let notes = [];
+  try {
+    notes = (await api.imports(repo))?.imports ?? [];
+  } catch (err) {
+    console.warn(`Fluid: recent imports unavailable (${err.message})`);
+    return;
+  }
+  if (!el.isConnected) return;
+  mount(el, notes.length === 0 ? null : [
+    h("h3", { class: "small" }, "Recent pushes from your inbox"),
+    h("ul", { class: "import-notes" }, notes.map((n) => {
+      const view = importNoteView(n);
+      return h("li", {}, h("span", { class: `tag ${view.state}` }, view.tag), " ", h("span", { class: "small" }, view.text), " ", h("span", { class: "xsmall muted" }, fmtTime(n.at)));
+    })),
+  ]);
 }
 
 function showAccess(el, minted) {
@@ -128,18 +151,24 @@ function showAccess(el, minted) {
 }
 
 /** Mock mode: an outside agent pushes; follow the run through the gate and the yellow soak to green. */
-async function startSimulatedPush(fork, target, el) {
+async function startSimulatedPush(fork, target, el, onImport) {
   clearTimeout(pushTimer);
   mount(el, h("p", { class: "small muted" }, "Pushing from the outside agent..."));
   try {
     const { runId } = await api.simulateOutsidePush(fork.repo, target);
-    await followPush(runId, el);
+    if (!runId) {
+      // Refused before any run: only the import list says why.
+      mount(el);
+      onImport();
+      return;
+    }
+    await followPush(runId, el, onImport);
   } catch (err) {
     mount(el, h("p", { class: "small muted" }, err.message));
   }
 }
 
-async function followPush(runId, el) {
+async function followPush(runId, el, onImport) {
   if (!el.isConnected) return;
   const run = await api.run(runId);
   const yellow = run.yellow
@@ -151,8 +180,12 @@ async function followPush(runId, el) {
     renderTimeline(run.steps),
     yellow,
     run.intent ? renderIntent(run.intent) : null);
+  if (run.branch?.startsWith("work/inbox/") && el.dataset.imported !== runId) {
+    el.dataset.imported = runId;
+    onImport();
+  }
   const settled = (run.status === "passed" || run.status === "failed") && (!run.yellow || run.yellow.health !== "yellow");
-  if (!settled) pushTimer = setTimeout(() => followPush(runId, el), PUSH_POLL_MS);
+  if (!settled) pushTimer = setTimeout(() => followPush(runId, el, onImport), PUSH_POLL_MS);
 }
 
 function factsPanel(app, fork) {

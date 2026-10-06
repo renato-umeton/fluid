@@ -83,6 +83,22 @@ export class ContestWorkflow extends WorkflowEntrypoint<Env, ContestParams> {
 		const request = cleanText(p.request, 1000);
 		const seats = lineup({ recipe: matchRecipe(request) !== null, size: p.size, includeAgent: p.includeAgent });
 
+		// The start route abandons a contest whose create call threw and whose instance it could not find
+		// (closed, unlocked, refunded). If this instance was made anyway, it stops here and touches nothing:
+		// no run record, no contest state, no lease, since a newer contest may own them by now.
+		const abandoned = await step.do("check the contest is still open", async () => {
+			const run = await runsStub(this.env, p.runId).get();
+			const state = await fleetStub(this.env).contestState(p.repo);
+			if (run?.status === "failed") return "the start route already failed this contest";
+			if (state?.contestId !== p.contestId) return "the fork has no open contest with this id";
+			if (state.status === "done") return "this contest was already closed";
+			return null;
+		});
+		if (abandoned) {
+			console.warn(`contest ${p.runId} stopped before it began: ${abandoned}`);
+			return { winner: null, shipped: null, abandoned: true };
+		}
+
 		const fork = await step.do("read the fork", GIT_STEP, async (): Promise<ForkRead> => {
 			await ensureRun(this.env, { id: p.runId, kind: "contest", repo: p.repo, fields: { request } });
 			await log.step("Read the fork", "running");

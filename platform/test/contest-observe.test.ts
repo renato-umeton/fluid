@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { requestKey } from "../src/contest/behavior.ts";
+import { cardHash } from "../src/contest/behavior.ts";
 import { buildObservations, capObservations, cardRecorder, MAX_RECORDED_CARDS, recordedKeys, wishTestSet } from "../src/contest/observe.ts";
 
 const ask = (question: string, extra: Record<string, unknown> = {}) => ({ question, context: {}, ...extra });
@@ -59,7 +60,8 @@ describe("capObservations", () => {
 		expect(JSON.stringify(out).length).toBeLessThanOrEqual(6000);
 		expect(out).toHaveLength(10);
 		expect(out[0]!.card).not.toBeNull();
-		expect(out[9]).toMatchObject({ card: null, dropped: true, passed: true });
+		expect(out[9]).toMatchObject({ card: null, dropped: true, passed: true, cardHash: cardHash(obs[9]!.card) });
+		expect(out[0]!.cardHash).toBeUndefined();
 		expect(capObservations(obs, 1_000_000)).toBe(obs);
 	});
 });

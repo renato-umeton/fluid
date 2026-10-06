@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BEHAVIOR_LIMITS, behaviorTable, compactCard, diffCards, probeContentKey, requestKey, type Observation } from "../src/contest/behavior.ts";
+import { BEHAVIOR_LIMITS, behaviorTable, cardHash, compactCard, diffCards, probeContentKey, requestKey, type Observation } from "../src/contest/behavior.ts";
 
 const card = (over: Record<string, unknown> = {}) => ({
 	answer_id: "ans_1",
@@ -51,6 +51,17 @@ describe("compactCard", () => {
 		const out = compactCard(card({ body: "x".repeat(2000), signals: Array.from({ length: 30 }, (_, i) => `s${i}`) })) as Record<string, unknown>;
 		expect(String(out.body).length).toBeLessThanOrEqual(BEHAVIOR_LIMITS.maxString + 20);
 		expect((out.signals as unknown[]).length).toBe(BEHAVIOR_LIMITS.maxArray);
+	});
+});
+
+describe("cardHash", () => {
+	it("is short and stable whatever the key order", () => {
+		expect(cardHash({ mode: "research", body: "b" })).toMatch(/^[0-9a-f]{8}$/);
+		expect(cardHash({ mode: "research", body: "b" })).toBe(cardHash({ body: "b", mode: "research" }));
+	});
+
+	it("differs when the card differs", () => {
+		expect(cardHash({ mode: "research" })).not.toBe(cardHash({ mode: "clinical" }));
 	});
 });
 
@@ -134,6 +145,29 @@ describe("behaviorTable", () => {
 		const dropped = { ...obs("inv-a", true, null), dropped: true as const };
 		const table = behaviorTable(main, [{ label: "x", observations: [dropped, main[1]!, main[2]!] }]);
 		expect(table.rows[0]!.cells.x).toMatchObject({ changed: false, total: 0 });
+	});
+
+	it("counts a dropped card whose hash differs from main's card as one outside change", () => {
+		const other = compactCard(card({ confidence: 0.2 }));
+		const dropped = { ...obs("inv-a", true, null), dropped: true as const, cardHash: cardHash(other) };
+		const table = behaviorTable(main, [{ label: "x", observations: [dropped, main[1]!, main[2]!] }]);
+		expect(table.rows[0]!.cells.x).toMatchObject({ changed: true, total: 1, scope: "outside" });
+		expect(table.counts.x!.outside).toBe(1);
+	});
+
+	it("finds no change when a dropped card has the same hash as main's card", () => {
+		const dropped = { ...obs("inv-a", true, null), dropped: true as const, cardHash: cardHash(main[0]!.card) };
+		const table = behaviorTable(main, [{ label: "x", observations: [dropped, main[1]!, main[2]!] }]);
+		expect(table.rows[0]!.cells.x).toMatchObject({ changed: false, total: 0 });
+	});
+
+	it("compares by hash when main's card was dropped too", () => {
+		const mainDropped = [{ ...main[0]!, card: null, dropped: true as const, cardHash: cardHash(main[0]!.card) }, main[1]!, main[2]!];
+		const same = behaviorTable(mainDropped, [{ label: "x", observations: main }]);
+		expect(same.rows[0]!.cells.x).toMatchObject({ changed: false });
+		const changed = behaviorTable(mainDropped, [{ label: "x", observations: [obs("inv-a", true, card({ mode: "clinical" })), main[1]!, main[2]!] }]);
+		expect(changed.rows[0]!.cells.x).toMatchObject({ changed: true, total: 1 });
+		expect(changed.counts.x!.outside).toBe(1);
 	});
 
 	it("counts a probe a candidate no longer runs as a change", () => {

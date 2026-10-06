@@ -29,7 +29,7 @@ import { fleetStub, quotaStub } from "../stubs.ts";
 import { landedEarlier } from "../yellow/landing.ts";
 import { findRolledBackUpgrade, reapplyChange } from "../yellow/reapply.ts";
 import { logTiers, persistGate, repairRunId } from "./gate.ts";
-import { appExports, asJson, ensureRun, errorText, GATE_STEP, GIT_STEP, repoRemote, runLog, setFleet, startInstance, startOrRetryInstance, startYellowRun, guarded, steps, type ReleaseParams, type Steps, type UpgradeParams } from "./common.ts";
+import { appExports, asJson, ensureRun, errorText, GATE_STEP, GIT_STEP, mainBeforePush, recordMainBeforePush, repoRemote, runLog, setFleet, startInstance, startOrRetryInstance, startYellowRun, guarded, steps, type ReleaseParams, type Steps, type UpgradeParams } from "./common.ts";
 
 /** Upgrades created per batch, and the pause between batches. */
 export const FAN_OUT = { batchSize: 20, pause: "1 second" };
@@ -86,9 +86,14 @@ export async function replayFirst<T>(deps: {
  * After the replay's apply step gave up: whether main (checked out in `ws`)
  * already holds the gated commit, because a try pushed main and then failed.
  * Null means it does not, and the upgrade may fall back to merging. As in
- * a retried apply, the change counts as landed (a yellow run starts, from
- * the commit's first parent) only while main is at the commit and the
- * fork's health does not name it yet.
+ * a retried apply, the change counts as landed (a yellow run starts) only
+ * while main is at the commit and the fork's health does not name it yet.
+ * `previous` here is the commit's first parent, a fallback only: the yellow
+ * run's previous commit is a rollback target for a fork with no green commit
+ * yet, so the caller prefers main's head recorded before the push
+ * (mainBeforePush). The first parent is main only for the first gated
+ * commit: after main moved and was merged into the branch for another gate,
+ * the gated commit's first parent is the branch's earlier head, never on main.
  */
 export async function mainHoldsCommit(ws: Workspace, commit: string, healthCommit: string | null): Promise<{ landed: boolean; previous: string | null } | null> {
 	if (!(await branchContains(ws, "main", commit))) return null;
@@ -427,6 +432,7 @@ export class UpgradeWorkflow extends WorkflowEntrypoint<Env, UpgradeParams> {
 					const remote = await repoRemote(this.env, p.repo, "read");
 					const ws = await cloneRepo({ ...remote, ref: "main", singleBranch: true });
 					const found = await mainHoldsCommit(ws, at, (await fleetStub(this.env).health(p.repo))?.commit ?? null);
+					if (found?.landed) found.previous = (await mainBeforePush(this.env, p.runId, at)) ?? found.previous;
 					if (found) await log.step("Merge to main", "done", `main already holds ${at.slice(0, 7)} (an apply try pushed it before failing)${found.landed ? "; its yellow run starts now" : ""}`);
 					return found;
 				});
@@ -473,6 +479,9 @@ export class UpgradeWorkflow extends WorkflowEntrypoint<Env, UpgradeParams> {
 		const previous = await headCommit(ws, "main");
 		const ff = await fastForward(ws, "main", commit);
 		if (ff.outcome === "fast-forward") {
+			// Kept before the push: if the push lands and the step then fails, a retry or the
+			// "check main" step still knows where main was (the yellow run's rollback target).
+			await recordMainBeforePush(this.env, runId, commit, previous);
 			await pushBranch(ws, remote, "main");
 			await log.step("Merge to main", "done", `main fast-forwarded to ${commit.slice(0, 7)} on ${tag}`);
 			return { applied: true, regate: null, previous, landed: true };
@@ -481,7 +490,7 @@ export class UpgradeWorkflow extends WorkflowEntrypoint<Env, UpgradeParams> {
 			// A retried step after a successful push: main is at the commit but its yellow run never started.
 			const landed = landedEarlier({ mainHead: ff.oid, commit, healthCommit: (await fleetStub(this.env).health(repo))?.commit ?? null });
 			await log.step("Merge to main", "done", landed ? `main is already at ${commit.slice(0, 7)} (an earlier attempt pushed it); its yellow run starts now` : `main already contains ${commit.slice(0, 7)}`);
-			return { applied: true, regate: null, previous: landed ? await firstParent(ws, commit) : previous, landed };
+			return { applied: true, regate: null, previous: landed ? ((await mainBeforePush(this.env, runId, commit)) ?? (await firstParent(ws, commit))) : previous, landed };
 		}
 		await checkoutBranch(ws, branch);
 		const outcome = await mergeInto(ws, { ours: branch, theirs: "main", message: `Merge main into ${branch}\n\nmain moved to ${ff.oid.slice(0, 7)} during the upgrade to ${tag}; the merge is gated before main moves.` });

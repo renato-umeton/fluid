@@ -4,7 +4,7 @@
 // neither stock's runner nor its isolate changes. The cards are then joined
 // with the probes that sent the requests and their results.
 import type { RunnerManifestResult } from "../gate/tiers.ts";
-import { compactCard, probeContentKey, requestKey, type Observation, type ProbeTier } from "./behavior.ts";
+import { cardHash, compactCard, probeContentKey, requestKey, type Observation, type ProbeTier } from "./behavior.ts";
 
 /** Distinct requests recorded per gate run: the stock suites (about 70 probes today) plus at most 20 user and 12 wish tests, with room to grow. */
 export const MAX_RECORDED_CARDS = 200;
@@ -94,8 +94,9 @@ export const MAX_OBSERVATION_CHARS = 700_000;
 /**
  * Keeps observations under `max` characters by dropping cards: probes outside
  * the wish first, last probe first, then wish tests. Every probe keeps its
- * result, and a dropped card is marked, so the behavior diff compares that
- * probe by its result only instead of reading the missing card as a change.
+ * result, and a dropped card is marked and keeps a short hash, so the
+ * behavior diff compares it with main's card by hash (a mismatch is one
+ * change) instead of reading the missing card as a change.
  */
 export function capObservations(observations: Observation[], max = MAX_OBSERVATION_CHARS): Observation[] {
 	let size = JSON.stringify(observations).length;
@@ -107,9 +108,11 @@ export function capObservations(observations: Observation[], max = MAX_OBSERVATI
 		const o = out[i]!;
 		if (o.card === null) continue;
 		size -= JSON.stringify(o.card).length - 4;
+		o.cardHash = cardHash(o.card);
 		o.card = null;
 		o.dropped = true;
-		size += 15;
+		// ,"dropped":true and ,"cardHash":"<8 hex>"
+		size += 15 + 22;
 	}
 	return out;
 }
