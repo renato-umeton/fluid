@@ -24,7 +24,7 @@ Best-of-N agents compete to grant one wish. A behavior diff replaces the pull re
 **Goal**: A Contest view with contestants side by side, the behavior diff table, the winner banner, and "Ship this one" buttons; Customize offers "Run as a contest"; mock mode simulates a full contest.
 **Success Criteria**: Built with `h()` only; states carry text, not color alone; the mock shows a floor failure, a pass that changes behavior outside the wish, and a winner; the browser rule matches the platform rule.
 **Tests**: `test/ui-contest.test.ts`.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 5: Docs
 **Goal**: GATE_AND_AGENTS.md, API.md, UI.md, README.md describe Contest and wishes in flight.

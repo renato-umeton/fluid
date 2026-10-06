@@ -5,12 +5,15 @@
 // with timers so every demo scene works without a backend. A mock release
 // upgrades forks whose wishes are all replayable by intent replay (including
 // forks that reworded the card line the release also rewords, which would
-// conflict under a merge) and the rest by merge.
+// conflict under a merge) and the rest by merge. A mock contest
+// (mock-contest.js) runs three contestants to a winner and ships the pick.
 import { SYNTHETIC } from "./synthetic.js";
 import { cannedCard } from "./mock-canned.js";
 import { sanitizePreferences } from "./ui-prefs.js";
 import { mappedLines, matchRecipe, mergeUiRequest, parseUiRequest, tauTarget } from "./ui-recipe.js";
 import { mockReplayPlan } from "./mock-replay.js";
+import { childRunAt, contestAt, mockContestScenario } from "./mock-contest.js";
+import { pickNotes } from "./contest-rules.js";
 
 const STOCK_MIN_TAU = 0.85;
 const STOCK_TAG = "v1.0.0";
@@ -42,6 +45,7 @@ const db = {
   records: {},
   ui: {},
   history: {},
+  contests: {},
 };
 const sessionSuffix = hex(4);
 let runCounter = 0;
@@ -102,6 +106,9 @@ const routes = [
   ["GET", /^\/api\/ledger\/([^/]+)$/, (m) => db.ledgers[m[1]] ?? []],
   ["GET", /^\/api\/intents\/([^/]+)$/, (m) => intentsFor(m[1])],
   ["POST", /^\/api\/customize$/, (m, body) => startCustomize(body)],
+  ["POST", /^\/api\/contests$/, (m, body) => startContest(body)],
+  ["POST", /^\/api\/contests\/([^/]+)\/pick$/, (m, body) => pickContest(m[1], body)],
+  ["GET", /^\/api\/forks\/([^/]+)\/wishes$/, (m) => wishesFor(m[1])],
   ["GET", /^\/api\/runs\/([^/]+)$/, (m) => publicRun(m[1])],
   ["POST", /^\/api\/suggestions\/([^/]+)\/decide$/, (m, body) => decide(m[1], body)],
   ["GET", /^\/api\/gates\/([^/]+)$/, (m) => db.gates[m[1]] ?? []],
@@ -277,6 +284,91 @@ function override(body) {
   return record;
 }
 
+// ---------- contests ----------
+
+function startContest(body) {
+  requireSession();
+  const fork = db.forks[body?.repo];
+  if (!fork) throw new HttpError(404, `Fork ${body?.repo} not found`);
+  const text = String(body?.request ?? "").trim();
+  if (!text) throw new HttpError(400, "Describe the wish the contestants should grant");
+  const size = body?.size ?? 3;
+  if (size !== 2 && size !== 3) throw new HttpError(400, "size must be 2 or 3");
+  const includeAgent = body?.includeAgent === true;
+  const active = Object.entries(db.contests).find(([id, c]) => c.repo === fork.repo && !["passed", "failed", "cancelled"].includes(contestRun(id).status));
+  if (active) throw new HttpError(409, "a contest is already running on this fork; ship one of its contestants or wait for it to end");
+  const contestId = hex(12);
+  const runId = `run_contest_${contestId}`;
+  runCounter += 1;
+  const scn = mockContestScenario({ contestId, request: text, recipe: Boolean(matchRecipe(text)), size, includeAgent, intentBase: `int_2026_10_06_${String(300 + runCounter * 10).padStart(4, "0")}`, totals: { invariant: INVARIANT_PROBES, functional: FUNCTIONAL_PROBES } });
+  db.contests[runId] = { scn, repo: fork.repo, startedAt: Date.now(), includeAgent, pick: null, extra: {}, branches: false, gated: false, landed: false };
+  const run = contestRun(runId);
+  return { runId, contestId, joinUntil: run.joinUntil, agentBranch: run.agentBranch };
+}
+
+/** The contest as it stands now, with its effects on the mock fork applied once each (branches, check gates, landing, yellow). */
+function contestRun(id) {
+  const c = db.contests[id];
+  const run = contestAt(c.scn, Date.now() - c.startedAt, { runId: id, repo: c.repo, startedAt: new Date(c.startedAt).toISOString(), includeAgent: c.includeAgent, pick: c.pick });
+  const fork = db.forks[c.repo];
+  if (fork && !c.branches && run.contestants.every((x) => x.status !== "planning" && x.status !== "waiting for your push")) {
+    c.branches = true;
+    for (const x of run.contestants) fork.branches.push({ name: x.branch, commit: hex(40), role: "contest", gate: "check" });
+  }
+  if (fork && !c.gated && run.verdict) {
+    c.gated = true;
+    for (const e of c.scn.entrants) {
+      const seat = c.scn.seats.find((s) => s.label === e.label);
+      const failures = e.gatePassed ? [] : [{ tier: "invariant", probe: "inv-chart-open-dosing-clinical", sample: 1, samples: SAMPLES, path: "computed_dose", op: "equals", expected: null, actual: { value: 5, unit: "mg" } }];
+      db.gates[fork.repo].unshift({ ...gateResult({ commit: hex(40), ref: seat.branch, userTests: 3, failures }), mode: "check" });
+    }
+  }
+  if (fork && run.status === "passed" && !c.landed) {
+    c.landed = true;
+    const seat = c.scn.seats.find((s) => s.label === c.pick.label);
+    fork.head = hex(40);
+    fork.branches[0].commit = fork.head;
+    fork.branches = fork.branches.filter((b) => b.name !== seat.branch);
+    db.intents[fork.repo].unshift({ id: seat.intentId, author: `user:${db.personaId}`, agent: seat.kind === "agent" ? "outside-agent" : "customization-agent", request: c.scn.request, purpose: run.contestants.find((x) => x.label === seat.label)?.summary ?? c.scn.request, modes_affected: ["research"], files: ["app/cards.ts", `.intent/${seat.intentId}.json`], tests_added: c.scn.wishTests.map((w) => `tests/user/manifest.json#${w.id}`), stock_tag: fork.stockTag, contest: { id: c.scn.contestId, label: seat.label, runId: id }, commit: fork.head.slice(0, 7), at: now() });
+    const merged = gateResult({ commit: fork.head, ref: seat.branch, userTests: 3 });
+    db.gates[fork.repo].unshift(merged);
+    fork.lastGate = merged;
+    startMockYellow(fork, c.extra, "contest");
+  }
+  return { ...run, ...c.extra, updatedAt: now() };
+}
+
+function pickContest(id, body) {
+  const c = db.contests[id];
+  if (!c) throw new HttpError(404, `Contest ${id} not found`);
+  const run = contestRun(id);
+  if (c.pick) throw new HttpError(409, "a contestant was already picked in this contest");
+  if (run.status !== "waiting") throw new HttpError(409, "this contest is not waiting for a pick");
+  const check = pickNotes(c.scn.entrants, body?.label);
+  if (!check.ok) throw new HttpError(400, check.error);
+  c.pick = { label: body.label, at: Date.now() };
+  return contestRun(id);
+}
+
+/** Wishes in flight on a mock fork: contestants of a running contest and customize runs that have not finished. */
+function wishesFor(repo) {
+  const wishes = [];
+  for (const [id, c] of Object.entries(db.contests)) {
+    if (c.repo !== repo) continue;
+    const run = contestRun(id);
+    for (const x of run.contestants) {
+      const status = run.picked ? (run.picked.label === x.label ? (run.status === "passed" ? "won; merged to main" : "shipping") : run.notes?.[x.label] ?? "lost") : run.winner === x.label ? "winner; waiting for your pick" : x.status;
+      if (run.status === "passed" && run.picked?.label === x.label) continue;
+      wishes.push({ branch: x.branch, head: null, intentId: x.intentId ?? null, request: c.scn.request, purpose: x.summary ?? null, agent: x.kind === "agent" ? "outside-agent" : "customization-agent", files: x.files ?? [], status, runId: id, kind: "contest", contest: { id: c.scn.contestId, label: x.label }, gate: null });
+    }
+  }
+  for (const run of Object.values(db.runs)) {
+    if (run.kind !== "customize" || run.repo !== repo || ["passed", "failed"].includes(run.status)) continue;
+    wishes.push({ branch: run.branch ?? run._ctx?.branchName ?? null, head: run.commit ?? null, intentId: run.intent?.id ?? null, request: run.request, purpose: run.intent?.purpose ?? null, agent: "customization-agent", files: run.intent?.files ?? [], status: run.status, runId: run.id, kind: "customize", contest: null, gate: null });
+  }
+  return { repo, main: db.forks[repo]?.head ?? null, wishes, branchesLeftOut: 0 };
+}
+
 // ---------- gate ----------
 
 function tierSummary(name, total, failed) {
@@ -334,6 +426,12 @@ function startCustomize(body) {
 }
 
 function publicRun(id) {
+  if (db.contests[id]) return contestRun(id);
+  const parent = /^(run_contest_[0-9a-f]+)_/.exec(id)?.[1];
+  if (parent && db.contests[parent]) {
+    const child = childRunAt(contestRun(parent), id);
+    if (child) return child;
+  }
   const run = db.runs[id];
   if (!run) throw new HttpError(404, `Run ${id} not found`);
   const { _ctx, _script, _idx, _until, ...rest } = run;

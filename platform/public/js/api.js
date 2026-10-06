@@ -76,6 +76,12 @@ export const api = {
   ledger: (userId) => call("GET", `/api/ledger/${enc(userId)}`),
   intents: (repo) => call("GET", `/api/intents/${enc(repo)}`),
   customize: (repo, request) => call("POST", "/api/customize", { repo, request }),
+  /** Best-of-N contest for one wish: 2 or 3 contestants, optionally with the owner's own agent. */
+  startContest: (repo, request, size, includeAgent) => call("POST", "/api/contests", { repo, request, size, includeAgent }),
+  /** Ship one contestant (the winner or another that passed); only it is gated in merge mode. */
+  pickContest: (runId, label) => call("POST", `/api/contests/${enc(runId)}/pick`, { label }),
+  /** Wishes in flight: work branches, their intent records, and runs not pushed yet. */
+  wishes: (repo) => call("GET", `/api/forks/${enc(repo)}/wishes`),
   run: (runId) => call("GET", `/api/runs/${enc(runId)}`),
   decide: (runId, testId, decision, edited) => call("POST", `/api/suggestions/${enc(runId)}/decide`, { testId, decision, edited }),
   gates: (repo) => call("GET", `/api/gates/${enc(repo)}`),
