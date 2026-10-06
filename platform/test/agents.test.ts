@@ -352,7 +352,7 @@ describe("replanOnMovedMain", () => {
 
 	it("keeps the planned files when main did not touch them", () => {
 		const result = replanOnMovedMain({ change: tau, request: "Raise my confidence threshold to 0.9", before: { "fluid.toml": toml }, current: { "fluid.toml": toml }, protocols });
-		expect(result).toEqual({ files: tau.files, replanned: [] });
+		expect(result).toEqual({ files: tau.files, replanned: [], replay: tau.replay });
 	});
 
 	it("reapplies a recipe on main's current files instead of writing over them", () => {

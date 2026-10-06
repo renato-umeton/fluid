@@ -1,6 +1,7 @@
 // Renderers shared by several views: intent records, run timelines, diffs, gate results.
 import { api } from "../api.js";
 import { h, fmtTime, mount } from "../dom.js";
+import { wishesHeading } from "../fleet-summary.js";
 
 /**
  * "Apply repair" control for a repair/<sha> branch. Applying gates the branch
@@ -46,7 +47,29 @@ export function renderIntent(r, { related = false } = {}) {
     h("div", { class: "row" },
       (r.modes_affected || []).map((m) => h("span", { class: `badge m-${m}`, style: { fontSize: "11px", padding: "1px 8px 1px 6px" } }, m)),
       h("div", { class: "file-list" }, (r.files || []).map((f) => h("code", {}, f)))),
-    r.tests_added?.length ? h("p", { class: "xsmall muted" }, `Tests: ${r.tests_added.join(", ")}`) : null);
+    r.tests_added?.length ? h("p", { class: "xsmall muted" }, `Tests: ${r.tests_added.join(", ")}`) : null,
+    r.replay?.kind ? h("p", { class: "xsmall muted" }, r.replay.kind === "model" ? "Replay: a model change; releases upgrade this fork by merge." : `Replay: a ${r.replay.kind} wish, granted again on fresh stock at each release.`) : null);
+}
+
+const WISH_TAG = { replayed: "pass", failed: "fail", fallback: "warn" };
+
+/** Intent replay result of an upgrade: "Wishes carried to vX: N of N" and each wish with its status and reason. */
+export function renderWishes(replay) {
+  const heading = wishesHeading(replay);
+  if (!heading) return null;
+  return h("section", { class: "wishes", "aria-label": "Intent replay" },
+    h("h3", { class: "small" }, heading),
+    replay.wishes?.length ? h("ul", { class: "wish-list" }, replay.wishes.map((w) => h("li", {},
+      h("div", { class: "row" },
+        h("span", { class: `tag ${WISH_TAG[w.status] || ""}` }, w.status),
+        h("code", {}, w.intentId),
+        w.kind ? h("span", { class: "xsmall muted" }, w.kind === "model" ? "model change" : `${w.kind} wish`) : null),
+      w.request ? h("p", { class: "small" }, w.request) : null,
+      h("p", { class: "xsmall muted" }, w.reason),
+      w.stockAlsoChanged?.length && replay.path === "replay"
+        ? h("p", { class: "xsmall wish-note" }, `Stock ${replay.tag} also changed ${w.stockAlsoChanged.join(", ")}. A merge would have had to resolve it; replay granted the wish again on the new code.`)
+        : null)))
+      : null);
 }
 
 export function renderTimeline(steps) {

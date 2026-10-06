@@ -10,6 +10,7 @@
 // seeded customization computes a clinical dose.
 import { setTomlValue } from "../lib/toml.ts";
 import { protocolsFor, redcapChange, type PlannedChange } from "../agents/recipes.ts";
+import { framingLineIndex } from "../stock/releases.ts";
 
 export const SEED_PREFIX = "seed-";
 export const SEED_MAX = 500;
@@ -133,6 +134,7 @@ export function seedChange(kind: Exclude<SeedKind, "none">, files: Record<string
 				files: { "fluid.toml": setTomlValue(files["fluid.toml"]!, "thresholds", "tau", value) },
 				notes: { "fluid.toml": `tau = ${value}` },
 				recipe: "tau",
+				replay: { kind: "tau", params: { value } },
 			};
 		}
 		case "plain-wording":
@@ -144,12 +146,14 @@ export function seedChange(kind: Exclude<SeedKind, "none">, files: Record<string
 	}
 }
 
+const PLAIN_FRAMING_LINE = "      : `Not sure which role you are in (top confidence ${round(decision.confidence)}, threshold ${decision.tau}); pick the labeled answer that fits.`,";
+
 function plainWording(files: Record<string, string>): PlannedChange {
 	const text = files["app/cards.ts"]!;
 	const lines = text.split("\n");
-	const index = lines.findIndex((l) => l.includes("is below the threshold ${decision.tau}; "));
+	const index = framingLineIndex(lines);
 	if (index === -1) throw new Error("plain-wording: framing line not found");
-	lines[index] = "      : `Not sure which role you are in (top confidence ${round(decision.confidence)}, threshold ${decision.tau}); pick the labeled answer that fits.`,";
+	lines[index] = PLAIN_FRAMING_LINE;
 	return {
 		summary: "Plainer wording for the multi-intent framing",
 		purpose: "The multi-intent view explains itself in plain words",
@@ -157,6 +161,8 @@ function plainWording(files: Record<string, string>): PlannedChange {
 		files: { "app/cards.ts": lines.join("\n") },
 		notes: { "app/cards.ts": "Multi-intent framing reworded" },
 		recipe: "model",
+		// The wish is "the framing line reads this", so it replays on any stock that still has the line.
+		replay: { kind: "framing", params: { line: PLAIN_FRAMING_LINE } },
 	};
 }
 

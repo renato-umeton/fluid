@@ -1,8 +1,8 @@
 // Fleet: tag a stock release and watch every fork upgrade, gate, pass, or open a repair.
 import { api, adminKey, setAdminKey } from "../api.js";
 import { h, mount, fmtTime, statusTag } from "../dom.js";
-import { renderTimeline, renderDiff, renderGate, renderIntent, repairApply } from "./shared.js";
-import { baselineText, forkSummaryText } from "../fleet-summary.js";
+import { renderTimeline, renderDiff, renderGate, renderIntent, renderWishes, repairApply } from "./shared.js";
+import { baselineText, forkSummaryText, upgradePathCounts } from "../fleet-summary.js";
 import { displayStatus, healthBadge, healthText } from "../health.js";
 
 export const title = "Fleet";
@@ -84,6 +84,7 @@ function layout() {
         h("div", { class: "panel-body stack" },
           h("div", { class: "counts", id: "counts", role: "group", "aria-label": "Filter forks by status" }),
           h("div", { class: "progress", id: "progress", "aria-hidden": "true" }),
+          h("p", { class: "small upgrade-paths", id: "paths", role: "status" }),
           h("div", { class: "grid-cells", id: "grid", role: "group", "aria-labelledby": "fleet-heading" }),
           h("p", { class: "xsmall muted" }, "Each square is one user's fork. Select a square, or use the list of forks that need attention."))),
       h("section", { class: "panel" },
@@ -175,6 +176,24 @@ function paintCounts() {
     onclick: () => { model.filter = model.filter === k ? null : k; for (const f of model.forks.values()) paintCell(f); paintCounts(); },
   }, h("b", {}, String(c[k])), h("span", {}, h("i", { class: `swatch s-${k}`, "aria-hidden": "true" }), label))));
   mount(current.root.querySelector("#progress"), STATUSES.map(([k]) => h("span", { class: `s-${k}`, style: { width: `${(c[k] / total) * 100}%` } })));
+  paintPaths();
+}
+
+/** How the forks that took the latest release got there: rebuilt by intent replay, or merged. */
+function paintPaths() {
+  const el = current?.root.querySelector("#paths");
+  if (!el) return;
+  const tag = [...model.stockTags].sort(cmpTag).pop();
+  const forks = [...model.forks.values()];
+  const p = upgradePathCounts(forks, tag);
+  // A replayed fork where stock also changed a file under a wish: a merge would have had to resolve it.
+  const overlap = forks.find((f) => f.lastRun?.tag === tag && f.lastRun.status === "passed" && f.lastRun.path === "replay" && f.lastRun.replay?.wishes?.some((w) => w.stockAlsoChanged?.length));
+  mount(el, p.replay + p.merge === 0 ? [] : [
+    `Upgraded to ${tag}: `,
+    h("strong", {}, `${p.replay} by intent replay`),
+    ` (wishes granted again on fresh stock), ${p.merge} by merge. `,
+    overlap ? h("button", { type: "button", class: "btn btn-quiet", onclick: () => select(overlap.repo) }, "Show a replayed fork that would have conflicted under merge") : null,
+  ]);
 }
 
 function paintAttention() {
@@ -207,7 +226,8 @@ function onEvent(ev) {
   } else if (ev.repo) {
     const f = { ...(model.forks.get(ev.repo) || {}), ...ev, status: normStatus(ev.status) };
     model.forks.set(ev.repo, f);
-    model.log.unshift(`${fmtTime(ev.at || new Date().toISOString())} ${ev.repo} ${shown(f).replace("_", " ")}${f.health?.health === "yellow" ? ` (${healthText(f.health).toLowerCase()})` : ""}`);
+    const how = f.lastRun?.kind === "upgrade" && f.lastRun.path === "replay" && f.lastRun.replay ? `, ${f.lastRun.replay.carried} of ${f.lastRun.replay.total} wishes replayed` : "";
+    model.log.unshift(`${fmtTime(ev.at || new Date().toISOString())} ${ev.repo} ${shown(f).replace("_", " ")}${how}${f.health?.health === "yellow" ? ` (${healthText(f.health).toLowerCase()})` : ""}`);
     if (model.log.length > 200) model.log.length = 200;
     if (!current?.root.isConnected) return;
     if (!cells.has(ev.repo)) buildGrid(); else paintCell(f);
@@ -242,7 +262,7 @@ async function renderDrill(repo) {
   let intents = [];
   try {
     [run, intents] = await Promise.all([
-      f.lastRun?.runId && (f.lastRun.kind === "repair" || ATTENTION.has(f.status)) ? api.run(f.lastRun.runId).catch(() => null) : null,
+      f.lastRun?.runId && (f.lastRun.kind === "repair" || f.lastRun.kind === "upgrade" || ATTENTION.has(f.status)) ? api.run(f.lastRun.runId).catch(() => null) : null,
       api.intents(repo).catch(() => []),
     ]);
   } catch (err) {
@@ -254,13 +274,14 @@ async function renderDrill(repo) {
   mount(el, h("div", { class: "drill" },
     head,
     summary(f, run),
+    f.lastRun?.kind === "upgrade" || f.lastRun?.kind === "repair" ? renderWishes(run?.replay ?? f.lastRun?.replay) : null,
     baselineText(f) ? h("p", { class: "small muted" }, baselineText(f)) : null,
     run?.explanation ? h("div", { class: "explain" }, h("strong", {}, run.kind === "repair" ? "Repair agent: " : ""), run.explanation) : null,
     run?.safety ? h("div", { class: "explain", style: { borderColor: "var(--fail)", background: "var(--fail-bg)" } }, run.safety) : null,
     run?.kind === "repair" && run.branch ? repairApply(repo, run.branch, { gatePassed: run.repairGate?.passed ?? null }) : null,
     run?.steps ? h("div", {}, h("h3", { class: "small", style: { marginBottom: "8px" } }, "Run steps"), renderTimeline(run.steps)) : null,
     run?.diff?.length ? h("div", {}, h("h3", { class: "small" }, "Proposed fix"), renderDiff(run.diff)) : null,
-    run?.gate ? h("div", {}, h("h3", { class: "small", style: { marginBottom: "8px" } }, String(f.lastRun?.failedBranch ?? "").startsWith("work/") ? "Gate on the failed work branch" : "Gate on the upgrade branch"), renderGate(run.gate)) : null,
+    run?.gate ? h("div", {}, h("h3", { class: "small", style: { marginBottom: "8px" } }, String(f.lastRun?.failedBranch ?? "").startsWith("work/") ? "Gate on the failed work branch" : String(f.lastRun?.branch ?? "").startsWith("replay/") ? "Gate on the replay branch" : "Gate on the upgrade branch"), renderGate(run.gate)) : null,
     h("div", { class: "stack" }, h("h3", { class: "small" }, "Intent records in this fork"),
       intents.length ? intents.map((r) => renderIntent(r, { related: related.has(r.id) })) : h("p", { class: "small muted" }, "No records."))));
 }

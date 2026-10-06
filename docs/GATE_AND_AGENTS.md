@@ -12,7 +12,7 @@ All agent work runs in Workflows, declared in `platform/cloudflare.config.ts` an
 | `CustomizeWorkflow` | `fluid-customize` | user request | Plans the change (a recipe or the agent model), checks its imports and loads it in an isolate (a model-written change gets up to 2 repairs, see "Customization checks and repairs"), writes `.intent/<id>.json`, has the suggester propose tier 3 tests, waits for the user's decisions, commits on `work/<slug>` with an `Intent-Id:` trailer, records the gate link, pushes, starts the gate, and waits for the gate's (and any repair's) event. |
 | `RepairWorkflow` | `fluid-repair` | failed gate or yellow rollback | Opens `repair/<short-sha>` with `.repair/<short-sha>.md`, a repair intent record (`relies_on` lists the records it used), and a fix when a rule applies (restore tau, revert a customization that broke the clinical or research floor). A yellow repair works differently (see "Yellow to green"). It checks the fix in check mode and never merges it; the user applies it. |
 | `ReleaseWorkflow` | `fluid-release` | release | Starts one upgrade per fork that still needs the tag, in batches of 20 with a 1 second pause between batches. |
-| `UpgradeWorkflow` | `fluid-upgrade` | (tag, fork) | Creates `upgrade/<tag>`, merges the stock tag (the merge agent resolves conflicts), and runs the gate at the new tag. It then fast-forwards `main` if `auto_upgrade` is set, or records a pending upgrade for one-tap approval. On a fail the fork stays pinned and a repair opens. |
+| `UpgradeWorkflow` | `fluid-upgrade` | (tag, fork) | First tries intent replay: when every wish can be run again, builds `replay/<tag>` from stock at the tag plus the fork's wishes and gates it (see "Intent replay"). Otherwise, or if that gate fails, creates `upgrade/<tag>`, merges the stock tag (the merge agent resolves conflicts), and runs the gate at the new tag. It then fast-forwards `main` if `auto_upgrade` is set, or records a pending upgrade for one-tap approval. On a fail the fork stays pinned and a repair opens. |
 | `SeedFleetWorkflow` and `SeedForkWorkflow` | `fluid-seed-fleet`, `fluid-seed-fork` | seed batch, seeded fork | Builds the synthetic demo fleet (see "Demo fleet"). |
 | `YellowWorkflow` | `fluid-yellow` | change landed on main (repo, commit) | Runs the end-to-end tiers against the live fork 3 times with a 10 second pause, plus the browser checks once. All passes turn the fork green; a failure the fork caused, or a soak that cannot finish, rolls `main` back to the last green commit and opens a repair (see "Yellow to green"). |
 | `HarvestWorkflow` | `fluid-harvest` | harvest run | Reads intent records from forks that opted in, clusters them, labels the clusters with the model, and drafts the eligible ones as `harvest/<slug>` branches in `stock`. Each run replaces earlier drafts. |
@@ -61,8 +61,8 @@ The planner prompt states that look and layout (fonts, density, colors, tabs, ch
 `main` moves only to a commit a gate passed, and only by fast-forward (`git push` without force, so the remote refuses it if `main` moved meanwhile):
 
 - **Work branches.** If `main` moved after the branch was cut, the gate merges `main` into the branch, pushes that merge commit to the branch (never to `main`), and starts a gate for it. That gate runs at the pin the merged `fluid.toml` names and fast-forwards `main` if it passes. A conflict ends the run as failed with the conflicting files; nothing merges.
-- **Upgrades.** With `auto_upgrade`, the upgrade fast-forwards `main` to the gated `upgrade/<tag>` commit. If `main` moved, it merges `main` into `upgrade/<tag>` and gates again (at most 2 extra rounds).
-- **One-tap approval.** A passed upgrade without `auto_upgrade` is stored as the fork's `pendingUpgrade` (`{tag, commit, runId}`), apart from `lastRun`, which later runs overwrite. `POST /api/forks/:repo/upgrade` fast-forwards `main` to that commit and refuses with 409 when `main` is no longer an ancestor of it.
+- **Upgrades.** With `auto_upgrade`, the upgrade fast-forwards `main` to the gated `upgrade/<tag>` or `replay/<tag>` commit (a replay ends in a merge commit whose first parent is `main`, so this is still a fast-forward). If `main` moved, it merges `main` into `upgrade/<tag>` and gates again (at most 2 extra rounds).
+- **One-tap approval.** A passed upgrade without `auto_upgrade` is stored as the fork's `pendingUpgrade` (`{tag, commit, runId, branch}`; `branch` is `upgrade/<tag>` or `replay/<tag>`, and older rows without it mean `upgrade/<tag>`), apart from `lastRun`, which later runs overwrite. `POST /api/forks/:repo/upgrade` fetches that branch and fast-forwards `main` to that commit and refuses with 409 when `main` is no longer an ancestor of it.
 - **Customizations.** Before committing, the customization checks the planned files against `main`'s current files. A recipe (REDCap, tau) is applied again on the current files; a model plan whose files changed on `main` is refused with "run the request again". A retried commit step reuses a pushed commit whose `Intent-Id` matches instead of committing again.
 
 ## Yellow to green
@@ -149,7 +149,7 @@ POST /api/gates/:repo               {branch, commit?} -> {runId, created}  direc
 POST /api/forks/:repo/upgrade       -> one-tap fast-forward to the fork's pendingUpgrade
 POST /api/forks/:repo/repairs/:sha/apply -> {runId, branch, commit}       gate repair/<sha> in merge mode; main fast-forwards on pass
 POST /api/admin/stock/publish       {tag?, notes?, safety?}               publish the bundled stock source
-POST /api/admin/release             {tag, notes, safety} -> {tag, upgradeRuns, runId}
+POST /api/admin/release             {tag, notes, safety, replay?} -> {tag, upgradeRuns, runId}   replay: false skips intent replay
 POST /api/admin/fleet/seed          {count} -> {created, batch, runId}     default 200, cap 500
 POST /api/admin/fleet/cleanup       {batch?} -> {deleted, failed}          deletes seeded forks only (user-seed-*)
 POST /api/admin/harvest             -> {runId}
@@ -180,6 +180,23 @@ The merge agent resolves conflicts with the agent model when there are at most 3
 
 In both cases the gate decides whether the result ships.
 
+## Intent replay
+
+A Fluid fork is a list of wishes and the tests that prove them. On every release we grant your wishes again on fresh code. Instead of merging old text, an upgrade first tries to rebuild the fork from stock at the new tag by running each wish again, in commit order. The user sees "N of N wishes carried to vX".
+
+- **What a wish is.** An intent record written by the customization agent or a seeded customization. Platform records (onboarding, merge agent, repair, yellow rollback) are not wishes; they are carried as files.
+- **What is replayable.** Recipe records carry `replay: { kind, params }` (`platform/src/agents/replay.ts`): `tau` (`{ value }`, the value written, not the request words), `ui` (the mapped preferences: `look`, `font`, `density`, `accent`, `tab`), `redcap` (`{ protocols }`), and `framing` (`{ line }`, the seeded plain wording of the multi-intent framing line in `app/cards.ts`). A model plan records `{ kind: "model", request }` and is not replayed. Records written before replay have no field. Records live in the fork and its owner can edit them, so a malformed field reads as "no replay".
+- **When replay runs** (`planReplay`). The fork has at least one wish; every wish is replayable; replaying the wishes on the fork's current tag rebuilds `main` exactly (intent records, repair notes, `tests/user/`, and the `[preferences]` in `fluid.toml` aside), so nothing on `main` that no wish records is lost; and every wish still applies at the new tag. On a safety release, no wish may change a file that stock also changed between the two tags. Otherwise the upgrade takes the merge path, unchanged, and the run says why. A fork with no wishes merges (there is nothing to carry).
+- **Plain files only.** Replay compares and writes text. Every file in main and in stock at both tags must be a plain file (mode 100644: no executable bit, link, or submodule), and every file outside the carried folders must be valid UTF-8; otherwise the fork merges. Text is decoded strictly, so it encodes back to exactly the same bytes. Carried files (intent records, repair notes, `tests/user/`) may be binary: they are copied from `main` by their bytes.
+- **Never fails an upgrade by itself.** If replay cannot run (an unreadable record, a missing tag), or its attempt stops before `main` moves (its gate or apply step gives up after retries, a moved `main` conflicts with the replay branch, or `main` keeps moving past the regate limit), the run timeline says why and the upgrade takes the merge path (`replayFirst` in `platform/src/workflows/upgrade.ts`).
+- **The branch.** `replay/<tag>` starts at stock's tag commit. One commit carries what belongs to the fork and is not a wish: `fluid.toml` from stock with `stock_tag` set to the tag and the fork's `[preferences]` values, every intent record, repair notes, and `tests/user/`. Then each wish gets its own commit with its `Intent-Id` trailer. Last comes a merge commit whose first parent is `main` and whose second parent is the replay head, with the replayed tree (`platform/src/forks/replay-branch.ts`).
+- **History.** `main` is an ancestor of that merge commit, so it reaches the replayed tree only by fast-forward, like every other change; nothing is force pushed and `main`'s own history stays its first-parent line. The second parent shows exactly how the tree was built from stock.
+- **The gate.** The replay branch runs the normal gate in merge mode: tiers 1 and 2 at the new tag and tier 3, the user's own tests, which are each wish's acceptance check. On a pass `main` fast-forwards (`auto_upgrade`) or the upgrade waits for one tap, and the yellow soak follows, as for any upgrade. On a fail the run logs "Fall back to merge", `main` is unchanged, and the upgrade merges the tag into `upgrade/<tag>` with the merge agent, the gate, and a repair on failure, exactly as before.
+- **Results.** Each wish is `replayed`, `fallback` (not replayable), or `failed` (it no longer applies, with the reason, such as "the multi-intent framing line is no longer in app/cards.ts"). For a replayed wish the run also names the files stock changed between the two tags under that wish, where a merge would have had to resolve text. The run timeline has a "Replay wishes on stock vX" step, and the run and the fork's `lastRun` in the fleet carry `replay: { tag, path, carried, total, reason?, wishes[] }` and `path: "replay" | "merge"`, so fleet events stream them.
+- **The demo release.** Each demo release rewords the multi-intent framing line in `app/cards.ts`. A seeded fork that reworded the same line conflicts under a git merge; replay sets the fork's wording again on the new file and keeps every other stock change, and the result passes tiers 1 and 2 at the new tag (`platform/test/replay.test.ts`).
+- **Switch.** Replay is on by default (`REPLAY_BY_DEFAULT` in `platform/src/workflows/upgrade.ts`). `POST /api/admin/release` with `replay: false` sends every upgrade of that release straight to the merge path.
+- **Limits.** Model changes are not replayed, so a fork with any model change upgrades by merge. So does a fork with records from an outside agent or any change no recipe recorded: replay only rebuilds what its own recipes wrote. A rolled back customization whose record stays on `main` makes the rebuild differ from `main`, so that fork merges too. Replay does not mix with merge: one wish that cannot be replayed sends the whole fork down the merge path.
+
 ## Demo fleet
 
 `POST /api/admin/fleet/seed` builds forks that are honest about the floor:
@@ -197,7 +214,7 @@ In both cases the gate decides whether the result ships.
 - repos that do not start with `user-`
 - pushes to `main` (the gate's own merges)
 - tag pushes
-- `upgrade/*` branches (the upgrade workflow gates them itself)
+- `upgrade/*` and `replay/*` branches (the upgrade workflow gates them itself)
 - `repair/*` branches (the repair workflow checks them; applying one is an explicit request)
 - deleted branches
 
