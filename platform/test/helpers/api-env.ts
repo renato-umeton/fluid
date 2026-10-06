@@ -29,6 +29,7 @@ export interface FakeRepo {
 
 export function fakeArtifacts() {
 	const repos = new Map<string, FakeRepo>();
+	const deletedNames: string[] = [];
 	const handle = (repo: FakeRepo) => ({
 		info: async () => ({ name: repo.name, remote: `https://acct.artifacts.cloudflare.net/git/fluid/${repo.name}.git` }),
 		createToken: async (scope: string, ttl: number) => {
@@ -54,7 +55,12 @@ export function fakeArtifacts() {
 		add(name: string) {
 			repos.set(name, { name, tokens: [], forkedFrom: null, revokeResult: true });
 		},
+		deleted: deletedNames,
 		binding: {
+			delete: async (name: string) => {
+				if (repos.delete(name)) deletedNames.push(name);
+				return deletedNames.includes(name);
+			},
 			get: async (name: string) => {
 				const repo = repos.get(name);
 				if (!repo) throw new Error(`repository ${name} not found`);
@@ -71,6 +77,17 @@ export function apiEnv() {
 	env.QUOTA = namespace(Quota as never, () => env);
 	env.RUNS = namespace(Runs as never, () => env);
 	return { env: env as unknown as Env, artifacts, fleet: (env.FLEET as { get(id: string): Fleet }).get("global") };
+}
+
+/** An ExecutionContext whose workflow exports record what they were asked to create. */
+export function workerContext() {
+	const created: { workflow: string; id?: string; params: unknown }[] = [];
+	const workflow = (name: string) => ({
+		create: async (o: { id?: string; params: unknown }) => (created.push({ workflow: name, ...o }), { id: o.id ?? "x" }),
+		get: async () => ({ status: async () => ({ status: "running" }) }),
+	});
+	const exports = new Proxy({}, { get: (_t, name: string) => workflow(name) });
+	return { created, ctx: { waitUntil: () => undefined, passThroughOnException: () => undefined, exports } as unknown as ExecutionContext };
 }
 
 export async function cookieFor(session: Partial<Session> & { userId: string }): Promise<string> {

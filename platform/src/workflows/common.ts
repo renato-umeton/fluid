@@ -122,6 +122,14 @@ export interface ImportParams {
 	commit: string;
 }
 
+/** Deletes an inbox once the token it was made for has expired (workflows/inbox-cleanup.ts). */
+export interface InboxCleanupParams {
+	fork: string;
+	inbox: string;
+	tokenId: string;
+	expiresAt: string;
+}
+
 export interface HarvestParams {
 	runId: string;
 }
@@ -136,6 +144,7 @@ export interface AppExports extends PlatformExports {
 	SeedForkWorkflow: WorkflowBinding<SeedForkParams>;
 	HarvestWorkflow: WorkflowBinding<HarvestParams>;
 	ImportWorkflow: WorkflowBinding<ImportParams>;
+	InboxCleanupWorkflow: WorkflowBinding<InboxCleanupParams>;
 	YellowWorkflow: WorkflowBinding<YellowParams>;
 }
 

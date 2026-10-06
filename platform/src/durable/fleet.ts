@@ -353,6 +353,10 @@ export class Fleet extends DurableObject<Env> {
 		return true;
 	}
 
+	deleteValue(key: string): void {
+		this.ctx.storage.sql.exec("DELETE FROM kv WHERE k = ?", key);
+	}
+
 	unlock(key: string): void {
 		this.ctx.storage.sql.exec("DELETE FROM kv WHERE k = ?", key);
 	}

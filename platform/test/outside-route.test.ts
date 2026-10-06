@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index.ts";
 import { inboxRepoName, outsideGrantKey } from "../src/forks/outside.ts";
-import { apiEnv, cookieFor, post } from "./helpers/api-env.ts";
+import { apiEnv, cookieFor, post, workerContext } from "./helpers/api-env.ts";
 
 const USER = "s-1a2b";
 const FORK = `user-${USER}`;
 const INBOX = `inbox-${FORK}`;
-const ctx = { waitUntil: () => undefined, passThroughOnException: () => undefined } as unknown as ExecutionContext;
+const ctx = workerContext().ctx;
 
 async function setup() {
 	const t = apiEnv();
@@ -46,21 +46,22 @@ describe("POST /api/forks/:repo/token", () => {
 		expect(logs.join("\n")).not.toContain(body.token.split("?")[0]);
 	});
 
-	it("reuses the inbox and revokes the previous token on the next request", async () => {
+	it("replaces the inbox with a fresh fork of the fork's main on the next request, which ends the old token", async () => {
 		const t = await setup();
 		const cookie = await cookieFor({ userId: USER });
 		await mint(t, { cookie });
+		t.artifacts.repos.get(INBOX)!.tokens[0]!.scope = "old inbox";
 		expect((await mint(t, { cookie })).status).toBe(201);
-		expect(t.artifacts.repos.get(INBOX)!.tokens.map((x) => x.revoked)).toEqual([true, false]);
+		expect(t.artifacts.deleted).toEqual([INBOX]);
+		expect(t.artifacts.repos.get(INBOX)!.forkedFrom).toBe(FORK);
+		expect(t.artifacts.repos.get(INBOX)!.tokens).toEqual([{ id: `tok_${INBOX}_1`, scope: "write", ttl: 3600, revoked: false }]);
 	});
 
-	it("still answers when the previous token was already gone", async () => {
+	it("schedules the inbox's deletion after the token expires", async () => {
 		const t = await setup();
-		const cookie = await cookieFor({ userId: USER });
-		await mint(t, { cookie });
-		t.artifacts.repos.get(INBOX)!.revokeResult = false;
-		expect((await mint(t, { cookie })).status).toBe(201);
-		expect(logs.join("\n")).toMatch(/previous token .* not revoked/);
+		const { created, ctx: withExports } = workerContext();
+		await worker.fetch(post(`/api/forks/${FORK}/token`, { cookie: await cookieFor({ userId: USER }) }), t.env, withExports);
+		expect(created).toEqual([{ workflow: "InboxCleanupWorkflow", id: expect.stringMatching(/^inboxgc-/), params: { fork: FORK, inbox: INBOX, tokenId: `tok_${INBOX}_1`, expiresAt: "2026-10-06T13:00:00.000Z" } }]);
 	});
 
 	it("refuses without a session", async () => {

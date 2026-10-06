@@ -43,6 +43,19 @@ export function outsideGrantKey(repo: string): string {
 	return `outside:${repo}`;
 }
 
+/** After a token expires, its inbox stays this long, so a push made just before expiry is still imported. */
+export const INBOX_GRACE_MS = 15 * 60 * 1000;
+
+export function inboxCleanupDelayMs(expiresAt: string, now = Date.now()): number {
+	const at = Date.parse(expiresAt);
+	return Number.isFinite(at) ? Math.max(0, at + INBOX_GRACE_MS - now) : 0;
+}
+
+/** The inbox is deleted at expiry only if no newer token replaced the one the cleanup was scheduled for. */
+export function inboxCleanupDue(grant: OutsideGrant | null, scheduled: { inbox: string; tokenId: string }): boolean {
+	return grant !== null && grant.inbox === scheduled.inbox && grant.tokenId === scheduled.tokenId;
+}
+
 /** The inbox of a user fork. Inbox names never start with "user-", so nothing treats an inbox as a fork. */
 export function inboxRepoName(fork: string): string {
 	return assertRepoName(`${INBOX_PREFIX}${fork}`);

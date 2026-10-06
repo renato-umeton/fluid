@@ -21,7 +21,7 @@ import { ledgerStub, quotaStub, runsStub } from "../stubs.ts";
 import { cleanText } from "../agents/intent.ts";
 import { validateProbe, type Suggestion } from "../agents/suggester.ts";
 import { newRunId } from "../durable/runs.ts";
-import { directGateRefusal, gateInstanceId, gateModeFor } from "../events/filter.ts";
+import { directGateRefusal, fnv1a, gateInstanceId, gateModeFor } from "../events/filter.ts";
 import { fastForwardToPending } from "../forks/one-tap.ts";
 import { isSeededRepo, SEED_DEFAULT, SEED_MAX } from "../fleet/seed-catalog.ts";
 import { cloneRepo, fetchBranch, firstParent, pushBranch } from "../git/ops.ts";
@@ -395,9 +395,7 @@ route("POST", "/api/admin/forks/:repo/delete", async (rc, { repo }) => {
 	const name = repoParam(repo!);
 	if (name === STOCK_REPO) throw new HttpError(400, "refusing to delete stock");
 	const deleted = await rc.env.ARTIFACTS.delete(name).catch(() => false);
-	// A fork's inbox goes with it (it is not in the fleet, so nothing else would remove it).
-	const grant = (await fleetStub(rc.env).getValue(outsideGrantKey(name))) as OutsideGrant | null;
-	const inboxDeleted = grant ? await rc.env.ARTIFACTS.delete(grant.inbox).catch(() => false) : null;
+	const inboxDeleted = await removeInbox(rc.env, name).catch(() => false);
 	const removed = await fleetStub(rc.env).remove(name);
 	return json({ repo: name, deleted, inboxDeleted, removedFromFleet: removed });
 });
@@ -612,8 +610,9 @@ route("POST", "/api/forks/:repo/upgrade", async (rc, { repo }) => {
 });
 
 // Bring your own agent: a one hour write token for the inbox of the session's own fork (never for
-// the fork itself). The inbox is created on the first request as an Artifacts fork of the user's fork;
-// work/* pushes to it are imported into the fork and gated (forks/inbox.ts). One mint per fork at a time.
+// the fork itself). Every request replaces the inbox with a fresh Artifacts fork of the fork's main, which
+// also ends the previous token; a cleanup workflow deletes it after expiry. work/* pushes to it are
+// imported into the fork and gated (forks/inbox.ts, workflows/import.ts). One mint per fork at a time.
 route("POST", "/api/forks/:repo/token", async (rc, { repo }) => {
 	const name = repoParam(repo!);
 	const session = await requireSession(rc);
@@ -632,30 +631,52 @@ route("POST", "/api/forks/:repo/token", async (rc, { repo }) => {
 	try {
 		const previous = (await fleet.getValue(key)) as OutsideGrant | null;
 		const inbox = inboxRepoName(name);
-		using handle = await openInbox(rc.env, name, inbox);
-		const minted = await mintOutsideToken(handle, { fork: name, inbox }, previous?.tokenId ?? null);
+		using handle = await freshInbox(rc.env, name, inbox);
+		// The old inbox and every token for it are gone, so there is nothing left to revoke.
+		const minted = await mintOutsideToken(handle, { fork: name, inbox }, null);
 		const at = new Date().toISOString();
 		const grant: OutsideGrant = { repo: name, inbox, userId: session.userId, tokenId: minted.tokenId, firstAt: previous?.firstAt ?? at, mintedAt: at, expiresAt: minted.access.expiresAt };
 		await fleet.setValue(key, grant as unknown as Json);
-		console.log(`outside token minted for ${inbox} (token id ${minted.tokenId}, expires ${minted.access.expiresAt})${minted.revokeError ? `; previous token ${previous?.tokenId} not revoked: ${minted.revokeError}` : ""}`);
+		try {
+			await appExports(rc.ctx).InboxCleanupWorkflow.create({ id: `inboxgc-${fnv1a(name)}-${fnv1a(minted.tokenId)}`, params: { fork: name, inbox, tokenId: minted.tokenId, expiresAt: minted.access.expiresAt } });
+		} catch (error) {
+			// The inbox then lives until the next token or the fork's deletion; the token still expires on time.
+			console.warn(`inbox cleanup for ${inbox} not scheduled: ${scrubText(error instanceof Error ? error.message : String(error))}`);
+		}
+		console.log(`outside token minted for ${inbox} (token id ${minted.tokenId}, expires ${minted.access.expiresAt})`);
 		return json(minted.access, 201);
 	} finally {
 		await fleet.unlock(lock);
 	}
 });
 
-/** The fork's inbox, created on first use as an Artifacts fork of the fork's main (no other branches). */
-async function openInbox(env: Env, fork: string, inbox: string): Promise<ArtifactsRepo> {
-	try {
-		return await env.ARTIFACTS.get(inbox);
-	} catch (error) {
-		if (!isNotFound(error) && !/not found/i.test(String((error as Error)?.message))) throw error;
-	}
+/** Replaces the fork's inbox with a new Artifacts fork of the fork's main (no other branches), so nothing from earlier tokens remains. */
+async function freshInbox(env: Env, fork: string, inbox: string): Promise<ArtifactsRepo> {
+	await deleteRepoIfPresent(env, inbox);
 	{
 		using source = await openRepo(env.ARTIFACTS, fork);
 		await source.fork(inbox, { description: `Outside agent inbox for ${fork}: work/* branches are imported into the fork and gated`, defaultBranchOnly: true });
 	}
 	return env.ARTIFACTS.get(inbox);
+}
+
+async function deleteRepoIfPresent(env: Env, name: string): Promise<boolean> {
+	try {
+		return await env.ARTIFACTS.delete(name);
+	} catch (error) {
+		if (isNotFound(error) || /not found/i.test(String((error as Error)?.message))) return false;
+		throw error;
+	}
+}
+
+/** A deleted fork takes its inbox and its outside grant with it (neither is a fleet entry). */
+async function removeInbox(env: Env, fork: string): Promise<boolean | null> {
+	const fleet = fleetStub(env);
+	const grant = (await fleet.getValue(outsideGrantKey(fork))) as OutsideGrant | null;
+	if (!grant) return null;
+	const deleted = await deleteRepoIfPresent(env, grant.inbox);
+	await fleet.deleteValue(outsideGrantKey(fork));
+	return deleted;
 }
 
 // Apply a repair branch: gate repair/<sha> in merge mode; main fast-forwards to it only if it passes.
@@ -744,6 +765,7 @@ route("POST", "/api/admin/fleet/cleanup", async (rc) => {
 				await rc.env.ARTIFACTS.delete(repo).catch((error: unknown) => {
 					if (!/not found/i.test(String((error as Error)?.message))) throw error;
 				});
+				await removeInbox(rc.env, repo);
 				await fleet.remove(repo);
 				deleted.push(repo);
 			} catch (error) {
