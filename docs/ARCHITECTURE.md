@@ -132,8 +132,8 @@ flowchart TB
 
 ### Abuse limits for the public demo
 
-- **Code.** `platform/src/durable/quota.ts` and `platform/src/api/routes.ts`. Per-client and global quotas on sessions, forks, asks, Artifacts-backed reads, and outside git tokens (3 per hour per user, 6 per client, 60 overall).
-- **Outside git access.** A token from `POST /api/forks/:repo/token` lasts one hour, writes only to the owner's fork, and replaces the fork's previous outside token. Artifacts cannot scope it to branches, so the main guard (`platform/src/forks/main-guard.ts`) undoes any push to `main` the platform did not make, and every other branch reaches `main` only through the gate. Details and limits in `docs/GATE_AND_AGENTS.md`, "Outside pushes". JSON-only POST bodies capped at 64 KB, same-origin checks, request ids on every error. The AI Gateway caps all model traffic at 300 requests per minute.
+- **Code.** `platform/src/durable/quota.ts` and `platform/src/api/routes.ts`. Per-client and global quotas on sessions, forks, asks, Artifacts-backed reads, and outside git tokens (3 per hour per user, 6 per client, 60 overall). JSON-only POST bodies capped at 64 KB, same-origin checks, request ids on every error. The AI Gateway caps all model traffic at 300 requests per minute.
+- **Outside git access.** A token from `POST /api/forks/:repo/token` lasts one hour and can write only the fork's inbox repo (`inbox-<fork>`), never the fork, because Artifacts tokens cannot be limited to branches. Minting is one request per fork at a time and revokes the previous token. The platform imports only new `work/*` heads from the inbox, within caps (8 MB downloaded, 50 commits, 200 files, 1 MB per file), and the gate decides as for any other change. Inboxes are not fleet forks, so they do not count toward the 500 fork cap or the per-client fork quota; there is at most one per fork. Details and limits in `docs/GATE_AND_AGENTS.md`, "Outside pushes".
 
 ## Cloudflare primitives used
 
