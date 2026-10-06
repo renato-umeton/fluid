@@ -41,5 +41,7 @@ describe("directGateRefusal", () => {
 		expect(directGateRefusal("work/contest-1a2b3c4d5e6f-model-a")).toMatch(/contest/);
 		expect(directGateRefusal("work/inbox/contest-1a2b3c4d5e6f/mine")).toMatch(/contest/);
 		expect(directGateRefusal("work/inbox/my-change")).toBeNull();
+		expect(directGateRefusal("work/contest-notes")).toBeNull();
+		expect(directGateRefusal("work/inbox/contest-notes")).toBeNull();
 	});
 });

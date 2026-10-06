@@ -43,6 +43,12 @@ describe("filterPushEvent", () => {
 	});
 });
 
+describe("branches that only look like contest branches", () => {
+	it.each(["work/contest-notes", "work/contest-results-draft", "work/inbox/contest-notes", "work/contest-1a2b3c4d5e6g-model-a", "work/contest-1a2b3c4d5e6/x"])("gates %s like any work branch", (branch) => {
+		expect(filterPushEvent(push({ ref: `refs/heads/${branch}` }))).toEqual({ gate: true, trigger: { repo: "user-s-1a2b", branch, commit: SHA, mode: "merge" } });
+	});
+});
+
 describe("contest branches in an inbox", () => {
 	it("still imports work/contest-<id>/<name> from the inbox", () => {
 		const result = filterPushEvent(push({ repoName: "inbox-user-s-1a2b", ref: "refs/heads/work/contest-1a2b3c4d5e6f/mine" }));

@@ -40,9 +40,9 @@ export type FilterResult = { gate: true; trigger: GateTrigger } | { gate: false;
 const MAX_IMPORT_BRANCH = 100;
 const BRANCH_PART = /^[A-Za-z0-9_-][A-Za-z0-9._-]*$/;
 
-/** A contestant's branch in a fork: gated by its contest (workflows/contest.ts), never by a push event or the direct trigger. */
+/** A contestant's branch in a fork (work/contest-<12 hex>-<label>, or an outside entry work/inbox/contest-<12 hex>/<name>): gated by its contest (workflows/contest.ts), never by a push event or the direct trigger. */
 export function isContestBranch(branch: string): boolean {
-	return /^work\/(inbox\/)?contest-/.test(branch);
+	return /^work\/(?:contest-[0-9a-f]{12}-[A-Za-z0-9-]+|(?:inbox\/)?contest-[0-9a-f]{12}\/.+)$/.test(branch);
 }
 
 /** work/<name>, with plain path parts only (no "..", hidden parts, or ".lock"), at most 100 characters. */
