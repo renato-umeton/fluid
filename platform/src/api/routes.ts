@@ -611,7 +611,7 @@ route("POST", "/api/forks/:repo/upgrade", async (rc, { repo }) => {
 
 // Bring your own agent: a one hour write token for the inbox of the session's own fork (never for
 // the fork itself). Every request replaces the inbox with a fresh Artifacts fork of the fork's main, which
-// also ends the previous token; a cleanup workflow deletes it after expiry. work/* pushes to it are
+// also ends the previous token (it is revoked first as well); a cleanup workflow deletes it after expiry. work/* pushes to it are
 // imported into the fork and gated (forks/inbox.ts, workflows/import.ts). One mint per fork at a time.
 route("POST", "/api/forks/:repo/token", async (rc, { repo }) => {
 	const name = repoParam(repo!);
@@ -631,8 +631,9 @@ route("POST", "/api/forks/:repo/token", async (rc, { repo }) => {
 	try {
 		const previous = (await fleet.getValue(key)) as OutsideGrant | null;
 		const inbox = inboxRepoName(name);
+		// Deleting the inbox should end its tokens too; revoking the last one first does not rely on that.
+		if (previous?.tokenId) await revokePreviousToken(rc.env, previous.inbox, previous.tokenId);
 		using handle = await freshInbox(rc.env, name, inbox);
-		// The old inbox and every token for it are gone, so there is nothing left to revoke.
 		const minted = await mintOutsideToken(handle, { fork: name, inbox }, null);
 		const at = new Date().toISOString();
 		const grant: OutsideGrant = { repo: name, inbox, userId: session.userId, tokenId: minted.tokenId, firstAt: previous?.firstAt ?? at, mintedAt: at, expiresAt: minted.access.expiresAt };
@@ -649,6 +650,16 @@ route("POST", "/api/forks/:repo/token", async (rc, { repo }) => {
 		await fleet.unlock(lock);
 	}
 });
+
+/** Revokes the previous outside token on the inbox it was made for. Best effort: a failure is logged, never thrown. */
+async function revokePreviousToken(env: Env, inbox: string, tokenId: string): Promise<void> {
+	try {
+		using handle = await openRepo(env.ARTIFACTS, inbox);
+		if (!(await handle.revokeToken(tokenId))) console.warn(`previous outside token ${tokenId} for ${inbox} was not revoked: not found (already expired or revoked)`);
+	} catch (error) {
+		console.warn(`previous outside token ${tokenId} for ${inbox} was not revoked: ${scrubText(error instanceof Error ? error.message : String(error))}`);
+	}
+}
 
 /** Replaces the fork's inbox with a new Artifacts fork of the fork's main (no other branches), so nothing from earlier tokens remains. */
 async function freshInbox(env: Env, fork: string, inbox: string): Promise<ArtifactsRepo> {

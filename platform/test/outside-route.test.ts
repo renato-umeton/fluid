@@ -25,6 +25,7 @@ describe("POST /api/forks/:repo/token", () => {
 		logs = [];
 		vi.spyOn(console, "log").mockImplementation((...args) => void logs.push(args.join(" ")));
 		vi.spyOn(console, "error").mockImplementation((...args) => void logs.push(args.join(" ")));
+		vi.spyOn(console, "warn").mockImplementation((...args) => void logs.push(args.join(" ")));
 	});
 
 	it("creates the inbox as a fork of the user's fork and scopes the token to the inbox only", async () => {
@@ -55,6 +56,36 @@ describe("POST /api/forks/:repo/token", () => {
 		expect(t.artifacts.deleted).toEqual([INBOX]);
 		expect(t.artifacts.repos.get(INBOX)!.forkedFrom).toBe(FORK);
 		expect(t.artifacts.repos.get(INBOX)!.tokens).toEqual([{ id: `tok_${INBOX}_1`, scope: "write", ttl: 3600, revoked: false }]);
+	});
+
+	it("revokes the previous token on the old inbox before deleting it", async () => {
+		const t = await setup();
+		const cookie = await cookieFor({ userId: USER });
+		await mint(t, { cookie });
+		const old = t.artifacts.repos.get(INBOX)!;
+		const revokedAtDelete: boolean[] = [];
+		const remove = t.artifacts.binding.delete;
+		t.artifacts.binding.delete = async (name: string) => (revokedAtDelete.push(old.tokens[0]!.revoked), remove(name));
+		expect((await mint(t, { cookie })).status).toBe(201);
+		expect(revokedAtDelete).toEqual([true]);
+		expect(t.artifacts.repos.get(INBOX)).not.toBe(old);
+	});
+
+	it("still replaces the inbox when the previous token cannot be revoked", async () => {
+		const t = await setup();
+		const cookie = await cookieFor({ userId: USER });
+		await mint(t, { cookie });
+		t.artifacts.repos.get(INBOX)!.revokeResult = false;
+		expect((await mint(t, { cookie })).status).toBe(201);
+		expect(t.artifacts.deleted).toEqual([INBOX]);
+		expect(logs.join("\n")).toMatch(/previous outside token .* not revoked/);
+	});
+
+	it("mints when the grant names an inbox that no longer exists", async () => {
+		const t = await setup();
+		t.fleet.setValue(outsideGrantKey(FORK), { repo: FORK, inbox: INBOX, userId: USER, tokenId: "tok_gone", firstAt: "", mintedAt: "", expiresAt: null } as never);
+		expect((await mint(t, { cookie: await cookieFor({ userId: USER }) })).status).toBe(201);
+		expect(t.artifacts.repos.get(INBOX)!.forkedFrom).toBe(FORK);
 	});
 
 	it("schedules the inbox's deletion after the token expires", async () => {
