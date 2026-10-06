@@ -32,7 +32,7 @@ import { headOf, isNotFound, openRepo, readTextFile } from "../runtime/repo-file
 import { parseUiPreferences, UI_PREFERENCES_PATH } from "../ui/preferences.ts";
 import { aggregateCharts, CHART_LIMITS } from "../ui/charts.ts";
 import { DEMO_OVERLAY, demoReleaseFiles, keepFloorTightening } from "../stock/releases.ts";
-import { appExports, ensureRun, repoRemote, startGateInstance, startYellowRun } from "../workflows/common.ts";
+import { appExports, ensureRun, mainBeforePush, recordMainBeforePush, repoRemote, startGateInstance, startYellowRun } from "../workflows/common.ts";
 import { rerunTargets, upgradeTargets } from "../workflows/upgrade.ts";
 import { decodeParam, HttpError, json, readJson, requireJsonPost, requireString } from "./http.ts";
 import { askRef, parsePreferences } from "./validate.ts";
@@ -732,7 +732,11 @@ route("POST", "/api/forks/:repo/upgrade", async (rc, { repo }) => {
 	const ff = await fastForwardToPending(ws, pending, (branch) => fetchBranch(ws, remote, branch));
 	const previous = ff.previous;
 	if (ff.outcome === "diverged") throw new HttpError(409, `main moved since ${ff.branch} was gated at ${pending.commit.slice(0, 7)}; a new upgrade run is needed`);
-	if (ff.outcome === "fast-forward") await pushBranch(ws, remote, "main");
+	if (ff.outcome === "fast-forward") {
+		// Kept on the upgrade run: a repeated tap after a push whose response was lost still knows where main was.
+		await recordMainBeforePush(rc.env, pending.runId, pending.commit, previous);
+		await pushBranch(ws, remote, "main");
+	}
 	// A repeated tap after a push whose response was lost finds main at the commit with no yellow run for it yet.
 	const landed = ff.outcome === "fast-forward" || landedEarlier({ mainHead: ff.oid, commit: pending.commit, healthCommit: entry.health.commit });
 	const lastRun: RunSummary = entry.lastRun?.runId === pending.runId ? { ...entry.lastRun, applied: true, at: new Date().toISOString() } : { runId: pending.runId, kind: "upgrade", tag: pending.tag, status: "passed", applied: true, commit: pending.commit, at: new Date().toISOString() };
@@ -740,7 +744,7 @@ route("POST", "/api/forks/:repo/upgrade", async (rc, { repo }) => {
 	// The pending upgrade stays until the yellow run has started, so a repeated tap can still start it.
 	await fleet.update(name, { pinnedTag: pending.tag });
 	// The approved upgrade is live: it soaks in yellow like every other change that lands on main.
-	const yellow = landed ? await startYellowRun(rc.env, appExports(rc.ctx), { repo: name, commit: pending.commit, previous: ff.outcome === "fast-forward" ? previous : await firstParent(ws, pending.commit), source: "one-tap", parentRunId: pending.runId }) : null;
+	const yellow = landed ? await startYellowRun(rc.env, appExports(rc.ctx), { repo: name, commit: pending.commit, previous: ff.outcome === "fast-forward" ? previous : ((await mainBeforePush(rc.env, pending.runId, pending.commit)) ?? (await firstParent(ws, pending.commit))), source: "one-tap", parentRunId: pending.runId }) : null;
 	const updated = await fleet.update(name, { status: "passed", pendingUpgrade: null, lastRun });
 	forkInfoCache.delete(name);
 	return json({ repo: name, tag: pending.tag, commit: pending.commit, fork: updated, yellowRunId: yellow?.runId ?? null });
