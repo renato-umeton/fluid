@@ -1,0 +1,83 @@
+# Fluid overview
+
+**Everyone gets their own fork. Behavior decides what ships.**
+
+Fluid is a platform for personal software. A central team ships upstream (the stock release) as tagged versions of one git repository. Every user gets a fork of it. The user, the platform's agents, and any outside agent can change that fork. A change reaches the fork's `main` only when its behavior passes upstream's tests, the user's own tests, and a live soak.
+
+The first app on Fluid is a medical assistant, because a wrong merge there can hurt someone. Nothing in the idea is medical. This page explains the split between the platform and the app, and lists the places where the platform code still assumes the medical app.
+
+## Words used here
+
+- **Upstream** (stock): the repository the central team owns and tags. In code and routes it is the `stock` repo.
+- **Fork**: one user's copy of upstream, an Artifacts repository named `user-<id>`.
+- **Wish**: one change plus its intent record (`.intent/<id>.json`), which says why the change exists.
+- **Proof**: the tests that check a wish, in the fork's `tests/user/`.
+- **Floor**: the tests upstream owns. A fork cannot edit or skip them.
+
+## How a change ships
+
+1. A change lands on a `work/*` branch of the fork, from the customize agent, a recipe, or an outside agent through the fork's inbox.
+2. A push event starts the gate. Tier 1 (invariants) and tier 2 (functional tests) come from upstream at the fork's pinned tag. Tier 3 is the fork's own tests.
+3. On a pass, `main` fast-forwards to the gated commit and the fork turns yellow.
+4. Upstream's end-to-end suite runs against the live fork. Three clean passes turn it green. A failure rolls `main` back with a revert commit and opens a repair branch.
+5. On a release, each fork upgrades by intent replay when every wish came from a recipe, or by a merge otherwise. The same gate and soak decide.
+
+## The platform and the tenant
+
+The platform is the control plane in `platform/`. The tenant is the app that upstream ships. Today one deployment hosts one tenant.
+
+### What upstream must provide
+
+| Path | Purpose |
+| :-- | :-- |
+| `app/index.ts` | Default export `{ ask(request, env) }` that returns a JSON card. This is the only entry the platform calls. |
+| `app/`, `intent/`, `policies/`, `connectors/` | The runtime folders. The loader reads only these into the fork's isolate. |
+| `app/toml.ts`, `app/types.ts` | Modules the test runner imports. The gate always takes them from upstream. |
+| `tests/runner.ts` | The pure probe runner for tiers 1 to 3. |
+| `tests/invariants/manifest.json` | Tier 1: every sample must pass. |
+| `tests/functional/manifest.json` | Tier 2: a majority of samples must pass. |
+| `tests/e2e/manifest.json`, `tests/e2e/runner.ts` | The end-to-end suite and runner for the yellow soak. |
+| `fluid.toml` | `stock_tag` pins the release. It also holds user preferences such as `auto_upgrade` and `harvest_opt_in`. |
+| `.intent/` | Build-time intent records for upstream's own changes. |
+
+Releases are `vMAJOR.MINOR.PATCH` tags. The platform writes `releases/<tag>.json` (notes, safety flag, grace period) when it publishes one. See `stock/README.md` for the runtime contract.
+
+### What the platform provides
+
+- **Forks.** Provisioning from an upstream tag, sessions, and quotas.
+- **Runtime.** One Worker Loader isolate per fork commit, keyed by repo and sha, with no network. Upstream's runners run in separate isolates built only from upstream files, and reach the fork through one `ask` RPC.
+- **Gate.** The three tiers, published pins only, pins that only move forward, append-only intent records, and `main` that only fast-forwards.
+- **Yellow soak.** End-to-end runs against the live fork, browser checks, rollback by revert commit, and repair.
+- **Agents.** Customize (recipes or a model plan, checked before anything runs), the test suggester, merge, repair, intent replay, and harvest. Models run on Workers AI behind AI Gateway. Every decision about what merges is plain code.
+- **Outside agents.** A one hour token for a per-fork inbox repo. The platform imports `work/*` branches into the fork, and the gate decides.
+- **Records.** Intent records in each fork, and a per-user run-time ledger committed daily to a git repo, `ledger-<id>`.
+- **Fleet.** Live status of every fork, run timelines, and release fan-out.
+- **UI shell.** One UI for all forks. A fork changes its look only through `ui/preferences.json`, which the platform validates.
+
+## Tenant hooks: what is still medical-specific
+
+These parts of the platform code assume the medical app. A second tenant would need each one moved into upstream or made configurable.
+
+- **Answer card modes.** The modes `clinical`, `research`, and `administrative` are fixed lists in `platform/src/durable/user-ledger.ts`, `platform/src/api/routes.ts`, `platform/src/agents/suggester.ts`, and `platform/src/yellow/run.ts`. Overrides and the ledger accept only these.
+- **`computed_dose`.** The platform reads this card field to find a clinical dose.
+- **Safety backstop.** `platform/src/api/safety.ts` and `platform/src/api/ask.ts` refuse any clinical card with a computed dose and serve upstream instead. The safety release fallback in `ask.ts` is general.
+- **Tau checks.** The tau recipe (`platform/src/agents/recipes.ts`), the restore-tau repair rule and the clinical and research failure rules (`platform/src/agents/repair-plan.ts`), and the default of 0.85 all assume `thresholds.tau` in `fluid.toml`.
+- **Harvest floor paths.** `FLOOR_FILES` in `platform/src/agents/harvest-cluster.ts` names the clinical, dose, research, and registry policy files.
+- **Personas.** Demo users come from `synthetic/personas.json` through `platform/src/forks/provision.ts`.
+- **Synthetic data.** The loader passes the bundled medical data to every fork as `env.data` (`platform/src/runtime/loader.ts`).
+- **Recipes.** The REDCap connector, tau, and the plain framing wording are recipes and replay kinds (`platform/src/agents/recipes.ts`, `platform/src/agents/replay.ts`).
+- **Seeds.** The demo fleet's customizations are medical (`platform/src/fleet/seed-catalog.ts`).
+- **Demo release.** `platform/src/stock/releases.ts` rewords a line in `app/cards.ts` and adds research cross-check invariants.
+- **Platform end-to-end scenarios and browser checks.** `PLATFORM_SCENARIOS` in `platform/src/yellow/tiers.ts` and the checks in `platform/src/yellow/browser.ts` ask the bedside dosing question and expect a clinical card with no dose.
+- **UI.** `platform/public/` renders medical answer cards, the context simulator, and charts by mode.
+
+## Not built yet
+
+- Several tenants on one deployment. Upstream is always the repo named `stock`.
+- Contest (several agents on one wish, a behavior diff, the gate picks the winner) and a list of wishes in flight. Both are v2.0-beta, in progress.
+
+## Related documents
+
+- [ARCHITECTURE.md](ARCHITECTURE.md): concepts mapped to code and Cloudflare primitives.
+- [GATE_AND_AGENTS.md](GATE_AND_AGENTS.md): the gate, the soak, and every agent in detail.
+- [Fluid_ Personal Software for Academic Medicine.md](<Fluid_ Personal Software for Academic Medicine.md>): the original medical case study spec.
