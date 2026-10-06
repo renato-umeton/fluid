@@ -44,6 +44,8 @@ export interface GateInput {
 	mode?: "merge" | "check";
 	/** Existing .intent records the change modifies or deletes (found by the Gate workflow); records are append-only. */
 	intentViolations?: string[];
+	/** Records a change from outside the platform adds that claim a platform agent's name. */
+	platformClaims?: string[];
 }
 
 /** Isolate variant for one gate run: the gate never shares an isolate (or its module state) with production or another gate. */
@@ -165,6 +167,7 @@ export async function runGate(deps: RuntimeDeps, input: GateInput): Promise<Gate
 	addUiInvariant(tiers, failures, uiInvariant(uiText));
 	if (pin && !pin.ok) addPinFailure(tiers, failures, pin.reason, pinned, pin.floor);
 	if (input.intentViolations?.length) addAppendOnlyFailure(tiers, failures, input.intentViolations);
+	if (input.platformClaims?.length) addPlatformClaimFailure(tiers, failures, input.platformClaims);
 	return finish(pinned, suite.sha);
 }
 
@@ -174,10 +177,19 @@ export async function runGate(deps: RuntimeDeps, input: GateInput): Promise<Gate
  * whatever the suites found.
  */
 export function addAppendOnlyFailure(tiers: Record<TierName, TierSummary | null>, failures: GateFailure[], violations: string[]): void {
+	addIntentFailure(tiers, failures, "intent-records-append-only", violations, (list) => `Intent records are append-only; this change modifies or deletes ${list}. Add a new record instead.`, "only added records");
+}
+
+/** A change from outside the platform that adds a record claiming a platform agent fails tier 1 as "intent-records-platform-agent". */
+export function addPlatformClaimFailure(tiers: Record<TierName, TierSummary | null>, failures: GateFailure[], claims: string[]): void {
+	addIntentFailure(tiers, failures, "intent-records-platform-agent", claims, (list) => `Only the platform writes records for its own agents; this change from outside adds ${list}. Use another agent name, or leave the record out and the gate drafts one.`, "no platform agent names");
+}
+
+function addIntentFailure(tiers: Record<TierName, TierSummary | null>, failures: GateFailure[], id: string, violations: string[], describe: (list: string) => string, expected: string): void {
 	const listed = violations.slice(0, 10);
-	failures.unshift({ tier: "invariant", probe: "intent-records-append-only", description: `Intent records are append-only; this change modifies or deletes ${listed.join(", ")}${violations.length > listed.length ? ` and ${violations.length - listed.length} more` : ""}. Add a new record instead.`, sample: 1, samples: 1, file: listed[0]!.replace(/ \(.*\)$/, ""), path: ".intent", op: "append-only", expected: "only added records", actual: listed });
+	failures.unshift({ tier: "invariant", probe: id, description: describe(`${listed.join(", ")}${violations.length > listed.length ? ` and ${violations.length - listed.length} more` : ""}`), sample: 1, samples: 1, file: listed[0]!.replace(/ \(.*\)$/, ""), path: ".intent", op: id.replace("intent-records-", ""), expected, actual: listed });
 	const t = tiers.invariant;
-	const probe = { id: "intent-records-append-only", passed: false, samples: 1, passedSamples: 0 };
+	const probe = { id, passed: false, samples: 1, passedSamples: 0 };
 	tiers.invariant = t ? { ...t, passed: false, total: t.total + 1, failed: t.failed + 1, probes: [probe, ...t.probes] } : { tier: "invariant", passed: false, total: 1, failed: 1, probes: [probe] };
 }
 

@@ -23,6 +23,8 @@ describe("filterPushEvent for inbox repos", () => {
 		["a tag named like a work branch", "refs/tags/work/x"],
 		["a repair branch", "refs/heads/repair/abc1234"],
 		["an upgrade branch", "refs/heads/upgrade/v1.2.0"],
+		["a replay branch", "refs/heads/replay/v1.2.0"],
+		["a work branch nested under replay", "refs/heads/replay/work/x"],
 		["another branch", "refs/heads/feature/x"],
 		["a note ref", "refs/notes/commits"],
 	])("ignores %s", (_label, ref) => {

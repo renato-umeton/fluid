@@ -19,6 +19,12 @@ export const OUTSIDE_SOURCE = "outside-push";
 const MAX_COMMITS_LISTED = 20;
 /** Files listed in a drafted record; files_total keeps the real count. */
 export const MAX_DRAFT_FILES = 100;
+/**
+ * Agents only the platform writes records for. Repair, harvest, and intent
+ * replay trust these names (a "customization-agent" record can be a replay
+ * wish), so a change from outside may not add a record that claims one.
+ */
+export const PLATFORM_AGENTS = ["customization-agent", "seed-customization", "merge-agent", "onboarding", "repair-agent", "yellow-rollback", "harvester", OUTSIDE_AGENT];
 
 const INTENT_FILE = /^\.intent\/([A-Za-z0-9._-]+)\.json$/;
 
@@ -85,7 +91,7 @@ export function draftMessage(intentId: string, branch: string, commitCount: numb
 export type ChangeInspection =
 	| { status: "gone"; head: string }
 	| { status: "reuse"; head: string; intentId: string }
-	| { status: "ok"; moved: boolean; head: string; base: string | null; changes: FileChange[]; addedIds: string[]; appendOnly: string[]; floor: string[] };
+	| { status: "ok"; moved: boolean; head: string; base: string | null; changes: FileChange[]; addedIds: string[]; appendOnly: string[]; platformClaims: string[]; floor: string[] };
 
 /**
  * Looks at a gated commit in a working copy that has main and
@@ -117,6 +123,10 @@ export async function inspectChange(ws: Workspace, input: { branch: string; comm
 		changes,
 		addedIds: addedIntentIds(changes, contents),
 		appendOnly: changes.filter((c) => c.path.startsWith(".intent/") && c.status !== "added").map((c) => `${c.path} (${c.status})`),
+		platformClaims: Object.entries(contents).flatMap(([path, text]) => {
+			const agent = parseIntentRecord(path, text ?? "")?.agent;
+			return agent && PLATFORM_AGENTS.includes(agent) ? [`${path} (agent ${agent})`] : [];
+		}),
 		floor: changes.map((c) => c.path).filter((p) => FLOOR_FILES.test(p)),
 	};
 }

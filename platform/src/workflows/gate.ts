@@ -105,7 +105,7 @@ export class GateWorkflow extends WorkflowEntrypoint<Env, GateParams> {
 		}
 
 		const gate = await step.do("run tiers", GATE_STEP, async () => {
-			const result = await runGate({ env: this.env, exports }, { repo: p.repo, ref: p.branch, commit: p.commit, mode: p.mode, intentViolations: check.appendOnly });
+			const result = await runGate({ env: this.env, exports }, { repo: p.repo, ref: p.branch, commit: p.commit, mode: p.mode, intentViolations: check.appendOnly, platformClaims: check.platformClaims });
 			await log.step(`Gate ${p.branch} at ${short}`, "done", `Stock ${result.stockTag ?? "?"} suites loaded from stock; fork and runner in separate isolates (${result.durationMs} ms)`);
 			await logTiers(this.env, runId, result);
 			await persistGate(this.env, result, runId, origin.parentRunId ?? undefined);
@@ -193,7 +193,7 @@ export class GateWorkflow extends WorkflowEntrypoint<Env, GateParams> {
 	 * as the parent of that commit's gate, and pushes without force. A retried
 	 * step finds its own drafted commit on the branch and reuses it.
 	 */
-	private async checkChange(p: GateParams, runId: string, draft: boolean): Promise<{ status: "gone"; detail: string } | { status: "drafted"; commit: string; intentId: string } | { status: "ok"; appendOnly: string[] }> {
+	private async checkChange(p: GateParams, runId: string, draft: boolean): Promise<{ status: "gone"; detail: string } | { status: "drafted"; commit: string; intentId: string } | { status: "ok"; appendOnly: string[]; platformClaims: string[] }> {
 		const log = runLog(this.env, runId);
 		await log.step("Check the change", "running", draft ? `${p.branch} came from outside the platform; every change needs a build-time intent record` : "Intent records must only be added, never changed");
 		const remote = await repoRemote(this.env, p.repo, "write");
@@ -211,13 +211,16 @@ export class GateWorkflow extends WorkflowEntrypoint<Env, GateParams> {
 		}
 		const fleet = fleetStub(this.env);
 		if (seen.floor.length) for (const id of seen.addedIds) await fleet.setValue(floorKey(p.repo, id), seen.floor);
-		if (seen.appendOnly.length) {
-			await log.step("Check the change", "failed", `Intent records are append-only; this change modifies or deletes ${seen.appendOnly.slice(0, 5).join(", ")}. Tier 1 fails with intent-records-append-only.`);
-			return { status: "ok", appendOnly: seen.appendOnly };
+		// Only a change from outside is held to the agent rule; platform workflows write their own agents' records.
+		const claims = draft ? seen.platformClaims : [];
+		if (seen.appendOnly.length || claims.length) {
+			const problems = [seen.appendOnly.length ? `modifies or deletes ${seen.appendOnly.slice(0, 5).join(", ")} (records are append-only)` : null, claims.length ? `adds ${claims.slice(0, 5).join(", ")} (a platform agent's name)` : null].filter(Boolean);
+			await log.step("Check the change", "failed", `This change ${problems.join(" and ")}; tier 1 fails.`);
+			return { status: "ok", appendOnly: seen.appendOnly, platformClaims: claims };
 		}
 		if (!draft || seen.addedIds.length > 0 || seen.changes.length === 0) {
 			await log.step("Check the change", "done", seen.addedIds.length ? `${p.branch} adds ${seen.addedIds.map(intentPath).join(", ")}` : seen.changes.length ? `${seen.changes.length} files changed; no record was changed or deleted` : `${p.branch} changes no files since main`);
-			return { status: "ok", appendOnly: [] };
+			return { status: "ok", appendOnly: [], platformClaims: [] };
 		}
 		const intentId = newIntentId();
 		const drafted = await applyDraft(ws, { branch: p.branch, commit: p.commit, base: seen.base, changes: seen.changes, intentId, userId: userIdFromForkRepo(p.repo) ?? p.repo });

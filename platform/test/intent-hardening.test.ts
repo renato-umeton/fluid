@@ -2,8 +2,9 @@ import git from "isomorphic-git";
 import { describe, expect, it } from "vitest";
 import { clusterRecords, eligibility, floorFilesOf } from "../src/agents/harvest-cluster.ts";
 import { parseIntentRecord } from "../src/agents/intent.ts";
-import { addAppendOnlyFailure } from "../src/gate/run.ts";
-import { applyDraft, draftOutsideIntent, inspectChange, MAX_DRAFT_FILES } from "../src/agents/outside-intent.ts";
+import { addAppendOnlyFailure, addPlatformClaimFailure } from "../src/gate/run.ts";
+import { applyDraft, draftOutsideIntent, inspectChange, MAX_DRAFT_FILES, PLATFORM_AGENTS } from "../src/agents/outside-intent.ts";
+import { WISH_AGENTS } from "../src/agents/replay.ts";
 import { checkoutBranch, commitChanges, initRepo, parseTrailers, readCommitMessage, removeFiles, writeFiles } from "../src/git/ops.ts";
 
 const RECORD = { id: "int_1", author: "user:u", agent: "customization-agent", request: "r", purpose: "p", modes_affected: ["research"], files: ["app/x.ts"], tests_added: [], stock_tag: "v1.10.0" };
@@ -101,6 +102,20 @@ describe("inspectChange", () => {
 	});
 });
 
+describe("records that claim a platform agent", () => {
+	it("are listed, so an outside change cannot pose as a platform customization or a replay wish", async () => {
+		const { ws, head } = await scenario(async (w) => {
+			await writeFiles(w, { ".intent/int_fake.json": JSON.stringify({ ...RECORD, id: "int_fake", agent: "customization-agent", replay: { kind: "tau", params: { value: 0.5 } } }), ".intent/int_mine.json": JSON.stringify({ ...RECORD, id: "int_mine", agent: "my-editor" }) });
+			await commitChanges(w, { message: "records" });
+		});
+		expect(await inspectChange(ws, { branch: "work/x", commit: head })).toMatchObject({ addedIds: ["int_fake", "int_mine"], platformClaims: [".intent/int_fake.json (agent customization-agent)"] });
+	});
+
+	it("include every replay wish agent", () => {
+		for (const agent of WISH_AGENTS) expect(PLATFORM_AGENTS).toContain(agent);
+	});
+});
+
 describe("inspectChange on a rewritten branch", () => {
 	it("says the gated commit is gone when the branch no longer contains it", async () => {
 		const { ws, head } = await scenario(async (w) => {
@@ -122,6 +137,16 @@ describe("addAppendOnlyFailure", () => {
 		addAppendOnlyFailure(tiers, failures, [".intent/int_old.json (modified)"]);
 		expect(tiers.invariant).toMatchObject({ passed: false, total: 3, failed: 1 });
 		expect(failures[0]).toMatchObject({ tier: "invariant", probe: "intent-records-append-only", file: ".intent/int_old.json" });
+	});
+});
+
+describe("addPlatformClaimFailure", () => {
+	it("fails tier 1 with probe intent-records-platform-agent", () => {
+		const tiers = { invariant: null, functional: null, user: null };
+		const failures: never[] = [];
+		addPlatformClaimFailure(tiers, failures, [".intent/int_fake.json (agent customization-agent)"]);
+		expect(tiers.invariant).toMatchObject({ passed: false, total: 1, failed: 1 });
+		expect(failures[0]).toMatchObject({ probe: "intent-records-platform-agent", file: ".intent/int_fake.json" });
 	});
 });
 
