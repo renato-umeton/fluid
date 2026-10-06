@@ -1,6 +1,6 @@
 # Fluid: Personal Software for Academic Medicine
 
-> **Note.** This is the original medical case study spec. Fluid has since grown into a general platform, and academic medicine is its proving ground. For the platform in one page, see [OVERVIEW.md](OVERVIEW.md). Two claims below were not built as written. The run-time ledger is committed daily to a git repo, with no extra tamper protection. Harvest drafts a `harvest/<slug>` branch in upstream for maintainers to review, and upgrade agents do not retire duplicate fork code.
+> **Note.** This is the original medical case study spec. Fluid has since grown toward a general platform, and academic medicine is its proving ground. For the platform in one page, see [OVERVIEW.md](OVERVIEW.md). Two claims below were not built as written. The run-time ledger is committed daily to a git repo, with no extra tamper protection. Harvest drafts a `harvest/<slug>` branch in upstream for maintainers to review, and upgrade agents do not retire duplicate fork code.
 
 **A technical proposal for the Cloudflare "Build the next Git platform" competition** Built on Cloudflare Workers and Artifacts. Status: built and live at https://fluid.frontier-software.workers.dev (see the repository README). All data in the prototype is synthetic.
 

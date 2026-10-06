@@ -12,7 +12,7 @@ A central team ships upstream (the stock release) as tagged versions of one Arti
 
 ### 1. Behavior is the merge rule
 
-We call it the Floor. A push to a fork's work branch starts a gate with three tiers. Tiers 1 and 2 are invariants and functional tests that upstream owns. The gate reads them from upstream at the fork's pinned release, so a fork cannot edit or skip them. Tier 3 is the user's own tests. On a pass, `main` fast-forwards to the gated commit and the change goes live in yellow. An upstream-owned end-to-end suite then runs against the live fork. Three clean passes turn it green. A failure rolls `main` back with a revert commit and opens a repair.
+Upstream's tests are the floor. A push to a fork's work branch starts a gate with three tiers. Tiers 1 and 2 are invariants and functional tests that upstream owns. The gate reads them from upstream at the fork's pinned release, so a fork cannot edit or skip them. Tier 3 is the user's own tests. On a pass, `main` fast-forwards to the gated commit and the change goes live in yellow. An upstream-owned end-to-end suite then runs against the live fork (or a basic platform suite, when the pinned release has none). Three clean passes turn it green. A failure rolls `main` back with a revert commit and opens a repair.
 
 Personalization only moves toward safety:
 
@@ -32,7 +32,7 @@ Every change records why it exists in `.intent/<id>.json`, linked by an `Intent-
 
 ### 4. Every commit runs, and the sandbox enforces ownership
 
-The platform loads any fork at any branch or commit into a Worker Loader isolate keyed by repo and sha. There is no build queue. In local testing, more than 100 forks upgraded or gated at once. Fork isolates have no network. Upstream's test runner runs in a second isolate built only from upstream files. The two isolates do not trust each other and meet only through one `ask` RPC.
+The platform loads any fork at any branch or commit into a Worker Loader isolate keyed by repo and sha. There is no build queue. In local testing, more than 100 forks upgraded or gated at once. Fork isolates have no network. The gate's test runner runs in a second isolate built only from upstream files. The two isolates do not trust each other and meet only through one `ask` RPC. The soak's runner reaches the live fork through a small set of platform calls.
 
 ## How Fluid answers the brief
 
