@@ -33,6 +33,7 @@ export default defineConfig({
 			Quota: exports.durableObject({ storage: "sqlite" }),
 			GateWorkflow: exports.workflow({ name: "fluid-gate" }),
 			CustomizeWorkflow: exports.workflow({ name: "fluid-customize" }),
+			ContestWorkflow: exports.workflow({ name: "fluid-contest" }),
 			RepairWorkflow: exports.workflow({ name: "fluid-repair" }),
 			UpgradeWorkflow: exports.workflow({ name: "fluid-upgrade" }),
 			ReleaseWorkflow: exports.workflow({ name: "fluid-release" }),

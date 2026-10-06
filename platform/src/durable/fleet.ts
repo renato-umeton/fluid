@@ -3,6 +3,8 @@
 // changes are broadcast to Server-Sent Events subscribers (the fleet view).
 import { DurableObject } from "cloudflare:workers";
 import type { Json } from "../lib/json.ts";
+import { upsertWishNote, wishNotesKey, type WishNote } from "../contest/wishes.ts";
+import { contestKey, joinDecision, type ContestState } from "../contest/plan.ts";
 import type { BaselineRecord } from "../yellow/baseline.ts";
 import { cancelRun, initialHealth, recordBrowser, recordFailure, recordPass, startYellow, type BrowserSummary, type HealthEvent, type HealthFailure, type HealthState, type Transition } from "../yellow/state.ts";
 
@@ -350,6 +352,55 @@ export class Fleet extends DurableObject<Env> {
 	tryLock(key: string, ttlMs: number, owner: string, now = Date.now()): boolean {
 		const row = this.ctx.storage.sql.exec("SELECT v FROM kv WHERE k = ?", key).toArray()[0];
 		if (row && (JSON.parse(row.v as string) as { until: number }).until > now) return false;
+		this.setValue(key, { until: now + ttlMs, owner });
+		return true;
+	}
+
+	/** Adds or replaces one wish-in-flight note for a fork (contest/wishes.ts). One call at a time, so concurrent runs never lose a note. */
+	noteWish(repo: string, note: WishNote, now = Date.now()): WishNote[] {
+		const list = upsertWishNote(this.wishNotes(repo), note, now);
+		this.setValue(wishNotesKey(repo), list as unknown as Json);
+		return list;
+	}
+
+	wishNotes(repo: string): WishNote[] {
+		const value = this.getValue(wishNotesKey(repo));
+		return Array.isArray(value) ? (value as unknown as WishNote[]) : [];
+	}
+
+	/** The fork's current contest (contest/plan.ts): its run, its status, and the outside agent's seat. */
+	openContest(repo: string, state: ContestState): void {
+		this.setValue(contestKey(repo), state as unknown as Json);
+	}
+
+	contestState(repo: string): ContestState | null {
+		return this.getValue(contestKey(repo)) as unknown as ContestState | null;
+	}
+
+	/**
+	 * Gives the outside agent's seat to one import, once, and only while the
+	 * join window is open. A retry of the import that already took the seat
+	 * (same branch and commit) succeeds again, even after the window closed.
+	 */
+	joinContest(repo: string, contestId: string, now = Date.now(), entry?: { branch: string; commit: string }): ReturnType<typeof joinDecision> {
+		const state = this.contestState(repo);
+		if (entry && state?.contestId === contestId && state.agentJoined && state.agentEntry?.branch === entry.branch && state.agentEntry.commit === entry.commit) return { ok: true, runId: state.runId };
+		const decision = joinDecision(state, contestId, now);
+		if (decision.ok) this.openContest(repo, { ...state!, agentJoined: true, agentEntry: entry ?? null });
+		return decision;
+	}
+
+	setContestStatus(repo: string, contestId: string, status: ContestState["status"]): void {
+		const state = this.contestState(repo);
+		if (state?.contestId === contestId) this.openContest(repo, { ...state, status });
+	}
+
+	/** Extends a lease that `owner` still holds (not one that expired or someone else took). */
+	renewLock(key: string, ttlMs: number, owner: string, now = Date.now()): boolean {
+		const row = this.ctx.storage.sql.exec("SELECT v FROM kv WHERE k = ?", key).toArray()[0];
+		if (!row) return false;
+		const lease = JSON.parse(row.v as string) as { until: number; owner?: string };
+		if (lease.owner !== owner || lease.until <= now) return false;
 		this.setValue(key, { until: now + ttlMs, owner });
 		return true;
 	}

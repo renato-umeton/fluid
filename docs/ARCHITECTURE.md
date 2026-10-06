@@ -108,6 +108,11 @@ flowchart TB
 - **Code.** `platform/src/workflows/customize.ts`. Known requests (the REDCap connector, τ changes, and UI look and layout) use fixed recipes in `platform/src/agents/recipes.ts` and `platform/src/agents/ui-recipe.ts`. Other requests go to the agent model, whose plan is checked before anything runs it: at most 3 files, only under `app/`, `intent/`, `policies/`, or `connectors/` (or `ui/preferences.json`), each one must parse, every import must resolve to a file in the fork or the change, and the change is validated in an isolate. A failure goes back to the model with the exact error for at most 2 repairs; after that the run ends with a plain explanation and nothing is committed (`platform/src/agents/attempts.ts`). The suggester (`platform/src/agents/suggester.ts`) proposes tier 3 probes from the diff and the intent record, plus probes next to the nearest invariants when the change touches τ, the intent engine, or a mode contract. The workflow waits for the user's accept, edit, or reject decisions (`step.waitForEvent`), commits on `work/<slug>`, pushes, and starts the gate.
 - **Primitives.** Workflows, Workers AI through AI Gateway, Worker Loader.
 
+### Contest and wishes in flight (extends spec 6.3)
+
+- **Code.** `platform/src/workflows/contest.ts` and `platform/src/contest/`. One request starts 2 or 3 contestants at once on `work/contest-<id>-<label>`; each is gated in check mode while the platform keeps the fork's answer to every probe in the host ask callback (`runGateObserved` in `platform/src/gate/run.ts`); a behavior diff against main and a fixed rule pick the winner; only the owner's pick is gated in merge mode. `GET /api/forks/:repo/wishes` lists every wish in flight. Details in `docs/GATE_AND_AGENTS.md`, "Contest".
+- **Primitives.** Workflows (parallel steps), Worker Loader, Durable Objects (run timelines, the contest seat, wish notes), Workers AI.
+
 ### Fork-owned UI preferences (extends spec 4.1)
 
 - **Code.** `ui/preferences.json` in the fork, validated by `platform/src/ui/preferences.ts` (allowlisted font stacks, density, accent palette, and at most 4 tabs of platform chart widgets; unknown keys rejected). `GET /api/forks/:repo/ui` serves it from `main`; `GET /api/me/charts` aggregates the session's own ledger, intents, and gate history (`platform/src/ui/charts.ts`). The UI maps the values to its own styles and draws the charts as inline SVG (`docs/UI.md`).
@@ -145,7 +150,7 @@ flowchart TB
 | Artifacts binding | `env.ARTIFACTS`, `platform/src/runtime/repo-files.ts`, `platform/src/forks/provision.ts` | Create, fork, read files and logs, mint repo-scoped tokens |
 | isomorphic-git | `platform/src/git/ops.ts` | Commits, branches, tags, merges, and pushes from inside the Worker |
 | Worker Loader | `env.LOADER`, `platform/src/runtime/loader.ts` | One isolate per fork commit, and one per stock runner |
-| Workflows | `platform/src/workflows/*` | Gate, customize, repair, release, upgrade, seed, harvest, yellow soak |
+| Workflows | `platform/src/workflows/*` | Gate, customize, contest, repair, release, upgrade, seed, harvest, yellow soak |
 | Queues with event subscriptions | queue `fluid-events`, `platform/src/events/*` | Start a gate on every push |
 | Durable Objects (SQLite) | `platform/src/durable/*` | Fleet registry and stream, run timelines, run-time ledger, quotas |
 | Workers AI with AI Gateway | `env.AI`, `platform/src/runtime/llm.ts`, gateway `fluid` | Agent planning, merge resolution, repair explanations, harvest labels, optional card wording |

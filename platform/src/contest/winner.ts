@@ -1,0 +1,117 @@
+// The contest's winner rule. Plain code, no model: the same inputs always
+// pick the same winner, and the reason is written in plain words.
+//   (a) every tier passed and every wish test passed;
+//   (b) fewest behavior changes outside what the wish targets;
+//   (c) fewest files changed;
+//   (d) earliest finished; a full tie goes to the earlier contestant in the lineup.
+// Tests only one contestant ran ("own" cells in the behavior diff) are not
+// counted in outsideChanges, so adding tests never costs a contestant a point.
+// public/js/contest-rules.js is a copy for mock mode (test/ui-contest.test.ts keeps them the same).
+
+export interface Entrant {
+	label: string;
+	/** The contestant produced a change on its branch. */
+	ready: boolean;
+	/** Why it produced no change. */
+	problem: string | null;
+	gatePassed: boolean;
+	firstFailure: string | null;
+	wishPassed: number;
+	wishTotal: number;
+	failingWish: string[];
+	outsideChanges: number;
+	filesChanged: number;
+	/** When its branch was ready (ISO time); null sorts last. */
+	finishedAt: string | null;
+}
+
+export interface Ranked {
+	label: string;
+	eligible: boolean;
+	why: string;
+}
+
+export interface Verdict {
+	winner: string | null;
+	reason: string;
+	ranking: Ranked[];
+	/** "lost to X because Y" for every contestant but the winner. */
+	notes: Record<string, string>;
+}
+
+export function eligibility(e: Entrant): { eligible: boolean; why: string } {
+	if (!e.ready) return { eligible: false, why: `it could not produce a change${e.problem ? ` (${e.problem})` : ""}` };
+	if (!e.gatePassed) return { eligible: false, why: `it failed the gate${e.firstFailure ? `: ${e.firstFailure}` : ""}` };
+	if (e.wishTotal === 0) return { eligible: false, why: "no wish test ran, so nothing shows the wish was granted" };
+	if (e.wishPassed < e.wishTotal) return { eligible: false, why: `wish test ${e.failingWish[0] ?? "(unknown)"} failed` };
+	return { eligible: true, why: "it passed every tier and every wish test" };
+}
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+/** Negative when a ranks before b under rules b to d, then lineup order (index). */
+function compare(a: Entrant, b: Entrant, order: Map<string, number>): number {
+	if (a.outsideChanges !== b.outsideChanges) return a.outsideChanges - b.outsideChanges;
+	if (a.filesChanged !== b.filesChanged) return a.filesChanged - b.filesChanged;
+	const ta = a.finishedAt ?? "￿";
+	const tb = b.finishedAt ?? "￿";
+	if (ta !== tb) return ta < tb ? -1 : 1;
+	return order.get(a.label)! - order.get(b.label)!;
+}
+
+/** Why `loser` ranks after `winner` (both eligible), as the rest of "it ...". */
+function lossBecause(winner: Entrant, loser: Entrant): string {
+	if (winner.outsideChanges !== loser.outsideChanges) return `it changed behavior on ${plural(loser.outsideChanges, "probe")} outside the wish (${winner.label}: ${winner.outsideChanges})`;
+	if (winner.filesChanged !== loser.filesChanged) return `it changed ${plural(loser.filesChanged, "file")} (${winner.label}: ${winner.filesChanged})`;
+	if ((winner.finishedAt ?? "") !== (loser.finishedAt ?? "")) return `it finished later (${winner.label} finished first)`;
+	return "it tied on every rule and comes later in the lineup";
+}
+
+function winReason(winner: Entrant, runnerUp: Entrant | null): string {
+	if (!runnerUp) return `${winner.label} wins: it is the only contestant that passed every tier and every wish test.`;
+	const lead = `${winner.label} wins: like ${runnerUp.label}, it passed every tier and every wish test, and it`;
+	if (winner.outsideChanges !== runnerUp.outsideChanges) return `${lead} changed behavior on ${plural(winner.outsideChanges, "probe")} outside the wish (${runnerUp.label}: ${runnerUp.outsideChanges}).`;
+	const same = `${lead} tied on behavior outside the wish (${plural(winner.outsideChanges, "probe")})`;
+	if (winner.filesChanged !== runnerUp.filesChanged) return `${same} and changed ${plural(winner.filesChanged, "file")} (${runnerUp.label}: ${runnerUp.filesChanged}).`;
+	if ((winner.finishedAt ?? "") !== (runnerUp.finishedAt ?? "")) return `${same}, changed the same number of files (${winner.filesChanged}), and finished first.`;
+	return `${same}, changed the same number of files (${winner.filesChanged}), finished at the same time, and comes first in the lineup.`;
+}
+
+export function decideWinner(entrants: Entrant[]): Verdict {
+	const order = new Map(entrants.map((e, i) => [e.label, i]));
+	const judged = entrants.map((e) => ({ e, ...eligibility(e) }));
+	const eligible = judged.filter((j) => j.eligible).map((j) => j.e).sort((a, b) => compare(a, b, order));
+	const ranking: Ranked[] = [...eligible.map((e) => ({ label: e.label, eligible: true, why: "it passed every tier and every wish test" })), ...judged.filter((j) => !j.eligible).map((j) => ({ label: j.e.label, eligible: false, why: j.why }))];
+	const winner = eligible[0] ?? null;
+	if (!winner) {
+		return { winner: null, reason: "No winner: no contestant passed every tier and every wish test. Nothing ships; every branch stays for you to look at.", ranking, notes: Object.fromEntries(judged.map((j) => [j.e.label, `did not win because ${j.why}`])) };
+	}
+	return { winner: winner.label, reason: winReason(winner, eligible[1] ?? null), ranking, notes: notesFor(judged, winner, (loser) => lossBecause(winner, loser)) };
+}
+
+function notesFor(judged: { e: Entrant; eligible: boolean; why: string }[], winner: Entrant, eligibleLoss: (loser: Entrant) => string): Record<string, string> {
+	const notes: Record<string, string> = {};
+	for (const j of judged) {
+		if (j.e.label === winner.label) continue;
+		notes[j.e.label] = `lost to ${winner.label} because ${j.eligible ? eligibleLoss(j.e) : j.why}`;
+	}
+	return notes;
+}
+
+/**
+ * The user ships a contestant. It must be eligible (rule a). Returns the
+ * reason and the loss notes for the others: the rule's own winner, when it
+ * is not the pick, lost because the user picked otherwise.
+ */
+export function pickNotes(entrants: Entrant[], label: string): { ok: true; reason: string; notes: Record<string, string> } | { ok: false; error: string } {
+	const picked = entrants.find((e) => e.label === label);
+	if (!picked) return { ok: false, error: `no contestant ${label} in this contest` };
+	const check = eligibility(picked);
+	if (!check.eligible) return { ok: false, error: `${label} cannot ship: ${check.why}` };
+	const verdict = decideWinner(entrants);
+	if (verdict.winner === label) return { ok: true, reason: verdict.reason, notes: verdict.notes };
+	const judged = entrants.map((e) => ({ e, ...eligibility(e) }));
+	const order = new Map(entrants.map((e, i) => [e.label, i]));
+	const notes = notesFor(judged, picked, (loser) => (loser.label === verdict.winner ? `you picked ${label} (the rule chose ${verdict.winner})` : compare(picked, loser, order) < 0 ? lossBecause(picked, loser) : `you picked ${label}`));
+	return { ok: true, reason: `You picked ${label} over the rule's choice, ${verdict.winner}.`, notes };
+}

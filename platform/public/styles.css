@@ -462,6 +462,38 @@ dialog::backdrop { background: rgba(15, 25, 30, 0.45); }
 .request-box form { display: grid; gap: 8px; }
 .examples { display: grid; gap: 6px; }
 .examples .btn { justify-content: flex-start; text-align: left; font-weight: 400; width: 100%; }
+/* Contest */
+.contest { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.contest .wide { grid-column: 1 / -1; }
+.contest > * { min-width: 0; }
+.contest select { font: inherit; padding: 4px 6px; border: 1px solid var(--line-strong); border-radius: var(--r-sm); background: var(--panel); color: var(--ink); }
+.contest-grid { display: grid; gap: 12px; overflow-x: auto; }
+.contestant { border: 1px solid var(--line); border-radius: var(--r-md); padding: 12px; display: grid; gap: 8px; align-content: start; background: var(--panel-2); min-width: 0; }
+.contestant[data-winner="yes"] { border: 2px solid var(--pass); }
+.contestant[data-picked="yes"] { box-shadow: inset 0 0 0 2px var(--warn); }
+.contestant-head h3 { font-size: var(--fs-md, 1rem); display: flex; align-items: center; flex-wrap: wrap; }
+.contestant code { overflow-wrap: anywhere; }
+.tier-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: var(--fs-sm); }
+.tier-list li { display: flex; justify-content: space-between; gap: 8px; padding: 3px 6px; border-radius: var(--r-sm); background: var(--panel); }
+.tier-list li[data-state="pass"] .tier-text { color: var(--pass); font-weight: 600; }
+.tier-list li[data-state="fail"] { background: var(--fail-bg); }
+.tier-list li[data-state="fail"] .tier-text { color: var(--fail); font-weight: 600; }
+.tier-list li[data-state="pending"] .tier-text { color: var(--ink-3); }
+.contest-banner { display: grid; gap: 8px; border-left: 4px solid var(--line-strong); padding: 10px 14px; }
+.contest-banner[data-state="winner"], .contest-banner[data-state="shipped"] { border-left-color: var(--pass); background: var(--pass-bg); }
+.contest-banner[data-state="none"] { border-left-color: var(--fail); background: var(--fail-bg); }
+.contest-banner h2 { font-size: 1.15rem; }
+.contest-join pre { white-space: pre-wrap; margin: 6px 0 0; }
+table.behavior-diff th[scope="row"] { font-weight: 400; color: var(--ink); white-space: normal; min-width: 220px; }
+table.behavior-diff td { min-width: 150px; }
+table.behavior-diff td.diff-cell[data-state="outside"] { background: var(--fail-bg); }
+table.behavior-diff td.diff-cell[data-state="target"], table.behavior-diff td.diff-cell[data-state="wish"] { background: var(--warn-bg); }
+table.behavior-diff td.diff-cell[data-state="missing"] { background: var(--panel-2); font-style: italic; }
+table.behavior-diff td.diff-cell[data-state="own"] { background: var(--panel-2); box-shadow: inset 3px 0 0 var(--line-strong); }
+table.behavior-diff .cell-mark { font-family: var(--mono); font-weight: 700; }
+table.behavior-diff details ul { margin: 4px 0 0; padding-left: 16px; font-size: var(--fs-xs); overflow-wrap: anywhere; }
+@media (max-width: 900px) { .contest { grid-template-columns: 1fr; } }
+
 .timeline { list-style: none; margin: 0; padding: 0; position: relative; }
 .timeline li { display: grid; grid-template-columns: 22px 1fr; gap: 10px; padding: 0 0 14px; position: relative; }
 .timeline li::before { content: ""; position: absolute; left: 10px; top: 20px; bottom: 0; width: 2px; background: var(--line); }

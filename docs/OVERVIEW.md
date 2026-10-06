@@ -22,6 +22,8 @@ The first app on Fluid is a medical assistant, because a wrong merge there can h
 4. Upstream's end-to-end suite runs against the live fork (a basic platform suite runs when the pinned release has none). Three clean passes turn it green. A failure rolls `main` back with a revert commit and opens a repair branch.
 5. On a release, each fork upgrades by intent replay when every wish came from a recipe, or by a merge otherwise. The same gate and soak decide.
 
+**Contest (v2.0-beta).** Several agents can work on one wish at the same time, each on its own `work/contest-<id>-<label>` branch. Each is gated in check mode while the platform keeps the fork's answer to every probe. A behavior diff against `main` and a fixed rule pick the winner (every tier and wish test passed, then fewest behavior changes outside the wish, fewest files, earliest finished). Only the contestant the owner ships is gated in merge mode and then soaks like any change. `GET /api/forks/:repo/wishes` lists every wish in flight in a fork. Details in [GATE_AND_AGENTS.md](GATE_AND_AGENTS.md#contest).
+
 ## The platform and the tenant
 
 The platform is the control plane in `platform/`. The tenant is the app that upstream ships. Today one deployment hosts one tenant.
@@ -76,7 +78,7 @@ These parts of the platform code assume the medical app. A second tenant would n
 ## Not built yet
 
 - Several tenants on one deployment. Upstream is always the repo named `stock`.
-- Contest (several agents on one wish, a behavior diff, the gate picks the winner) and a list of wishes in flight. Both are v2.0-beta, in progress.
+- A live end-to-end run of Contest. Contest and the list of wishes in flight shipped in v2.0-beta and are covered by unit and route tests and by mock mode, but the contest workflow has not yet been run against live Artifacts and Workers AI. The mock contest plays one fixed scenario whatever the wish.
 
 ## Related documents
 

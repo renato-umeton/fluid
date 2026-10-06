@@ -20,6 +20,8 @@ Personalization only moves toward safety:
 - A fork's pin only moves forward. A change that pins an older release cannot merge.
 - After a safety release's 14-day grace period, upstream answers for a fork that has not taken it yet.
 
+**Contest: behavior also picks between agents.** Several agents can compete to grant one wish. In **Contest** (or with "Run as a contest" in **Customize**), the recipe when one matches, one or two model plans with different instructions and temperatures, and optionally your own agent through your inbox each build the change on their own branch, `work/contest-<id>-<label>`, with its intent record and its suggested tests. Each is gated in check mode, and the platform keeps the fork's answer to every probe the gate runs. A behavior diff against `main` replaces the pull request: rows are probes, columns are `main` and each candidate, and changed answers are marked field by field. A fixed rule picks the winner and says why: every tier and every wish test passed, then fewest behavior changes outside the wish, then fewest files changed, then finished first. You ship the winner or another contestant that passed. Only that one is gated in merge mode, and it lands through the normal fast-forward, yellow soak, and rollback. The others stay as branches, with a note saying why they lost. A contest of N counts as N customizations. Try it in mock mode: `/?mock=1#contest`. Details: [docs/GATE_AND_AGENTS.md](docs/GATE_AND_AGENTS.md#contest).
+
 ### 2. Living forks
 
 Each fork is a git repository that keeps changing. Its owner reshapes it in plain words through the customize agent, or with their own agent over plain git through a per-fork inbox (below). Look and layout are data: a fork writes `ui/preferences.json`, the platform validates it against a fixed schema, and no fork code runs in the browser.
@@ -36,12 +38,12 @@ The platform loads any fork at any branch or commit into a Worker Loader isolate
 
 ## How Fluid answers the brief
 
-- **How do agents know what other agents are working on?** Every agent run writes a timeline to a `Runs` Durable Object, and the `Fleet` Durable Object streams every fork's status live. Each commit an agent makes carries an intent record, so any agent can read what a branch is for.
+- **How do agents know what other agents are working on?** Every agent run writes a timeline to a `Runs` Durable Object, and the `Fleet` Durable Object streams every fork's status live. Each commit an agent makes carries an intent record, so any agent can read what a branch is for. `GET /api/forks/:repo/wishes` lists every wish in flight in a fork: each `work/*` branch with the record it adds and its status, plus customize and contest runs that have not pushed yet.
 - **How do you keep track of why?** In git. Intent records live in the fork next to the code they explain. The run-time ledger links each answer to the exact fork commit and upstream tag.
 - **What about conflicting changes?** `main` only fast-forwards to a gated commit. When two changes race, the first to pass lands. The other merges the new `main` into its branch and is gated again, or stops on a real conflict. On a release, replay sets each wish again on the new files, which avoids many text conflicts.
-- **How do you compare multiple changes and decide which ships?** Today each change is judged on its own by the same gate and soak. Harvest compares wishes across forks and drafts the common ones for upstream review.
+- **How do you compare multiple changes and decide which ships?** With a contest: several agents work on one wish, each is gated in check mode, a behavior diff against `main` shows what each one changed in the answers, and a fixed rule picks the winner. Only the one you ship is gated in merge mode. Harvest compares wishes across forks and drafts the common ones for upstream review.
 
-Roadmap (v2.0-beta, in progress): Contest, where several agents work on one wish and the gate picks the winner from a behavior diff, and a list of wishes in flight across agents.
+Shipped in v2.0-beta: Contest and the list of wishes in flight. Their limits, stated plainly: the contest workflow is covered by unit and route tests and by mock mode, but has not yet been run end to end against live Artifacts and Workers AI; model plans for a recipe request often produce no change (a model plan may not edit `fluid.toml`); a change that alters no probe's answer ties on behavior and is decided by files changed and time; the mock contest plays one fixed scenario whatever the wish.
 
 ## Proving ground: academic medicine
 

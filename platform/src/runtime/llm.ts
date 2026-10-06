@@ -50,6 +50,8 @@ export interface ModelCallOptions {
 	model?: string;
 	system?: string;
 	maxTokens?: number;
+	/** Sampling temperature; the model's default when absent. Contests give each model plan its own. */
+	temperature?: number;
 }
 
 /** One structured model call through the gateway. Returns the validated JSON object. */
@@ -64,6 +66,7 @@ export async function callModel(ai: Ai, prompt: string, schema: JsonSchema, opti
 			],
 			response_format: { type: "json_schema", json_schema: schema },
 			max_tokens: options.maxTokens ?? (model === FAST_MODEL ? 800 : 2400),
+			...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
 		},
 		{ gateway: { id: GATEWAY_ID, skipCache: true } },
 	);

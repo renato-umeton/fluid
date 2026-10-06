@@ -4,6 +4,7 @@ import { h, mount, json, statusTag } from "../dom.js";
 import { renderTimeline, renderDiff, renderGate, renderIntent, repairApply } from "./shared.js";
 import { renderHealth } from "../health.js";
 import { mergeOutcome, uiChanges } from "../ui-prefs.js";
+import { startContest } from "./contest.js";
 
 export const title = "Customize";
 export const sub = "Ask for a change in plain words. An agent writes it on a work branch with an intent record, proposes tests, and the gate decides whether it merges.";
@@ -23,9 +24,11 @@ let timer = null;
 export function render(root, app) {
   current = { root, app };
   const input = h("textarea", { id: "cust-request", rows: 3, placeholder: "Describe the change you want in your fork" });
-  const form = h("form", { onsubmit: (e) => { e.preventDefault(); start(input.value.trim()); } },
+  const asContest = h("input", { type: "checkbox", id: "cust-contest" });
+  const form = h("form", { onsubmit: (e) => { e.preventDefault(); (asContest.checked ? contest : start)(input.value.trim()); } },
     h("label", { class: "field", for: "cust-request" }, "Request"),
     input,
+    h("label", { class: "small row", for: "cust-contest" }, asContest, "Run as a contest: 3 agents compete on their own branches, a behavior diff and a fixed rule pick the winner (counts as 3 customizations)"),
     h("div", { class: "row" }, h("button", { class: "btn btn-primary", type: "submit" }, "Start customization"),
       h("span", { class: "small muted" }, `Runs against ${app.fork.repo} on stock ${app.fork.stockTag}`)));
   mount(root, h("div", { class: "customize" },
@@ -63,6 +66,17 @@ function merged(run) {
 
 function touchesUi(run) {
   return (run.intent?.files ?? (run.diff ?? []).map((d) => d.path)).includes("ui/preferences.json");
+}
+
+/** "Run as a contest": start it and follow it on the Contest screen. */
+async function contest(request) {
+  if (!request) return;
+  try {
+    await startContest(current.app, request, 3, false);
+    current.app.go("contest");
+  } catch (err) {
+    mount(current.root.querySelector("#run-steps"), h("div", { class: "card-error", role: "alert" }, err.message));
+  }
 }
 
 async function start(request) {

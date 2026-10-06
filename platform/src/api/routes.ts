@@ -36,6 +36,10 @@ import { appExports, ensureRun, repoRemote, startGateInstance, startYellowRun } 
 import { rerunTargets, upgradeTargets } from "../workflows/upgrade.ts";
 import { decodeParam, HttpError, json, readJson, requireJsonPost, requireString } from "./http.ts";
 import { askRef, parsePreferences } from "./validate.ts";
+import { readWishes } from "../contest/read-wishes.ts";
+import { agentInboxBranch, CONTEST_LIMITS, contestLockKey, contestRunId, contestantRunId, lineup, newContestId, parseContestOptions, refundContestQuota, takeContestQuota, type QuotaAccess } from "../contest/plan.ts";
+import { pickNotes } from "../contest/winner.ts";
+import { matchRecipe } from "../agents/recipes.ts";
 
 export const LIMITS = {
 	sessionsPerClientPerHour: 20,
@@ -49,6 +53,7 @@ export const LIMITS = {
 	readsPerClientPerMinute: 60,
 	ledgerCommitsPerUserPerHour: 6,
 	customizationsPerUserPerHour: 10,
+	wishReadsGlobalPerMinute: 300,
 	outsideTokensPerUserPerHour: 3,
 	outsideTokensPerClientPerHour: 6,
 	outsideTokensGlobalPerHour: 60,
@@ -265,6 +270,20 @@ route("GET", "/api/forks/:repo/health", async (rc, { repo }) => {
 	const entry = await fleet.get(name);
 	if (!entry) throw new HttpError(404, "fork not found");
 	return json({ repo: name, health: entry.health, baseline: entry.baseline, history: await fleet.healthHistory(name, 30) });
+});
+
+// Wishes in flight: every work/* branch with the intent record it adds and its status. Branches and their
+// records are public, like /api/intents; the notes of runs that have not pushed yet (their request text)
+// go only to the fork's owner and the admin. The branch read is cached per fork for a few seconds.
+route("GET", "/api/forks/:repo/wishes", async (rc, { repo }) => {
+	const name = repoParam(repo!);
+	if (name === STOCK_REPO) throw new HttpError(404, "stock has no wishes in flight");
+	await takeReadQuota(rc);
+	await takeQuota(rc.env, "global", "wishes", LIMITS.wishReadsGlobalPerMinute, 60);
+	await requirePublicRepo(rc.env, name);
+	const session = await sessionOf(rc);
+	const owner = isAdmin(rc) || (session !== null && !session.e2e && forkRepoName(session.userId) === name);
+	return json(await readWishes(rc.env, name, { includeNotes: owner }));
 });
 
 // Fork-owned UI preferences (ui/preferences.json on main), validated against the platform schema.
@@ -515,6 +534,93 @@ route("POST", "/api/customize", async (rc) => {
 	await runsStub(rc.env, runId).create({ id: runId, kind: "customize", repo, status: "running", fields: { request: cleanText(request, 1000) } });
 	await appExports(rc.ctx).CustomizeWorkflow.create({ id: runId, params: { runId, repo, request, userId: session?.userId ?? userIdFromForkRepo(repo) ?? "admin", persona: entry.persona, admin: isAdmin(rc) } });
 	return json({ runId }, 202);
+});
+
+// Contest: N contestants compete to grant one wish (workflows/contest.ts). Costs N customizations.
+route("POST", "/api/contests", async (rc) => {
+	const body = await readJson(rc.request);
+	const repo = repoParam(requireString(body, "repo", 100));
+	const session = await requireForkAccess(rc, repo);
+	const request = requireString(body, "request", 1000);
+	if (isAdminTestRequest(request)) throw new HttpError(400, "test recipes cannot run as a contest");
+	let options: { size: number; includeAgent: boolean };
+	try {
+		options = parseContestOptions(body);
+	} catch (error) {
+		throw new HttpError(400, error instanceof Error ? error.message : String(error));
+	}
+	const entry = await fleetStub(rc.env).get(repo);
+	if (!entry) throw new HttpError(404, `fork ${repo} is not in the fleet`);
+	const fleet = fleetStub(rc.env);
+	// The contest run owns the fork's contest lease; only it releases it when it ends.
+	const contestId = newContestId();
+	const runId = contestRunId(contestId);
+	if (!(await fleet.tryLock(contestLockKey(repo), CONTEST_LIMITS.lockTtlMs, runId))) throw new HttpError(409, "a contest is already running on this fork; ship one of its contestants or wait for it to end");
+	const quota = contestQuota(rc.env);
+	const subject = `user:${session?.userId ?? "admin"}`;
+	let refused: string | null;
+	try {
+		refused = await takeContestQuota(quota, subject, options.size, LIMITS.customizationsPerUserPerHour);
+	} catch (error) {
+		await fleet.unlock(contestLockKey(repo), runId);
+		throw error;
+	}
+	if (refused) {
+		await fleet.unlock(contestLockKey(repo), runId);
+		throw new HttpError(429, refused);
+	}
+	const joinUntil = options.includeAgent ? new Date(Date.now() + CONTEST_LIMITS.joinWindowMs).toISOString() : null;
+	const agentBranch = options.includeAgent ? agentInboxBranch(contestId) : null;
+	const seats = lineup({ recipe: matchRecipe(request) !== null, size: options.size, includeAgent: options.includeAgent });
+	const contestants = seats.map((s) => ({ label: s.label, kind: s.kind, title: s.title, status: s.kind === "agent" ? "waiting for your push" : "queued", runId: contestantRunId(contestId, s.label) }));
+	try {
+		await runsStub(rc.env, runId).create({ id: runId, kind: "contest", repo, status: "running", fields: { request: cleanText(request, 1000), contestId, size: options.size, includeAgent: options.includeAgent, joinUntil, agentBranch, contestants } });
+		await fleet.openContest(repo, { contestId, runId, status: "open", includeAgent: options.includeAgent, joinUntil, agentJoined: false });
+		await appExports(rc.ctx).ContestWorkflow.create({ id: runId, params: { runId, contestId, repo, request, userId: session?.userId ?? userIdFromForkRepo(repo) ?? "admin", persona: entry.persona, size: options.size, includeAgent: options.includeAgent } });
+	} catch (error) {
+		// Nothing runs this contest: close it so no inbox push can join it, free the fork, and give the quota back.
+		await abandonContest(rc.env, { repo, contestId, runId, subject, size: options.size }, error).catch((cleanup) => console.error(`contest ${runId} cleanup failed: ${scrubText(String(cleanup))}`));
+		throw error;
+	}
+	return json({ runId, contestId, joinUntil, agentBranch }, 202);
+});
+
+function contestQuota(env: Env): QuotaAccess {
+	return {
+		take: (subject, bucket, limit, window) => quotaStub(env, subject).take(bucket, limit, window),
+		give: async (subject, bucket, window) => {
+			await quotaStub(env, subject).give(bucket, window);
+		},
+	};
+}
+
+/** A contest that could not start after its lease and quota were taken: closed, unlocked, and refunded. */
+async function abandonContest(env: Env, c: { repo: string; contestId: string; runId: string; subject: string; size: number }, error: unknown): Promise<void> {
+	const fleet = fleetStub(env);
+	await fleet.setContestStatus(c.repo, c.contestId, "done");
+	await fleet.unlock(contestLockKey(c.repo), c.runId);
+	const run = runsStub(env, c.runId);
+	if (await run.get()) await run.update({ status: "failed", error: `the contest could not start: ${scrubText(error instanceof Error ? error.message : String(error)).slice(0, 300)}` });
+	await refundContestQuota(contestQuota(env), c.subject, c.size);
+}
+
+// Ship a contestant: the rule's winner or another contestant that passed every tier and every wish test.
+route("POST", "/api/contests/:runId/pick", async (rc, { runId }) => {
+	if (!RUN_ID.test(runId!)) throw new HttpError(400, "invalid run id");
+	const stub = runsStub(rc.env, runId!);
+	const run = await stub.get();
+	if (!run || run.kind !== "contest" || typeof run.contestId !== "string") throw new HttpError(404, `contest ${runId} not found`);
+	await requireForkAccess(rc, run.repo ?? "");
+	const body = await readJson(rc.request);
+	const label = requireString(body, "label", 20);
+	if (run.picked || run.pickRequested) throw new HttpError(409, "a contestant was already picked in this contest");
+	if (run.status !== "waiting" || !Array.isArray(run.entrants)) throw new HttpError(409, "this contest is not waiting for a pick");
+	const check = pickNotes(run.entrants as never, label);
+	if (!check.ok) throw new HttpError(400, check.error);
+	// Two picks at once: the run object sets the pick once, so only the first is sent and shown.
+	if (!(await stub.setOnce("pickRequested", label))) throw new HttpError(409, "a contestant was already picked in this contest");
+	await (await appExports(rc.ctx).ContestWorkflow.get(runId!)).sendEvent({ type: "contest-pick", payload: { label } });
+	return json(await stub.get());
 });
 
 route("GET", "/api/runs/:runId", async (rc, { runId }) => {

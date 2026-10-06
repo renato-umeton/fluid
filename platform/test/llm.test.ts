@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseModelOutput, validateAgainstSchema } from "../src/runtime/llm.ts";
+import { callModel, parseModelOutput, validateAgainstSchema } from "../src/runtime/llm.ts";
 
 const SCHEMA = { type: "object", properties: { body: { type: "string" }, n: { type: "number" } }, required: ["body"] };
 
@@ -22,6 +22,17 @@ describe("parseModelOutput", () => {
 
 	it("fails on non-JSON text", () => {
 		expect(() => parseModelOutput({ response: "JSON Mode couldn't be met" })).toThrow(/not JSON/);
+	});
+});
+
+describe("callModel options", () => {
+	it("sends a temperature only when one is given", async () => {
+		const inputs: Record<string, unknown>[] = [];
+		const ai = { run: async (_model: string, input: Record<string, unknown>) => (inputs.push(input), { response: { body: "x" } }) } as unknown as Ai;
+		await callModel(ai, "p", SCHEMA, { temperature: 0.7 });
+		await callModel(ai, "p", SCHEMA);
+		expect(inputs[0]!.temperature).toBe(0.7);
+		expect("temperature" in inputs[1]!).toBe(false);
 	});
 });
 

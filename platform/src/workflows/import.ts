@@ -7,6 +7,8 @@
 // and before the run record exists.
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { gateInstanceId } from "../events/filter.ts";
+import { contestJoinRefusal, joinContest } from "../contest/join.ts";
+import { contestIdOfBranch } from "../contest/plan.ts";
 import { liveImportIO, runImport, takeImportQuota, type ImportOutcome } from "../forks/inbox.ts";
 import { outsideGrantKey, type OutsideGrant } from "../forks/outside.ts";
 import { RepoNotFoundError } from "../runtime/repo-files.ts";
@@ -35,6 +37,9 @@ export class ImportWorkflow extends WorkflowEntrypoint<Env, ImportParams> {
 			const entry = await fleet.get(p.fork);
 			const grant = (await fleet.getValue(outsideGrantKey(p.fork))) as OutsideGrant | null;
 			if (!entry || entry.status === "provisioning" || grant?.inbox !== p.inbox) return { ok: false as const, reason: null };
+			// A contest entry is imported only while its contest's join window is open; a refused one takes no quota.
+			const closed = await contestJoinRefusal(this.env, p.fork, p.branch);
+			if (closed) return { ok: false as const, reason: closed };
 			const refused = await takeImportQuota((subject, bucket, limit, window) => quotaStub(this.env, subject).take(bucket, limit, window), p.fork);
 			return refused ? { ok: false as const, reason: refused } : { ok: true as const, reason: null };
 		});
@@ -73,6 +78,23 @@ export class ImportWorkflow extends WorkflowEntrypoint<Env, ImportParams> {
 		}
 
 		const branch = outcome.branch;
+		if (contestIdOfBranch(branch)) {
+			// A contest entry is not gated on its own: it joins the contest, which gates it in check mode with the others.
+			await step.do("join the contest", async () => {
+				await log.step("Import from your inbox", "done", `${branch} in ${p.fork} at ${p.commit.slice(0, 7)}`);
+				const joined = await joinContest(this.env, this.ctx, { fork: p.fork, branch, commit: p.commit, importRunId: p.runId });
+				if (!joined.ok) {
+					const detail = `Not in the contest: ${joined.reason}. ${branch} stays in your fork; nothing is gated.`;
+					await log.step("Join the contest", "failed", detail);
+					await log.status("failed", { error: detail, forkBranch: branch });
+					return true;
+				}
+				await log.step("Join the contest", "done", `Your agent's entry joined ${joined.runId}; the contest checks it next to the other contestants, and only the one you ship is gated in merge mode`);
+				await log.status("passed", { contestRunId: joined.runId, forkBranch: branch });
+				return true;
+			});
+			return { status: "imported", branch };
+		}
 		await step.do("start the gate", async () => {
 			await log.step("Import from your inbox", "done", outcome.status === "imported" ? `${outcome.commits} commit${outcome.commits === 1 ? "" : "s"}, ${outcome.files} file${outcome.files === 1 ? "" : "s"}; pushed to ${branch} in ${p.fork}${outcome.replaced ? " (replacing an earlier import)" : ""}` : `${branch} in your fork is already at ${p.commit.slice(0, 7)}`);
 			const started = await startGateInstance(appExports(this.ctx).GateWorkflow, gateInstanceId(p.fork, branch, p.commit), { repo: p.fork, branch, commit: p.commit, mode: "merge", source: "import", parentRunId: p.runId });

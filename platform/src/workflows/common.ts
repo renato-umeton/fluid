@@ -29,7 +29,7 @@ export interface GateParams {
 	commit: string;
 	mode: "merge" | "check";
 	/** "import": a work branch copied from the fork's inbox. "outside-push": the commit the gate made after drafting an intent record for it. */
-	source: "event" | "customize" | "direct" | "repair" | "repair-apply" | "seed" | "outside-push" | "import";
+	source: "event" | "customize" | "direct" | "repair" | "repair-apply" | "seed" | "outside-push" | "import" | "contest";
 	runId?: string;
 	parentRunId?: string;
 	/** Set when this gate checks the merge of main into the branch after main moved (fast-forward-only main). */
@@ -44,6 +44,18 @@ export interface CustomizeParams {
 	persona: string | null;
 	/** Started with the admin token: admin-only test recipes may apply. */
 	admin?: boolean;
+}
+
+/** One contest: N contestants compete to grant one wish (workflows/contest.ts). */
+export interface ContestParams {
+	runId: string;
+	contestId: string;
+	repo: string;
+	request: string;
+	userId: string;
+	persona: string | null;
+	size: number;
+	includeAgent: boolean;
 }
 
 export interface RepairParams {
@@ -137,6 +149,7 @@ export interface HarvestParams {
 export interface AppExports extends PlatformExports {
 	GateWorkflow: WorkflowBinding<GateParams>;
 	CustomizeWorkflow: WorkflowBinding<CustomizeParams>;
+	ContestWorkflow: WorkflowBinding<ContestParams>;
 	RepairWorkflow: WorkflowBinding<RepairParams>;
 	UpgradeWorkflow: WorkflowBinding<UpgradeParams>;
 	ReleaseWorkflow: WorkflowBinding<ReleaseParams>;
@@ -218,15 +231,16 @@ export async function gateLinkOf(env: Env, repo: string, branch: string, commit:
 }
 
 /**
- * Tells a waiting customization run that its gate (or repair) finished. Only
- * customize runs wait for events; other parents are skipped. A failure to
- * deliver is logged, never thrown: the parent also checks the run record.
+ * Tells a waiting customization or contest run that its gate (or repair)
+ * finished. Only those runs wait for events; other parents are skipped. A
+ * failure to deliver is logged, never thrown: the parent also checks the run record.
  */
 export async function notifyParent(env: Env, exports: AppExports, parentRunId: string, type: "gate-finished" | "repair-finished", payload: Record<string, unknown>): Promise<void> {
 	try {
 		const parent = await runsStub(env, parentRunId).get();
-		if (parent?.kind !== "customize") return;
-		await (await exports.CustomizeWorkflow.get(parentRunId)).sendEvent({ type, payload });
+		if (parent?.kind !== "customize" && parent?.kind !== "contest") return;
+		const binding = parent.kind === "contest" ? exports.ContestWorkflow : exports.CustomizeWorkflow;
+		await (await binding.get(parentRunId)).sendEvent({ type, payload });
 	} catch (error) {
 		console.warn(`notify ${parentRunId} (${type}) failed: ${errorText(error)}`);
 	}
@@ -271,6 +285,45 @@ export async function startYellowRun(env: Env, exports: AppExports, input: { rep
 		await parent.step("Yellow: live on main, end-to-end soak", "running", `${input.commit.slice(0, 7)} is live with a yellow badge; the end-to-end suite runs 3 times (${runId})`).catch(() => undefined);
 	}
 	return { runId, created: started.created };
+}
+
+/** Waiting for a gate or repair run: up to WAIT_ROUNDS event waits of WAIT_EACH each (about 30 minutes). */
+const WAIT_ROUNDS = 30;
+const WAIT_EACH = "1 minute";
+
+/**
+ * Waits for a gate or repair run to finish: the run sends an event when it
+ * does, and the run record is checked after each wait, so a lost or early
+ * event only costs one wait. `next` follows a run that handed its report on
+ * (a re-gate after main moved). Bounded to WAIT_ROUNDS waits of WAIT_EACH,
+ * two steps per round, well inside the per-instance step limit.
+ */
+export async function waitForRun(env: Env, step: Steps, label: string, eventType: string, firstRunId: string, next: (run: Record<string, unknown>) => string | null): Promise<{ runId: string; status: string; passed: boolean | null; repairRunId: string | null }> {
+	let runId = firstRunId;
+	for (let i = 0; i < WAIT_ROUNDS; i++) {
+		const state = await step.do(`check ${label} ${i}`, async () => {
+			let id = runId;
+			for (let hops = 0; hops < 4; hops++) {
+				const run = await runsStub(env, id).get();
+				if (!run || run.status === "running" || run.status === "queued") return { runId: id, done: false, status: "running", passed: null as boolean | null, repairRunId: null as string | null };
+				const forward = next(run as unknown as Record<string, unknown>);
+				if (forward) {
+					id = forward;
+					continue;
+				}
+				return { runId: id, done: true, status: run.status, passed: run.status === "passed" || run.status === "waiting", repairRunId: typeof run.repairRunId === "string" ? run.repairRunId : null };
+			}
+			return { runId: id, done: false, status: "running", passed: null as boolean | null, repairRunId: null as string | null };
+		});
+		runId = state.runId;
+		if (state.done) return state;
+		try {
+			await step.waitForEvent(`${label} finished ${i}`, { type: eventType, timeout: WAIT_EACH });
+		} catch {
+			// Timed out: the next round checks the run record again.
+		}
+	}
+	return { runId, status: "running", passed: null, repairRunId: null };
 }
 
 export function asJson<T>(value: T): Json {

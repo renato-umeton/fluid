@@ -31,4 +31,10 @@ export class Quota extends DurableObject<Env> {
 		);
 		return { allowed: true, remaining: limit - count - 1, retryAfterSeconds };
 	}
+
+	/** Returns one use of `bucket` taken in the current window (a refund); never below zero, and nothing for an earlier window. */
+	give(bucket: string, windowSeconds: number, now = Date.now()): void {
+		const start = Math.floor(now / (windowSeconds * 1000)) * windowSeconds * 1000;
+		this.ctx.storage.sql.exec("UPDATE windows SET count = MAX(0, count - 1) WHERE bucket = ? AND window_start = ?", bucket, start);
+	}
 }
