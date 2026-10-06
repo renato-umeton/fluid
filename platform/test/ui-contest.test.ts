@@ -3,7 +3,7 @@ import { decideWinner, pickNotes, type Entrant } from "../src/contest/winner.ts"
 // @ts-expect-error plain ES module from the static UI
 import * as ui from "../public/js/contest-rules.js";
 // @ts-expect-error plain ES module from the static UI
-import { cellView, changeLine, countsLine, isFinalContest, joinCountdown, mainText, shipChoices, tierLines } from "../public/js/contest.js";
+import { cellView, changeLine, countsLine, detailKey, isFinalContest, joinCountdown, mainText, shipChoices, tierLines } from "../public/js/contest.js";
 // @ts-expect-error plain ES module from the static UI
 import { childRunAt, contestAt, mockContestScenario } from "../public/js/mock-contest.js";
 
@@ -118,5 +118,17 @@ describe("mock contest", () => {
 		expect(early.agentBranch).toBe("work/contest-abc/my-entry");
 		const child = childRunAt(contestAt(scn, scn.decideMs, { ...opts, includeAgent: true }), "run_contest_abc_agent");
 		expect(child.steps[0].name).toBe("Wait for your agent");
+	});
+});
+
+describe("detailKey", () => {
+	it("tells apart equal summaries in different contestants", () => {
+		expect(detailKey("contest-columns", "Contestant model-a", "Steps", 0)).not.toBe(detailKey("contest-columns", "Contestant model-b", "Steps", 0));
+	});
+	it("keeps a contestant's key when another contestant has no Steps section yet", () => {
+		expect(detailKey("contest-columns", "Contestant model-c", "Steps", 0)).toBe(detailKey("contest-columns", "Contestant model-c", "Steps", 0));
+	});
+	it("separates repeated summaries inside one scope by position", () => {
+		expect(detailKey("contest-diff", "inv-x|2", "Show 1 field change", 0)).not.toBe(detailKey("contest-diff", "inv-x|2", "Show 1 field change", 1));
 	});
 });

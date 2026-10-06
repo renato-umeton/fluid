@@ -5,7 +5,7 @@
 import { api } from "../api.js";
 import { h, mount, short, statusTag } from "../dom.js";
 import { renderTimeline } from "./shared.js";
-import { cellView, changeLine, countsLine, isFinalContest, joinCountdown, mainText, seconds, shipChoices, statusText, tierLines } from "../contest.js";
+import { cellView, changeLine, countsLine, detailKey, isFinalContest, joinCountdown, mainText, seconds, shipChoices, statusText, tierLines } from "../contest.js";
 
 export const title = "Contest";
 export const sub = "Several agents compete to grant one wish. Each works on its own branch and is gated in check mode; a behavior diff against main and a fixed rule pick the winner. Only the one you ship is gated in merge mode.";
@@ -147,15 +147,19 @@ function paint() {
   reopenDetails(current.root, open);
 }
 
-/** Keys for the open <details>: section id, summary text, and its position among equal summaries. */
-export function detailKeys(root) {
+/** Each <details> with its key; the owner is the contestant or the diff cell, so a missing sibling does not shift keys. */
+function detailKeys(root) {
   const seen = new Map();
   return [...root.querySelectorAll("details")].map((d) => {
     const section = d.closest("[id]")?.id ?? "";
-    const base = `${section}|${d.querySelector("summary")?.textContent ?? ""}`;
+    const cell = d.closest("td");
+    const scope = d.closest("article.contestant")?.getAttribute("aria-label")
+      ?? (cell ? `${cell.closest("tr")?.querySelector("code")?.textContent ?? ""}|${cell.cellIndex}` : "");
+    const summary = d.querySelector("summary")?.textContent ?? "";
+    const base = `${section}|${scope}|${summary}`;
     const n = seen.get(base) ?? 0;
     seen.set(base, n + 1);
-    return { details: d, key: `${base}|${n}` };
+    return { details: d, key: detailKey(section, scope, summary, n) };
   });
 }
 

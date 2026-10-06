@@ -100,3 +100,8 @@ export function countsLine(c) {
 export function seconds(ms) {
   return typeof ms === "number" ? `${(ms / 1000).toFixed(1)} s` : "";
 }
+
+/** Key for an open <details> across repaints: its section, its owner (contestant or diff cell), summary text, and position. */
+export function detailKey(section, scope, summary, nth) {
+  return `${section}|${scope}|${summary}|${nth}`;
+}
