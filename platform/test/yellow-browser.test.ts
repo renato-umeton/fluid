@@ -23,7 +23,7 @@ describe("browser tier plan", () => {
 	});
 
 	it("reads the app URL from the deployment's PUBLIC_ORIGIN, never from request traffic", () => {
-		expect(configuredOrigin({ PUBLIC_ORIGIN: "https://fluid.renato83.workers.dev/" })).toBe("https://fluid.renato83.workers.dev");
+		expect(configuredOrigin({ PUBLIC_ORIGIN: "https://fluid.frontier-software.workers.dev/" })).toBe("https://fluid.frontier-software.workers.dev");
 		expect(configuredOrigin({ PUBLIC_ORIGIN: " https://fluid.example.org/app " })).toBe("https://fluid.example.org");
 		expect(configuredOrigin({ PUBLIC_ORIGIN: "" })).toBeNull();
 		expect(configuredOrigin({ PUBLIC_ORIGIN: "not a url" })).toBeNull();
@@ -35,9 +35,9 @@ describe("browser tier plan", () => {
 	});
 
 	it("knows which origins a remote browser can reach", () => {
-		expect(isPublicOrigin("https://fluid.renato83.workers.dev")).toBe(true);
+		expect(isPublicOrigin("https://fluid.frontier-software.workers.dev")).toBe(true);
 		expect(isPublicOrigin("https://localhost:5173")).toBe(false);
-		expect(isPublicOrigin("http://fluid.renato83.workers.dev")).toBe(false);
+		expect(isPublicOrigin("http://fluid.frontier-software.workers.dev")).toBe(false);
 		expect(isPublicOrigin("not a url")).toBe(false);
 	});
 

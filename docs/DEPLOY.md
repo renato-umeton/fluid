@@ -4,7 +4,7 @@ These steps take a fresh clone to a running Fluid on your own Cloudflare account
 
 Run every `cf` command from `platform/`. The CLI is a dev dependency there, so `npx cf` uses the pinned version (v1.0.0-beta.12). Commands that delete things ask for confirmation. Add `--force` in a non-interactive shell.
 
-Live demo URL: https://fluid.renato83.workers.dev. Your own deploy answers at `https://fluid.<your-subdomain>.workers.dev`.
+Live demo URL: https://fluid.frontier-software.workers.dev. Your own deploy answers at `https://fluid.<your-subdomain>.workers.dev`.
 
 ## 1. Prerequisites
 

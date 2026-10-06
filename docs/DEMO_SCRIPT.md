@@ -26,7 +26,7 @@ Running total: about 8 minutes 50 seconds.
 
 ## Pre-recording checklist
 
-Live URL: https://fluid.renato83.workers.dev
+Live URL: https://fluid.frontier-software.workers.dev
 
 Do these in order, about 30 minutes before recording.
 
@@ -298,7 +298,7 @@ Static slide titled **Fluid: what the next Git platform looks like**, with three
 
 "A Fluid fork is a list of wishes and the tests that prove them."
 
-Footer: https://fluid.renato83.workers.dev, https://github.com/renato-umeton/fluid, "Built on Cloudflare Workers and Artifacts", "MIT license", "All data synthetic".
+Footer: https://fluid.frontier-software.workers.dev, https://github.com/renato-umeton/fluid, "Built on Cloudflare Workers and Artifacts", "MIT license", "All data synthetic".
 
 Narration:
 > One fork per person. Every change carries its reason. Behavior decides what merges.

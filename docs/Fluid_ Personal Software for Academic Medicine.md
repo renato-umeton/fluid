@@ -1,6 +1,6 @@
 # Fluid: Personal Software for Academic Medicine
 
-**A technical proposal for the Cloudflare "Build the next Git platform" competition** Built on Cloudflare Workers and Artifacts. Status: built and live at https://fluid.renato83.workers.dev (see the repository README). All data in the prototype is synthetic.
+**A technical proposal for the Cloudflare "Build the next Git platform" competition** Built on Cloudflare Workers and Artifacts. Status: built and live at https://fluid.frontier-software.workers.dev (see the repository README). All data in the prototype is synthetic.
 
 ---
 
