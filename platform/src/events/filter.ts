@@ -47,6 +47,12 @@ export function filterPushEvent(body: unknown): FilterResult {
 	return { gate: true, trigger: { repo, branch, commit: after, mode: gateModeFor(branch) } };
 }
 
+/** Why POST /api/gates/:repo refuses a branch, or null when it may be gated directly. */
+export function directGateRefusal(branch: string): string | null {
+	if (branch === PRODUCTION_BRANCH || branch.startsWith("upgrade/") || branch.startsWith("replay/")) return "main, upgrade, and replay branches are gated by their own workflows";
+	return null;
+}
+
 /** Repair branches are never merged automatically; everything else that reaches the gate merges on pass. */
 export function gateModeFor(branch: string): "merge" | "check" {
 	return branch.startsWith("repair/") || branch.startsWith("harvest/") ? "check" : "merge";

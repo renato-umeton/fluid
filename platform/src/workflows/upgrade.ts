@@ -381,7 +381,7 @@ export class UpgradeWorkflow extends WorkflowEntrypoint<Env, UpgradeParams> {
 				await log.status("passed", { applied: applied.applied, commit: at, yellowRunId });
 				await setFleet(this.env, p.repo, {
 					status: "passed",
-					...(applied.applied ? (applied.landed ? {} : { pinnedTag: p.tag, pendingUpgrade: null }) : { pendingUpgrade: { tag: p.tag, commit: at, runId: p.runId } }),
+					...(applied.applied ? (applied.landed ? {} : { pinnedTag: p.tag, pendingUpgrade: null }) : { pendingUpgrade: { tag: p.tag, commit: at, runId: p.runId, branch } }),
 					lastRun: lastRun({ status: "passed", applied: applied.applied, commit: at }),
 				});
 				return true;

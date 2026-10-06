@@ -20,9 +20,10 @@ import { ledgerStub, quotaStub, runsStub } from "../stubs.ts";
 import { cleanText } from "../agents/intent.ts";
 import { validateProbe, type Suggestion } from "../agents/suggester.ts";
 import { newRunId } from "../durable/runs.ts";
-import { gateInstanceId, gateModeFor } from "../events/filter.ts";
+import { directGateRefusal, gateInstanceId, gateModeFor } from "../events/filter.ts";
+import { fastForwardToPending } from "../forks/one-tap.ts";
 import { isSeededRepo, SEED_DEFAULT, SEED_MAX } from "../fleet/seed-catalog.ts";
-import { cloneRepo, fastForward, fetchBranch, firstParent, headCommit, pushBranch } from "../git/ops.ts";
+import { cloneRepo, fetchBranch, firstParent, pushBranch } from "../git/ops.ts";
 import { landedEarlier } from "../yellow/landing.ts";
 import type { Json } from "../lib/json.ts";
 import { shortRef } from "../runtime/refs.ts";
@@ -560,7 +561,8 @@ route("POST", "/api/gates/:repo", async (rc, { repo }) => {
 	await requireForkAccess(rc, name);
 	const body = await readJson(rc.request);
 	const branch = requireString(body, "branch", 200);
-	if (branch === "main" || branch.startsWith("upgrade/")) throw new HttpError(400, "main and upgrade branches are gated by their own workflows");
+	const refusal = directGateRefusal(branch);
+	if (refusal) throw new HttpError(400, refusal);
 	let commit: string | null;
 	{
 		using handle = await openRepo(rc.env.ARTIFACTS, name);
@@ -573,7 +575,7 @@ route("POST", "/api/gates/:repo", async (rc, { repo }) => {
 	return json({ runId: started.runId, instanceId: started.id, created: started.created, commit }, started.created ? 202 : 200);
 });
 
-// One-tap upgrade: fast-forward main to the gated upgrade/<tag> commit recorded as the fork's pending upgrade.
+// One-tap upgrade: fast-forward main to the gated upgrade/<tag> or replay/<tag> commit recorded as the fork's pending upgrade.
 // It is refused when main moved since the upgrade was gated (main no longer an ancestor of the gated commit).
 route("POST", "/api/forks/:repo/upgrade", async (rc, { repo }) => {
 	const name = repoParam(repo!);
@@ -584,10 +586,10 @@ route("POST", "/api/forks/:repo/upgrade", async (rc, { repo }) => {
 	if (!entry || !pending) throw new HttpError(409, "no gated upgrade is waiting for approval on this fork");
 	const remote = await repoRemote(rc.env, name, "write");
 	const ws = await cloneRepo({ ...remote, ref: "main", singleBranch: true });
-	await fetchBranch(ws, remote, `upgrade/${pending.tag}`);
-	const previous = await headCommit(ws, "main");
-	const ff = await fastForward(ws, "main", pending.commit);
-	if (ff.outcome === "diverged") throw new HttpError(409, `main moved since upgrade/${pending.tag} was gated at ${pending.commit.slice(0, 7)}; a new upgrade run is needed`);
+	// The pending upgrade names the branch it gated: upgrade/<tag>, or replay/<tag> after intent replay.
+	const ff = await fastForwardToPending(ws, pending, (branch) => fetchBranch(ws, remote, branch));
+	const previous = ff.previous;
+	if (ff.outcome === "diverged") throw new HttpError(409, `main moved since ${ff.branch} was gated at ${pending.commit.slice(0, 7)}; a new upgrade run is needed`);
 	if (ff.outcome === "fast-forward") await pushBranch(ws, remote, "main");
 	// A repeated tap after a push whose response was lost finds main at the commit with no yellow run for it yet.
 	const landed = ff.outcome === "fast-forward" || landedEarlier({ mainHead: ff.oid, commit: pending.commit, healthCommit: entry.health.commit });
