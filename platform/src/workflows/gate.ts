@@ -24,6 +24,16 @@ export function gateRunId(instanceId: string): string {
 	return `run_${instanceId}`;
 }
 
+/**
+ * Whether a failed gate starts the Repair workflow, which calls the model.
+ * Not for a repair branch being applied (it would repair itself), and not for
+ * changes imported from an inbox or their drafted commits: an outside agent
+ * can push as often as its quota allows, and each push would start one.
+ */
+export function startsRepair(source: GateParams["source"]): boolean {
+	return source !== "repair-apply" && source !== "import" && source !== "outside-push";
+}
+
 export function repairRunId(repo: string, commit: string): string {
 	return `run_repair_${commit.slice(0, 12)}_${fnv1a(repo)}`;
 }
@@ -157,8 +167,8 @@ export class GateWorkflow extends WorkflowEntrypoint<Env, GateParams> {
 			await step.do("hand off to repair", async () => {
 				await log.step("Merge blocked", "failed", `${p.branch} stays unmerged; main is untouched. ${gateBrief(gate).firstFailure ?? ""}`);
 				const repairId = repairRunId(p.repo, p.commit);
-				// A repair branch that fails when applied does not get a repair of its own.
-				if (origin.source !== "repair-apply") {
+				const repairs = startsRepair(origin.source);
+				if (repairs) {
 					await startInstance(exports.RepairWorkflow, repairId.replace(/^run_/, ""), {
 						runId: repairId,
 						repo: p.repo,
@@ -169,10 +179,12 @@ export class GateWorkflow extends WorkflowEntrypoint<Env, GateParams> {
 						...(origin.parentRunId && origin.source === "customize" ? { customizeRunId: origin.parentRunId } : {}),
 					});
 					await log.step("Repair agent", "running", `Started ${repairId}`);
+				} else if (origin.source === "import" || origin.source === "outside-push") {
+					await log.step("Repair agent", "info", "No repair agent for changes from your inbox: it calls the model, and every push would start one. Fix the change in your own agent and push again.");
 				}
-				await log.status("failed", origin.source !== "repair-apply" ? { repairRunId: repairId } : {});
+				await log.status("failed", repairs ? { repairRunId: repairId } : {});
 				await setFleet(this.env, p.repo, { status: "failed", lastRun: { runId, kind: "gate", branch: p.branch, status: "failed", ...gateBrief(gate) } });
-				if (origin.parentRunId) await notifyParent(this.env, exports, origin.parentRunId, "gate-finished", { gateRunId: runId, passed: false, merged: false, repairRunId: origin.source !== "repair-apply" ? repairId : null });
+				if (origin.parentRunId) await notifyParent(this.env, exports, origin.parentRunId, "gate-finished", { gateRunId: runId, passed: false, merged: false, repairRunId: repairs ? repairId : null });
 				return true;
 			});
 			return { ...gateBrief(gate), merged: false };

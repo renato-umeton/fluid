@@ -113,6 +113,15 @@ export interface YellowParams {
 	parentRunId?: string;
 }
 
+/** One push of a work/* branch to an inbox (forks/inbox.ts). */
+export interface ImportParams {
+	runId: string;
+	inbox: string;
+	fork: string;
+	branch: string;
+	commit: string;
+}
+
 export interface HarvestParams {
 	runId: string;
 }
@@ -126,6 +135,7 @@ export interface AppExports extends PlatformExports {
 	SeedFleetWorkflow: WorkflowBinding<SeedFleetParams>;
 	SeedForkWorkflow: WorkflowBinding<SeedForkParams>;
 	HarvestWorkflow: WorkflowBinding<HarvestParams>;
+	ImportWorkflow: WorkflowBinding<ImportParams>;
 	YellowWorkflow: WorkflowBinding<YellowParams>;
 }
 

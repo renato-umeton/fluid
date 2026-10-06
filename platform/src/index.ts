@@ -16,6 +16,7 @@ export { RepairWorkflow } from "./workflows/repair.ts";
 export { ReleaseWorkflow, UpgradeWorkflow } from "./workflows/upgrade.ts";
 export { HarvestWorkflow, SeedFleetWorkflow, SeedForkWorkflow } from "./workflows/fleet.ts";
 export { YellowWorkflow } from "./workflows/yellow.ts";
+export { ImportWorkflow } from "./workflows/import.ts";
 
 export default {
 	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {

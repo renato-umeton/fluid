@@ -1,31 +1,25 @@
 // Queue consumer for Artifacts push events. Each push to a fork work branch
 // starts one Gate workflow; the instance id is derived from (repo, branch,
 // commit), so a direct trigger for the same push and a redelivered message
-// never start a second gate. Each new work/* head in an inbox repo is
-// imported into its fork (forks/inbox.ts), which then starts the gate.
-import type { InboxImport } from "./filter.ts";
-import { importInboxBranch } from "../forks/inbox.ts";
-import { appExports, errorText, startGateInstance, type AppExports } from "../workflows/common.ts";
+// never start a second gate. Each new work/* head in an inbox repo starts one
+// Import workflow (workflows/import.ts) the same way. The consumer does no
+// git work itself, so one heavy push never stalls the batch.
+import { importRunId } from "../forks/inbox.ts";
+import { appExports, startGateInstance, startInstance } from "../workflows/common.ts";
 import { filterPushEvent, gateInstanceId } from "./filter.ts";
 
-export interface ConsumerDeps {
-	importBranch(env: Env, exports: AppExports, imp: InboxImport): Promise<void>;
-}
-
-const DEFAULT_DEPS: ConsumerDeps = { importBranch: importInboxBranch };
-
-export async function handlePushEvents(batch: MessageBatch<unknown>, env: Env, ctx: ExecutionContext, deps: ConsumerDeps = DEFAULT_DEPS): Promise<void> {
+export async function handlePushEvents(batch: MessageBatch<unknown>, _env: Env, ctx: ExecutionContext): Promise<void> {
 	const exports = appExports(ctx);
 	for (const message of batch.messages) {
 		const result = filterPushEvent(message.body);
 		if (!result.gate && result.import) {
-			const { inbox, branch, commit } = result.import;
+			const { inbox, fork, branch, commit } = result.import;
+			const runId = importRunId(fork, branch, commit);
 			try {
-				await deps.importBranch(env, exports, result.import);
+				await startInstance(exports.ImportWorkflow, runId.slice("run_".length), { runId, inbox, fork, branch, commit });
 				message.ack();
 			} catch (error) {
-				// Nothing reached the fork; the import runs again on redelivery (then the dead letter queue).
-				console.error(`import failed for ${inbox} ${branch} ${commit.slice(0, 7)}: ${errorText(error)}`);
+				console.error(`import start failed for ${inbox} ${branch}: ${error instanceof Error ? error.message : String(error)}`);
 				message.retry({ delaySeconds: 5 });
 			}
 			continue;

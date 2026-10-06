@@ -40,6 +40,7 @@ export default defineConfig({
 			SeedForkWorkflow: exports.workflow({ name: "fluid-seed-fork" }),
 			HarvestWorkflow: exports.workflow({ name: "fluid-harvest" }),
 			YellowWorkflow: exports.workflow({ name: "fluid-yellow" }),
+			ImportWorkflow: exports.workflow({ name: "fluid-import" }),
 		},
 		// Artifacts repo.pushed events (account-level subscription, see scripts/setup-events.mjs).
 		// Messages that still fail after maxRetries go to fluid-events-dlq instead of being dropped.

@@ -2,7 +2,7 @@ import git from "isomorphic-git";
 import { describe, expect, it } from "vitest";
 import { handlePushEvents } from "../src/events/consumer.ts";
 import { filterPushEvent, isImportableBranch } from "../src/events/filter.ts";
-import { cappedHttp, checkImport, IMPORT_LIMITS, ImportTooLargeError, importPushMode } from "../src/forks/inbox.ts";
+import { cappedHttp, checkImport, IMPORT_LIMITS, ImportTooLargeError, importPushMode, importRunId } from "../src/forks/inbox.ts";
 import { checkoutBranch, commitChanges, initRepo, writeFiles } from "../src/git/ops.ts";
 
 const SHA = "51e4fce944f2e5d131e3e6b7b8457ecc3a34e6a2";
@@ -146,42 +146,54 @@ describe("handlePushEvents routing", () => {
 		return m;
 	}
 
-	function context() {
-		const created: unknown[] = [];
-		const GateWorkflow = { create: async (o: { id: string }) => (created.push(o), { id: o.id }), get: async () => ({ status: async () => ({ status: "running" }) }) };
-		return { created, ctx: { exports: { GateWorkflow } } as unknown as ExecutionContext };
+	function binding(fail = false) {
+		const created: { id: string; params: Record<string, unknown> }[] = [];
+		return {
+			created,
+			create: async (o: { id: string; params: Record<string, unknown> }) => {
+				if (fail) throw new Error("workflows unavailable");
+				created.push(o);
+				return { id: o.id };
+			},
+			get: async () => ({ status: async () => ({ status: "running" }) }),
+		};
 	}
 
-	it("sends an inbox work branch to the import and nothing to the gate", async () => {
-		const imports: unknown[] = [];
-		const { created, ctx } = context();
+	function context(failImport = false) {
+		const GateWorkflow = binding();
+		const ImportWorkflow = binding(failImport);
+		return { gates: GateWorkflow.created, imports: ImportWorkflow.created, ctx: { exports: { GateWorkflow, ImportWorkflow } } as unknown as ExecutionContext };
+	}
+
+	it("only starts an import workflow for an inbox work branch, keyed by the import run id, and acks", async () => {
+		const { gates, imports, ctx } = context();
 		const m = message(push("inbox-user-s-1a2b", "refs/heads/work/x"));
-		await handlePushEvents({ messages: [m] } as never, {} as Env, ctx, { importBranch: async (_env, _exports, imp) => void imports.push(imp) });
-		expect(imports).toEqual([{ inbox: "inbox-user-s-1a2b", fork: "user-s-1a2b", branch: "work/x", commit: SHA }]);
-		expect(created).toEqual([]);
+		await handlePushEvents({ messages: [m] } as never, {} as Env, ctx);
+		const runId = importRunId("user-s-1a2b", "work/x", SHA);
+		expect(imports).toEqual([{ id: runId.slice("run_".length), params: { runId, inbox: "inbox-user-s-1a2b", fork: "user-s-1a2b", branch: "work/x", commit: SHA } }]);
+		expect(gates).toEqual([]);
 		expect(m.acked).toBe(true);
 	});
 
-	it("retries the message when the import fails for infrastructure reasons", async () => {
-		const { ctx } = context();
+	it("retries the message when the import workflow cannot be started", async () => {
+		const { ctx } = context(true);
 		const m = message(push("inbox-user-s-1a2b", "refs/heads/work/x"));
-		await handlePushEvents({ messages: [m] } as never, {} as Env, ctx, { importBranch: async () => { throw new Error("artifacts down"); } });
+		await handlePushEvents({ messages: [m] } as never, {} as Env, ctx);
 		expect(m.retried).toBe(true);
 	});
 
 	it("acks inbox pushes to main and tags without importing", async () => {
-		const imports: unknown[] = [];
-		const { ctx } = context();
+		const { imports, ctx } = context();
 		const messages = [message(push("inbox-user-s-1a2b", "refs/heads/main")), message(push("inbox-user-s-1a2b", "refs/tags/work/x"))];
-		await handlePushEvents({ messages } as never, {} as Env, ctx, { importBranch: async (_env, _exports, imp) => void imports.push(imp) });
+		await handlePushEvents({ messages } as never, {} as Env, ctx);
 		expect(imports).toEqual([]);
 		expect(messages.every((x) => x.acked)).toBe(true);
 	});
 
 	it("still starts the gate for a fork work branch", async () => {
-		const { created, ctx } = context();
-		const m = message(push("user-s-1a2b", "refs/heads/work/x"));
-		await handlePushEvents({ messages: [m] } as never, {} as Env, ctx, { importBranch: async () => undefined });
-		expect(created).toHaveLength(1);
+		const { gates, ctx } = context();
+		await handlePushEvents({ messages: [message(push("user-s-1a2b", "refs/heads/work/x"))] } as never, {} as Env, ctx);
+		expect(gates).toHaveLength(1);
 	});
 });
+

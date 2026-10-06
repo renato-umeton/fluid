@@ -389,17 +389,30 @@ export async function mergeBase(ws: Workspace, a: string, b: string): Promise<st
 	return (base as string | undefined) ?? null;
 }
 
-/** Files that differ between two commits (base null: every file in head is added), sorted by path. */
-export async function changedFiles(ws: Workspace, base: string | null, head: string): Promise<FileChange[]> {
+export class TreeTooLargeError extends Error {
+	constructor(readonly limit: number) {
+		super(`the tree has more than ${limit} entries`);
+		this.name = "TreeTooLargeError";
+	}
+}
+
+/**
+ * Files that differ between two commits (base null: every file in head is
+ * added), sorted by path. With maxEntries, a tree with more entries (files
+ * and directories) stops the walk with TreeTooLargeError.
+ */
+export async function changedFiles(ws: Workspace, base: string | null, head: string, options: { maxEntries?: number } = {}): Promise<FileChange[]> {
 	const blobs = async (oid: string | null) => {
 		const out = new Map<string, string>();
 		if (!oid) return out;
+		let entries = 0;
 		await git.walk({
 			fs: ws.fs,
 			dir: ws.dir,
 			trees: [git.TREE({ ref: oid })],
 			map: async (path, [entry]) => {
 				if (!entry || path === ".") return true;
+				if (options.maxEntries !== undefined && ++entries > options.maxEntries) throw new TreeTooLargeError(options.maxEntries);
 				if ((await entry.type()) === "blob") out.set(path, await entry.oid());
 				return true;
 			},
