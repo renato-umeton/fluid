@@ -13,7 +13,7 @@ import { changedFiles, cloneRepo, commitsBetween, headCommit, listRemoteRefs, me
 import { onAuthFor } from "../git/tokens.ts";
 import type { QuotaDecision } from "../durable/quota.ts";
 import { fleetStub, runsStub } from "../stubs.ts";
-import { ensureRun, errorText, linkGateParent, repoRemote } from "../workflows/common.ts";
+import { ensureRun, errorText, linkGateParent, repoRemote, startInstance, type ImportParams, type InstanceHandle, type WorkflowBinding } from "../workflows/common.ts";
 import { outsideGrantKey, type OutsideGrant } from "./outside.ts";
 
 export const IMPORT_LIMITS = {
@@ -101,6 +101,44 @@ export function importPushMode(input: { exists: boolean; imported: boolean }): "
 
 export function importRunId(fork: string, branch: string, commit: string): string {
 	return `run_import_${commit.slice(0, 12)}_${fnv1a(`${fork}\n${branch}`)}`;
+}
+
+/** Imports of one (fork, branch, commit) at most: the first plus 19 pushed again after a refusal. */
+export const IMPORT_ATTEMPTS = 20;
+
+/**
+ * Whether an import instance ended without importing: refused (quota, caps,
+ * a replaced inbox), skipped, cancelled because the branch moved, or errored.
+ * Pushing the same commit again then deserves a new import.
+ */
+function importEndedWithout(state: Awaited<ReturnType<InstanceHandle["status"]>>): boolean {
+	if (state.status === "errored" || state.status === "terminated") return true;
+	if (state.status !== "complete") return false;
+	const outcome = (state.output as { status?: unknown } | undefined)?.status;
+	return outcome === "refused" || outcome === "skipped" || outcome === "moved";
+}
+
+/**
+ * Starts the import for one inbox push. Ids are the one from importRunId,
+ * then -r1, -r2, and so on. An attempt that is running or imported means the
+ * push is already handled (a redelivered event); one that ended without
+ * importing is skipped, so pushing the same commit again after a refusal
+ * starts a new import. A redelivery after a refusal starts one too (the
+ * event carries nothing that tells the two apart); it is checked and
+ * refused or imported like any push.
+ */
+export async function startImportInstance(binding: WorkflowBinding<ImportParams>, imp: InboxImport): Promise<{ id: string; created: boolean }> {
+	const base = importRunId(imp.fork, imp.branch, imp.commit).slice("run_".length);
+	let id = base;
+	for (let attempt = 0; attempt < IMPORT_ATTEMPTS; attempt++) {
+		id = attempt === 0 ? base : `${base}-r${attempt}`;
+		const started = await startInstance(binding, id, { runId: `run_${id}`, ...imp });
+		if (started.created) return { id, created: true };
+		const state = await (await binding.get(id)).status().catch(() => ({ status: "unknown" }));
+		if (!importEndedWithout(state)) return { id, created: false };
+	}
+	console.warn(`import of ${imp.branch} at ${imp.commit.slice(0, 7)} for ${imp.fork} was tried ${IMPORT_ATTEMPTS} times; not started again`);
+	return { id, created: false };
 }
 
 /** Record that an import made this fork branch, keyed by the full branch name. */

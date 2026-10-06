@@ -2,7 +2,7 @@ import git from "isomorphic-git";
 import { describe, expect, it } from "vitest";
 import { handlePushEvents } from "../src/events/consumer.ts";
 import { filterPushEvent, isImportableBranch } from "../src/events/filter.ts";
-import { cappedHttp, checkImport, IMPORT_LIMITS, ImportTooLargeError, importPushMode, importRunId } from "../src/forks/inbox.ts";
+import { cappedHttp, checkImport, IMPORT_LIMITS, ImportTooLargeError, IMPORT_ATTEMPTS, importPushMode, importRunId, startImportInstance } from "../src/forks/inbox.ts";
 import { checkoutBranch, commitChanges, initRepo, writeFiles } from "../src/git/ops.ts";
 
 const SHA = "51e4fce944f2e5d131e3e6b7b8457ecc3a34e6a2";
@@ -197,3 +197,79 @@ describe("handlePushEvents routing", () => {
 	});
 });
 
+describe("startImportInstance", () => {
+	const IMP = { inbox: "inbox-user-s-1a2b", fork: "user-s-1a2b", branch: "work/x", commit: SHA };
+	const BASE = importRunId(IMP.fork, IMP.branch, IMP.commit).slice("run_".length);
+
+	/** A workflow binding whose instances keep the status they were given (new ones run). */
+	function instances(existing: Record<string, { status: string; output?: unknown }> = {}) {
+		const states = new Map(Object.entries(existing));
+		const created: { id: string; params: Record<string, unknown> }[] = [];
+		return {
+			created,
+			states,
+			binding: {
+				create: async (o: { id: string; params: Record<string, unknown> }) => {
+					if (states.has(o.id)) throw new Error(`instance ${o.id} already exists`);
+					states.set(o.id, { status: "running" });
+					created.push(o);
+					return { id: o.id };
+				},
+				createBatch: async () => [],
+				get: async (id: string) => ({ id, status: async () => states.get(id)!, sendEvent: async () => undefined }),
+			},
+		};
+	}
+
+	it("starts the first import under the id from (fork, branch, commit)", async () => {
+		const w = instances();
+		expect(await startImportInstance(w.binding, IMP)).toEqual({ id: BASE, created: true });
+		expect(w.created[0]!.params).toEqual({ runId: `run_${BASE}`, ...IMP });
+	});
+
+	it.each([["running"], ["queued"], ["waiting"]])("dedupes a second delivery while the import is %s", async (status) => {
+		const w = instances({ [BASE]: { status } });
+		expect(await startImportInstance(w.binding, IMP)).toEqual({ id: BASE, created: false });
+		expect(w.created).toEqual([]);
+	});
+
+	it("dedupes a second delivery after the import landed", async () => {
+		const w = instances({ [BASE]: { status: "complete", output: { status: "imported", branch: "work/inbox/x" } } });
+		expect(await startImportInstance(w.binding, IMP)).toEqual({ id: BASE, created: false });
+		expect(w.created).toEqual([]);
+	});
+
+	it.each([
+		["refused (quota, caps, a replaced inbox)", { status: "complete", output: { status: "refused" } }],
+		["skipped (the grant named another inbox)", { status: "complete", output: { status: "skipped" } }],
+		["cancelled because the branch moved", { status: "complete", output: { status: "moved" } }],
+		["errored", { status: "errored" }],
+		["terminated", { status: "terminated" }],
+	])("starts a new import when the same commit is pushed again after one that was %s", async (_label, state) => {
+		const w = instances({ [BASE]: state });
+		expect(await startImportInstance(w.binding, IMP)).toEqual({ id: `${BASE}-r1`, created: true });
+		expect(w.created[0]!.params).toMatchObject({ runId: `run_${BASE}-r1`, commit: SHA });
+	});
+
+	it("walks past several refused attempts and dedupes against the live one", async () => {
+		const refused = { status: "complete", output: { status: "refused" } };
+		const w = instances({ [BASE]: refused, [`${BASE}-r1`]: refused, [`${BASE}-r2`]: { status: "running" } });
+		expect(await startImportInstance(w.binding, IMP)).toEqual({ id: `${BASE}-r2`, created: false });
+		expect(w.created).toEqual([]);
+	});
+
+	it("keeps instance ids within the 64 characters workflows allow", async () => {
+		const refused = { status: "complete", output: { status: "refused" } };
+		const w = instances(Object.fromEntries(Array.from({ length: 19 }, (_, i) => [i === 0 ? BASE : `${BASE}-r${i}`, refused])));
+		const started = await startImportInstance(w.binding, IMP);
+		expect(started).toEqual({ id: `${BASE}-r19`, created: true });
+		expect(started.id.length).toBeLessThanOrEqual(64);
+	});
+
+	it("stops after the last attempt instead of starting imports without end", async () => {
+		const refused = { status: "complete", output: { status: "refused" } };
+		const w = instances(Object.fromEntries(Array.from({ length: IMPORT_ATTEMPTS }, (_, i) => [i === 0 ? BASE : `${BASE}-r${i}`, refused])));
+		expect(await startImportInstance(w.binding, IMP)).toEqual({ id: `${BASE}-r${IMPORT_ATTEMPTS - 1}`, created: false });
+		expect(w.created).toEqual([]);
+	});
+});

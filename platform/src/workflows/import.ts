@@ -1,6 +1,7 @@
 // Import Workflow: one instance per push of a work/* branch to an inbox
-// (instance id from importRunId), started by the queue consumer, which only
-// acks. The heavy part (fetch, inflate, walk, push) runs here, so one large
+// (instance id from importRunId, with -r1, -r2, ... when the same commit is
+// pushed again after a refused or failed import), started by the queue
+// consumer, which only acks. The heavy part (fetch, inflate, walk, push) runs here, so one large
 // or hostile push stalls only its own import, never the shared consumer
 // batch or other users' gate triggers. Quotas are taken before any clone.
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
