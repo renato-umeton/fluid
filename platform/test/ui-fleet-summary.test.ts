@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error plain ES module from the static UI
-import { baselineText, forkSummaryText } from "../public/js/fleet-summary.js";
+import { baselineText, forkSummaryText, upgradePathCounts, wishesHeading } from "../public/js/fleet-summary.js";
 
 describe("forkSummaryText", () => {
 	it("describes a failed work branch as a change, not an upgrade", () => {
@@ -16,6 +16,29 @@ describe("forkSummaryText", () => {
 
 	it("falls back to the latest stock tag while an upgrade runs", () => {
 		expect(forkSummaryText({ status: "upgrading", pinnedTag: "v1.5.0", lastRun: null }, "v1.10.0", false)).toBe("Upgrade agent is merging stock v1.10.0 into upgrade/v1.10.0.");
+	});
+});
+
+describe("intent replay in the fleet", () => {
+	const replay = { tag: "v1.11.0", path: "replay", carried: 2, total: 2, wishes: [] };
+
+	it("heads the wish list with the count carried to the tag", () => {
+		expect(wishesHeading(replay)).toBe("Wishes carried to v1.11.0: 2 of 2");
+		expect(wishesHeading({ tag: "v1.11.0", path: "merge", carried: 0, total: 3, reason: "1 of 3 wishes can be replayed", wishes: [] })).toBe("Upgrade to v1.11.0 took the merge path: 1 of 3 wishes can be replayed");
+		expect(wishesHeading(null)).toBeNull();
+	});
+
+	it("says a replayed upgrade rebuilt the fork from fresh stock", () => {
+		const fork = { status: "passed", pinnedTag: "v1.11.0", lastRun: { kind: "upgrade", tag: "v1.11.0", applied: true, path: "replay", replay } };
+		expect(forkSummaryText(fork, "v1.11.0", false)).toBe("Upgrade to v1.11.0 rebuilt this fork from fresh stock by replaying 2 of 2 wishes. All three tiers passed and it was applied.");
+		const waiting = { ...fork, lastRun: { ...fork.lastRun, applied: false } };
+		expect(forkSummaryText(waiting, "v1.11.0", false)).toBe("Upgrade to v1.11.0 rebuilt this fork from fresh stock by replaying 2 of 2 wishes. All three tiers passed. Waiting for the user's one-tap approval (auto_upgrade is off).");
+	});
+
+	it("counts forks upgraded to a tag by replay and by merge", () => {
+		const up = (tag: string, path: string | null, status = "passed") => ({ lastRun: { kind: "upgrade", tag, status, ...(path ? { path } : {}) } });
+		const forks = [up("v1.11.0", "replay"), up("v1.11.0", "replay"), up("v1.11.0", "merge"), up("v1.11.0", null), up("v1.10.0", "replay"), up("v1.11.0", "replay", "gating"), { lastRun: null }];
+		expect(upgradePathCounts(forks, "v1.11.0")).toEqual({ replay: 2, merge: 2 });
 	});
 });
 

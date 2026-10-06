@@ -297,10 +297,10 @@ export interface ReplaySummary {
 	wishes: { intentId: string; status: WishStatus; kind: ReplayKind | null; request: string; reason: string; stockAlsoChanged: string[] }[];
 }
 
-/** "3 of 3 wishes carried to v1.11.0" (replay), or why the upgrade merged instead. */
+/** "3 of 3 wishes carried to v1.11.0" (replay), or why the upgrade took the merge path. */
 export function wishesCarriedText(summary: ReplaySummary): string {
 	if (summary.path === "replay") return `${summary.carried} of ${summary.total} wish${summary.total === 1 ? "" : "es"} carried to ${summary.tag}`;
-	return `Upgraded to ${summary.tag} by merge${summary.reason ? `: ${summary.reason}` : ""}`;
+	return `Upgrade to ${summary.tag} took the merge path${summary.reason ? `: ${summary.reason}` : ""}`;
 }
 
 /** What the run, the fleet entry, and the UI show: "N of M wishes carried to <tag>" and each wish's result. */

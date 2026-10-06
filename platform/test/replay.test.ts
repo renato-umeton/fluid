@@ -297,7 +297,7 @@ describe("replaySummary", () => {
 		const one = replayIntents(stock, [wish(tau(0.9))]).results;
 		expect(wishesCarriedText(replaySummary("v1.1.0", "replay", [...one, ...one, ...one]))).toBe("3 of 3 wishes carried to v1.1.0");
 		expect(wishesCarriedText(replaySummary("v1.1.0", "replay", one))).toBe("1 of 1 wish carried to v1.1.0");
-		expect(wishesCarriedText(replaySummary("v1.1.0", "merge", one, "the gate failed"))).toBe("Upgraded to v1.1.0 by merge: the gate failed");
+		expect(wishesCarriedText(replaySummary("v1.1.0", "merge", one, "the gate failed"))).toBe("Upgrade to v1.1.0 took the merge path: the gate failed");
 	});
 });
 
