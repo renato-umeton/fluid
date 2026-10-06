@@ -11,6 +11,7 @@ import { clusterRecords, deterministicLabel, draftFilesFor, harvestable, LABEL_S
 import { buildIntent, intentJson, intentPath, cleanText } from "../agents/intent.ts";
 import { cloneRepo, commitChanges, checkoutBranch, deleteRemoteBranch, headCommit, listRemoteRefs, pushBranch, readWorkspaceFile, writeFiles } from "../git/ops.ts";
 import synthetic from "../generated/synthetic.json";
+import { approveMainMove } from "../forks/main-guard.ts";
 import { currentStockTag, findPersona, preferencesOf, provisionFork, readIntents } from "../forks/provision.ts";
 import { forkRepoName, newIntentId, STOCK_REPO } from "../lib/names.ts";
 import { parseToml } from "../lib/toml.ts";
@@ -102,7 +103,9 @@ export class SeedForkWorkflow extends WorkflowEntrypoint<Env, SeedForkParams> {
 				// A retried step may find the customization already committed.
 				const existing = await readIntents(this.env, repo, "main");
 				if (existing.some((i) => i.agent === "seed-customization")) return true;
+				const before = await headCommit(ws, "main");
 				for (const kind of onMain) await commitSeedChange(ws, kind, spec, personas, pinnedTagOf(toml));
+				await approveMainMove(this.env, repo, before, await headCommit(ws, "main"));
 				await pushBranch(ws, remote, "main");
 				return true;
 			});

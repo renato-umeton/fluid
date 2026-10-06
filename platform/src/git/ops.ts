@@ -378,6 +378,17 @@ export async function restoreTreeFrom(ws: Workspace, commit: string, extra: Reco
 	await replaceTree(ws, { ...files, ...extra });
 }
 
+/** True when the working copy has this commit object. */
+export async function hasCommit(ws: Workspace, oid: string): Promise<boolean> {
+	try {
+		await git.readCommit({ fs: ws.fs, dir: ws.dir, oid });
+		return true;
+	} catch (error) {
+		if (error instanceof Errors.NotFoundError) return false;
+		throw error;
+	}
+}
+
 /** First parent of a commit (the branch a merge was made on), or null for a root commit. */
 export async function firstParent(ws: Workspace, oid: string): Promise<string | null> {
 	const { commit } = await git.readCommit({ fs: ws.fs, dir: ws.dir, oid });

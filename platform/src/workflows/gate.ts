@@ -8,6 +8,7 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { fnv1a, gateInstanceId } from "../events/filter.ts";
 import { checkoutBranch, cloneRepo, fastForward, fetchBranch, firstParent, headCommit, mergeInto, pushBranch } from "../git/ops.ts";
+import { approveMainMove } from "../forks/main-guard.ts";
 import { runGate } from "../gate/run.ts";
 import { gateBrief, type GateResult } from "../gate/tiers.ts";
 import { fleetStub } from "../stubs.ts";
@@ -170,6 +171,7 @@ export class GateWorkflow extends WorkflowEntrypoint<Env, GateParams> {
 		const previous = await headCommit(ws, "main");
 		const ff = await fastForward(ws, "main", p.commit);
 		if (ff.outcome === "fast-forward") {
+			await approveMainMove(this.env, p.repo, previous, p.commit);
 			await pushBranch(ws, remote, "main");
 			await log.step("Merge to main", "done", `main fast-forwarded to ${p.commit.slice(0, 7)}`);
 			return { ok: true, oid: p.commit, regate: null, previous, landed: true };

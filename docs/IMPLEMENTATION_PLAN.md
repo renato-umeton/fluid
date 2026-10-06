@@ -4,13 +4,13 @@
 **Goal**: `POST /api/forks/:repo/token` mints a 1 hour write token for the owner's fork.
 **Success Criteria**: owner only, quotas per user and per client, one live outside token per fork, token never logged.
 **Tests**: response shape and commands, TTL, revoke of the previous token, quota values.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: main protection
 **Goal**: a push to `main` that the platform did not make is undone and its commits moved to a work branch.
 **Success Criteria**: every platform push to main is approved first; the consumer restores main for outside pushes.
 **Tests**: push classification, restore plan, approval names.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Drafted intent for outside pushes
 **Goal**: the gate drafts `.intent/<id>.json` (source `outside-push`) for a pushed branch that carries none, then gates the drafted commit.

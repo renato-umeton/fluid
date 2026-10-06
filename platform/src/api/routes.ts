@@ -4,6 +4,7 @@ import { currentStockTag, getForkInfo, findPersona, fleetStub, ForkNotFoundError
 import { serveAsk } from "./ask.ts";
 import { clientKey } from "../lib/client.ts";
 import { scrubText } from "../git/tokens.ts";
+import { approveMainMove } from "../forks/main-guard.ts";
 import { mintOutsideToken, outsideGrantKey, type OutsideGrant } from "../forks/outside.ts";
 import { forkRepoName, isValidRepoName, newIntentId, newSandboxUserId, STOCK_REPO, userIdFromForkRepo } from "../lib/names.ts";
 import { readCookie, safeEqual, SESSION_COOKIE, sessionCookieHeader, signSession, switchPersona, verifySession, type Session } from "../lib/session.ts";
@@ -592,7 +593,10 @@ route("POST", "/api/forks/:repo/upgrade", async (rc, { repo }) => {
 	const previous = await headCommit(ws, "main");
 	const ff = await fastForward(ws, "main", pending.commit);
 	if (ff.outcome === "diverged") throw new HttpError(409, `main moved since upgrade/${pending.tag} was gated at ${pending.commit.slice(0, 7)}; a new upgrade run is needed`);
-	if (ff.outcome === "fast-forward") await pushBranch(ws, remote, "main");
+	if (ff.outcome === "fast-forward") {
+		await approveMainMove(rc.env, name, previous, pending.commit);
+		await pushBranch(ws, remote, "main");
+	}
 	// A repeated tap after a push whose response was lost finds main at the commit with no yellow run for it yet.
 	const landed = ff.outcome === "fast-forward" || landedEarlier({ mainHead: ff.oid, commit: pending.commit, healthCommit: entry.health.commit });
 	const lastRun: RunSummary = entry.lastRun?.runId === pending.runId ? { ...entry.lastRun, applied: true, at: new Date().toISOString() } : { runId: pending.runId, kind: "upgrade", tag: pending.tag, status: "passed", applied: true, commit: pending.commit, at: new Date().toISOString() };

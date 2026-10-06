@@ -70,13 +70,15 @@ export interface RevertResult {
  * Commits the last green tree (plus the rollback intent record) on top of
  * main and pushes without force. Refuses when main is not at the yellow
  * commit. `ws` may be passed in for tests; otherwise main is cloned.
+ * `approve` records the move before the push (see forks/main-guard.ts).
  */
-export async function revertMain(input: { remote: Remote; yellowCommit: string; greenCommit: string; intent: BuildTimeIntent; message: string; ws?: Workspace }): Promise<RevertResult> {
+export async function revertMain(input: { remote: Remote; yellowCommit: string; greenCommit: string; intent: BuildTimeIntent; message: string; ws?: Workspace; approve?: (from: string, to: string) => Promise<void> }): Promise<RevertResult> {
 	const ws = input.ws ?? (await cloneRepo({ ...input.remote, ref: "main", singleBranch: true }));
 	const head = await headCommit(ws, "main");
 	if (head !== input.yellowCommit) return { ok: false, commit: null, reason: `main is at ${head.slice(0, 7)}, not the yellow commit ${input.yellowCommit.slice(0, 7)}` };
 	await restoreTreeFrom(ws, input.greenCommit, { [intentPath(input.intent.id)]: intentJson(input.intent) });
 	const commit = await commitChanges(ws, { message: input.message, intentId: input.intent.id, author: ROLLBACK_AUTHOR });
+	if (input.approve) await input.approve(head, commit);
 	if (!input.ws) await pushBranch(ws, input.remote, "main");
 	return { ok: true, commit };
 }

@@ -11,6 +11,7 @@ import { buildIntent, intentJson, intentPath } from "../agents/intent.ts";
 import { acceptModelResolutions, fallbackResolution, MERGE_SCHEMA, mergePrompt, type Resolution } from "../agents/merge-resolve.ts";
 import { fnv1a } from "../events/filter.ts";
 import { checkoutBranch, cloneRepo, commitChanges, fastForward, fetchBranch, fetchStockTag, firstParent, headCommit, mergeInto, mergeWithResolver, pushBranch, readWorkspaceFile, writeFiles, type ConflictVersions } from "../git/ops.ts";
+import { approveMainMove } from "../forks/main-guard.ts";
 import { preferencesOf, readIntents, type BuildTimeIntent } from "../forks/provision.ts";
 import { runGate } from "../gate/run.ts";
 import { gateBrief, type GateResult } from "../gate/tiers.ts";
@@ -285,6 +286,7 @@ export class UpgradeWorkflow extends WorkflowEntrypoint<Env, UpgradeParams> {
 		const previous = await headCommit(ws, "main");
 		const ff = await fastForward(ws, "main", commit);
 		if (ff.outcome === "fast-forward") {
+			await approveMainMove(this.env, repo, previous, commit);
 			await pushBranch(ws, remote, "main");
 			await log.step("Merge to main", "done", `main fast-forwarded to ${commit.slice(0, 7)} on ${tag}`);
 			return { applied: true, regate: null, previous, landed: true };
