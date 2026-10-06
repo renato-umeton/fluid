@@ -25,6 +25,7 @@ describe("POST /api/forks/:repo/token", () => {
 		logs = [];
 		vi.spyOn(console, "log").mockImplementation((...args) => void logs.push(args.join(" ")));
 		vi.spyOn(console, "error").mockImplementation((...args) => void logs.push(args.join(" ")));
+		vi.spyOn(console, "warn").mockImplementation((...args) => void logs.push(args.join(" ")));
 	});
 
 	it("creates the inbox as a fork of the user's fork and scopes the token to the inbox only", async () => {
@@ -55,6 +56,36 @@ describe("POST /api/forks/:repo/token", () => {
 		expect(t.artifacts.deleted).toEqual([INBOX]);
 		expect(t.artifacts.repos.get(INBOX)!.forkedFrom).toBe(FORK);
 		expect(t.artifacts.repos.get(INBOX)!.tokens).toEqual([{ id: `tok_${INBOX}_1`, scope: "write", ttl: 3600, revoked: false }]);
+	});
+
+	it("revokes the previous token on the old inbox before deleting it", async () => {
+		const t = await setup();
+		const cookie = await cookieFor({ userId: USER });
+		await mint(t, { cookie });
+		const old = t.artifacts.repos.get(INBOX)!;
+		const revokedAtDelete: boolean[] = [];
+		const remove = t.artifacts.binding.delete;
+		t.artifacts.binding.delete = async (name: string) => (revokedAtDelete.push(old.tokens[0]!.revoked), remove(name));
+		expect((await mint(t, { cookie })).status).toBe(201);
+		expect(revokedAtDelete).toEqual([true]);
+		expect(t.artifacts.repos.get(INBOX)).not.toBe(old);
+	});
+
+	it("still replaces the inbox when the previous token cannot be revoked", async () => {
+		const t = await setup();
+		const cookie = await cookieFor({ userId: USER });
+		await mint(t, { cookie });
+		t.artifacts.repos.get(INBOX)!.revokeResult = false;
+		expect((await mint(t, { cookie })).status).toBe(201);
+		expect(t.artifacts.deleted).toEqual([INBOX]);
+		expect(logs.join("\n")).toMatch(/previous outside token .* not revoked/);
+	});
+
+	it("mints when the grant names an inbox that no longer exists", async () => {
+		const t = await setup();
+		t.fleet.setValue(outsideGrantKey(FORK), { repo: FORK, inbox: INBOX, userId: USER, tokenId: "tok_gone", firstAt: "", mintedAt: "", expiresAt: null } as never);
+		expect((await mint(t, { cookie: await cookieFor({ userId: USER }) })).status).toBe(201);
+		expect(t.artifacts.repos.get(INBOX)!.forkedFrom).toBe(FORK);
 	});
 
 	it("schedules the inbox's deletion after the token expires", async () => {
@@ -104,7 +135,7 @@ describe("POST /api/forks/:repo/token", () => {
 
 	it("refuses while another request for the same fork is minting", async () => {
 		const t = await setup();
-		expect(t.fleet.tryLock(`lock:${outsideGrantKey(FORK)}`, 30_000)).toBe(true);
+		expect(t.fleet.tryLock(`lock:${outsideGrantKey(FORK)}`, 30_000, "other")).toBe(true);
 		const res = await mint(t, { cookie: await cookieFor({ userId: USER }) });
 		expect(res.status).toBe(409);
 		expect(t.artifacts.repos.has(INBOX)).toBe(false);
@@ -121,10 +152,44 @@ describe("inbox names", () => {
 describe("Fleet locks", () => {
 	it("let one holder in until released or expired", async () => {
 		const { fleet } = apiEnv();
-		expect(fleet.tryLock("lock:x", 1000, 0)).toBe(true);
-		expect(fleet.tryLock("lock:x", 1000, 500)).toBe(false);
-		expect(fleet.tryLock("lock:x", 1000, 1001)).toBe(true);
-		fleet.unlock("lock:x");
-		expect(fleet.tryLock("lock:x", 1000, 1002)).toBe(true);
+		expect(fleet.tryLock("lock:x", 1000, "a", 0)).toBe(true);
+		expect(fleet.tryLock("lock:x", 1000, "b", 500)).toBe(false);
+		expect(fleet.tryLock("lock:x", 1000, "b", 1001)).toBe(true);
+		expect(fleet.unlock("lock:x", "b")).toBe(true);
+		expect(fleet.tryLock("lock:x", 1000, "c", 1002)).toBe(true);
+	});
+
+	it("are released only by their owner, so a late unlock after expiry leaves the next holder's lease", async () => {
+		const { fleet } = apiEnv();
+		expect(fleet.tryLock("lock:x", 1000, "slow", 0)).toBe(true);
+		expect(fleet.tryLock("lock:x", 1000, "next", 1001)).toBe(true);
+		expect(fleet.unlock("lock:x", "slow")).toBe(false);
+		expect(fleet.tryLock("lock:x", 1000, "third", 1500)).toBe(false);
+		expect(fleet.unlock("lock:x", "next")).toBe(true);
+		expect(fleet.tryLock("lock:x", 1000, "third", 1500)).toBe(true);
+	});
+});
+
+describe("the mint lease", () => {
+	it("is not released by a mint whose lease expired and was taken over meanwhile", async () => {
+		const t = await setup();
+		const lock = `lock:${outsideGrantKey(FORK)}`;
+		const fork = t.artifacts.binding.get;
+		// While the mint works, its lease expires and another holder takes it.
+		t.artifacts.binding.get = async (name: string) => {
+			if (name === FORK) {
+				t.fleet.setValue(lock, { until: 0, owner: "expired" } as never);
+				expect(t.fleet.tryLock(lock, 30_000, "next")).toBe(true);
+			}
+			return fork(name);
+		};
+		expect((await mint(t, { cookie: await cookieFor({ userId: USER }) })).status).toBe(201);
+		expect(t.fleet.getValue(lock)).toMatchObject({ owner: "next" });
+	});
+
+	it("is released by the mint that holds it", async () => {
+		const t = await setup();
+		expect((await mint(t, { cookie: await cookieFor({ userId: USER }) })).status).toBe(201);
+		expect(t.fleet.getValue(`lock:${outsideGrantKey(FORK)}`)).toBeNull();
 	});
 });

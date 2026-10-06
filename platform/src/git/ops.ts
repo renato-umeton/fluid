@@ -357,6 +357,12 @@ export async function fastForward(ws: Workspace, branch: string, commit: string)
 	return { outcome: "fast-forward", oid: target };
 }
 
+/** Whether `commit` is the head of local branch `branch` or one of its ancestors. */
+export async function branchContains(ws: Workspace, branch: string, commit: string): Promise<boolean> {
+	const head = await headCommit(ws, branch);
+	return head === commit || git.isDescendent({ fs: ws.fs, dir: ws.dir, oid: head, ancestor: commit, depth: -1 });
+}
+
 /** Points local branch `branch` at `commit` (any commit in the working copy) and checks it out. Pushing the result needs force. */
 export async function resetBranch(ws: Workspace, branch: string, commit: string): Promise<void> {
 	const target = await peelToCommit(ws, await resolveAnyRef(ws, commit));

@@ -17,7 +17,8 @@ export class InboxCleanupWorkflow extends WorkflowEntrypoint<Env, InboxCleanupPa
 			const fleet = fleetStub(this.env);
 			const lock = `lock:${outsideGrantKey(p.fork)}`;
 			// The same lease as minting, so a token minted right now is not left without its inbox.
-			if (!(await fleet.tryLock(lock, 30_000))) throw new Error(`a token for ${p.fork} is being minted; try again`);
+			const owner = crypto.randomUUID();
+			if (!(await fleet.tryLock(lock, 30_000, owner))) throw new Error(`a token for ${p.fork} is being minted; try again`);
 			try {
 				const grant = (await fleet.getValue(outsideGrantKey(p.fork))) as OutsideGrant | null;
 				if (!inboxCleanupDue(grant, p)) return { deleted: false };
@@ -27,7 +28,7 @@ export class InboxCleanupWorkflow extends WorkflowEntrypoint<Env, InboxCleanupPa
 				await fleet.deleteValue(outsideGrantKey(p.fork));
 				return { deleted: true };
 			} finally {
-				await fleet.unlock(lock);
+				await fleet.unlock(lock, owner);
 			}
 		});
 	}
