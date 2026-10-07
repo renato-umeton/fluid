@@ -78,7 +78,7 @@ These parts of the platform code assume the medical app. A second tenant would n
 ## Not built yet
 
 - Several tenants on one deployment. Upstream is always the repo named `stock`.
-- A live end-to-end run of Contest. Contest and the list of wishes in flight shipped in v2.0-beta and are covered by unit and route tests and by mock mode, but the contest workflow has not yet been run against live Artifacts and Workers AI. The mock contest plays one fixed scenario whatever the wish.
+- Contest at scale on the live site. One live contest ran end to end on 2026-10-06 (three model plans, all passed, the pick went through the merge gate and turned green). Contest and the list of wishes in flight shipped in v2.0-beta; the mock contest plays one fixed scenario.
 
 ## Related documents
 
