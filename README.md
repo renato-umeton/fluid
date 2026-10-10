@@ -107,7 +107,7 @@ Concurrency in practice:
 You need Node 22.18 or later, a Cloudflare account with Workers Paid and Artifacts access, and the setup in [docs/DEPLOY.md](docs/DEPLOY.md) (namespace and AI Gateway). Local dev uses the real Artifacts and Workers AI.
 
 ```sh
-git clone <this repo> fluid && cd fluid
+git clone https://github.com/renato-umeton/fluid && cd fluid
 (cd stock && npm install && npm test && npm run build)
 cd platform && npm install && npm test
 npx cf auth login
