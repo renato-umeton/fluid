@@ -12,3 +12,6 @@ Pipfile
 Pipfile.lock
 platform/public/vendor/
 .claude/settings.local.json
+
+# Submission assets (videos, drafts); kept local
+/submission/
