@@ -19,6 +19,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import type { ModuleMap } from "../../src/runtime/modules.ts";
 import { WorkerEntrypoint } from "./cloudflare-workers.ts";
 import { materialize } from "./materialize.ts";
@@ -50,13 +51,19 @@ export function fakeLoader() {
 	const dir = mkdtempSync(join(TEST_DIR, ".tmp-loader-"));
 	const built: string[] = [];
 	const factories = new Map<string, () => WorkerCode | Promise<WorkerCode>>();
+	const codes = new Map<string, Promise<WorkerCode>>();
 	const isolates = new Map<string, Promise<{ exports: Record<string, unknown>; env: unknown }>>();
 
+	/** The code of the first factory given for an id, which runs once. */
+	const codeOf = (id: string) => {
+		if (!codes.has(id)) codes.set(id, Promise.resolve().then(factories.get(id)!));
+		return codes.get(id)!;
+	};
 	const boot = async (id: string) => {
 		// Boot order makes the folder unique: ids that differ only in punctuation or case would otherwise share
 		// one, and the second isolate would run the first one's modules.
 		const folder = `${built.push(id)}-${id.replace(/[^A-Za-z0-9._-]/g, "_")}`;
-		const code = await factories.get(id)!();
+		const code = await codeOf(id);
 		const exports = await materialize<Record<string, unknown>>(code, join(dir, folder), code.mainModule);
 		return { exports, env: overRpc(code.env ?? {}) };
 	};
@@ -69,10 +76,17 @@ export function fakeLoader() {
 		/** Ids of the isolates whose factory ran, in order. */
 		built,
 		get(id: string, factory: () => WorkerCode | Promise<WorkerCode>) {
-			if (!factories.has(id)) factories.set(id, factory);
+			const again = factories.has(id);
+			if (!again) factories.set(id, factory);
+			// The real loader answers an id it has seen with the code it first got, whatever this factory returns. An id
+			// reused for other code (a copy whose id lacks its fingerprint) would then compare that code with itself, so
+			// the fake runs this factory too, on the first call, and refuses the call when the code differs.
+			let checked: Promise<void> | undefined;
+			const sameCode = () => (checked ??= again ? assertSameCode(id, codeOf(id), Promise.resolve().then(factory)) : Promise.resolve());
 			return {
 				getEntrypoint(name: string, options: { props?: unknown } = {}): EntrypointStub {
 					const invoke = (method: string) => async (...args: unknown[]): Promise<unknown> => {
+						await sameCode();
 						const { exports, env } = await isolate(id);
 						const Class = entrypointClass(exports, id, name);
 						const ctx = { props: options.props ?? {}, waitUntil: () => undefined };
@@ -92,6 +106,15 @@ export function fakeLoader() {
 			rmSync(dir, { recursive: true, force: true });
 		},
 	};
+}
+
+async function assertSameCode(id: string, firstCode: Promise<WorkerCode>, nextCode: Promise<WorkerCode>): Promise<void> {
+	const [first, next] = await Promise.all([firstCode, nextCode]);
+	const refuse = (what: string) => new Error(`fakeLoader: isolate id ${id} was requested again with different code (${what}); the real loader would run the first code under this id, so an id must name the code it runs`);
+	if (first.mainModule !== next.mainModule) throw refuse(`main module ${first.mainModule}, then ${next.mainModule}`);
+	if (first.modules === next.modules) return;
+	const names = [...new Set([...Object.keys(first.modules), ...Object.keys(next.modules)])].filter((name) => !isDeepStrictEqual(first.modules[name], next.modules[name]));
+	if (names.length) throw refuse(`modules ${names.sort().join(", ")} differ`);
 }
 
 /** The named export as an entrypoint class, checked to extend the stand-in so a cloudflare:workers import that resolved elsewhere fails here. */

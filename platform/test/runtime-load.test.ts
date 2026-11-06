@@ -279,12 +279,19 @@ export class Probe extends WorkerEntrypoint {
 		expect(await probeOf("probe_twin", () => code("B")).whoami!()).toBe("B");
 	});
 
-	it("runs the factory once per id", async () => {
-		const factory = vi.fn(code);
-		await loader.get("probe:once", factory).getEntrypoint("Probe").poke!({}, () => null);
-		await loader.get("probe:once", factory).getEntrypoint("Probe").poke!({}, () => null);
-		expect(factory).toHaveBeenCalledTimes(1);
-		expect(loader.built.filter((id) => id === "probe:once")).toHaveLength(1);
+	it("keeps one isolate per id when the same code is requested again", async () => {
+		const first = probeOf("probe:same", () => code("A"));
+		const again = probeOf("probe:same", () => code("A"));
+		expect([await first.bump!(), await again.bump!()]).toEqual([1, 2]);
+		expect(loader.built.filter((id) => id === "probe:same")).toHaveLength(1);
+	});
+
+	it("refuses an id requested again with different code, which the real loader would answer with the first code", async () => {
+		const first = probeOf("probe:reused", () => code("A"));
+		expect(await first.whoami!()).toBe("A");
+		const reused = probeOf("probe:reused", () => code("B"));
+		await expect(reused.whoami!()).rejects.toThrow(/probe:reused .*different code.*probe\.js/);
+		expect(await first.whoami!()).toBe("A");
 	});
 });
 
