@@ -36,7 +36,8 @@ const MAX_REFUSAL_FAILURES = 10;
  */
 export async function rotateFork(deps: RuntimeDeps, repo: string, reason: RotationReason): Promise<RotationResult> {
 	const skipped = (why: string): RotationResult => ({ outcome: "skipped", repo, reason, why });
-	if (polymorphSecret(deps.env) === null) return skipped("POLYMORPH_SECRET is not set");
+	// polymorphSecret treats a short secret as none, so the reason names both.
+	if (polymorphSecret(deps.env) === null) return skipped("POLYMORPH_SECRET is not set or is shorter than 16 characters");
 	const fleet = fleetStub(deps.env);
 	const fork = await fleet.get(repo);
 	if (!fork) return skipped("the fork is not in the fleet");

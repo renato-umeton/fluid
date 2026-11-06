@@ -146,7 +146,15 @@ describe("rotateFork", () => {
 
 	it("skips every fork when the platform has no secret, without running a gate", async () => {
 		const built = p.loader.built.length;
-		expect(await rotateFork(p.withoutSecret(), "user-1", "schedule")).toEqual({ outcome: "skipped", repo: "user-1", reason: "schedule", why: "POLYMORPH_SECRET is not set" });
+		expect(await rotateFork(p.withoutSecret(), "user-1", "schedule")).toEqual({ outcome: "skipped", repo: "user-1", reason: "schedule", why: "POLYMORPH_SECRET is not set or is shorter than 16 characters" });
+		expect(p.loader.built.length).toBe(built);
+	});
+
+	it("says the same when the secret is too short to count, without running a gate", async () => {
+		vi.spyOn(console, "warn").mockImplementation(() => undefined);
+		const built = p.loader.built.length;
+		const short = { ...p.deps, env: { ...p.t.env, POLYMORPH_SECRET: "too-short-02" } as unknown as Env };
+		expect(await rotateFork(short, "user-1", "schedule")).toEqual({ outcome: "skipped", repo: "user-1", reason: "schedule", why: "POLYMORPH_SECRET is not set or is shorter than 16 characters" });
 		expect(p.loader.built.length).toBe(built);
 	});
 
