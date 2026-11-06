@@ -19,6 +19,7 @@ let p: PolymorphPlatform;
 beforeAll(() => {
 	p = polymorphPlatform({
 		"user-1": PUBLISHED,
+		"user-resecret": { ...PUBLISHED, "app/resecret.ts": "export const resecret = 1;\n" },
 		"user-reflective": REFLECTIVE,
 		"user-busy": { ...PUBLISHED, "app/busy.ts": "export const busy = 1;\n" },
 		// More JavaScript in one module than the renamer reads: the plain fork runs, no copy can be made.
@@ -52,8 +53,23 @@ describe("rotateFork", () => {
 			]);
 			// What production loads from the stored state is the copy the gate checked.
 			const state = fleet.morphState("user-1")!;
-			const loaded = await loadForkRuntime(p.deps, "user-1", "main", { morph: { epoch: state.epoch, onlyAt: state.sha, namesHash: state.namesHash } });
+			const loaded = await loadForkRuntime(p.deps, "user-1", "main", { morph: { epoch: state.epoch, onlyAt: state.sha, namesHash: state.namesHash, fingerprint: state.fingerprint } });
 			expect(loaded.morph?.fingerprint).toBe(state.fingerprint);
+		},
+		SLOW_MS,
+	);
+
+	it(
+		"leaves a fork plain, not on an unverified copy, when the platform secret changed after the rotation",
+		async () => {
+			const result = await rotateFork(p.deps, "user-resecret", "schedule");
+			if (result.outcome !== "rotated") throw new Error(`expected a rotation, got ${result.outcome}`);
+			const state = p.t.fleet.morphState("user-resecret")!;
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+			const newSecret = { ...p.deps, env: { ...p.t.env, POLYMORPH_SECRET: "a-new-platform-secret-after-rotation" } as unknown as Env };
+			const loaded = await loadForkRuntime(newSecret, "user-resecret", "main", { morph: { epoch: state.epoch, onlyAt: state.sha, namesHash: state.namesHash, fingerprint: state.fingerprint } });
+			expect([loaded.morph, loaded.isolateId]).toEqual([null, `user-resecret:${state.sha}`]);
+			expect(String(warn.mock.calls[0]![0])).toContain(`is not the verified copy's (${state.fingerprint})`);
 		},
 		SLOW_MS,
 	);

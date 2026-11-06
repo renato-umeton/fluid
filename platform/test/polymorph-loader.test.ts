@@ -276,6 +276,15 @@ describe("loadForkRuntime with a renamed copy", () => {
 		SLOW_MS,
 	);
 
+	it("loads plain, building nothing, when the copy's fingerprint is not the verified copy's", async () => {
+		const warn = warnings();
+		const reads = vi.spyOn(t.artifacts.repos.get("user-1")!.git, "readFile");
+		const loaded = await loadForkRuntime(deps, "user-1", "main", { morph: { epoch: 11, fingerprint: "00000000" } });
+		expect([loaded.morph, loaded.isolateId]).toEqual([null, `user-1:${heads["user-1"]}`]);
+		expect(String(warn.mock.calls[0]![0])).toMatch(/runs plain: this copy's fingerprint [0-9a-f]{8} is not the verified copy's \(00000000\)$/);
+		expect(reads.mock.calls.map(([args]) => args.path)).toEqual([]);
+	});
+
 	it("never renames a build with extra files, which only a candidate check makes", async () => {
 		const warn = warnings();
 		const loaded = await loadForkRuntime(deps, "user-1", "main", { extraFiles: { "app/extra.ts": "export const extra = 1;\n" }, variant: "candidate-1", morph: { epoch: 1 } });

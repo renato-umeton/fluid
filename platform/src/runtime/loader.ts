@@ -122,11 +122,13 @@ export interface LoadOptions {
 	 * Load a renamed copy for this epoch instead of the plain fork, when the
 	 * platform can make one: POLYMORPH_SECRET is set, the fork's pinned stock
 	 * release publishes a list, and there are no extraFiles. With onlyAt, only
-	 * when the ref resolves to that commit; with namesHash, only when the copy
-	 * renames exactly the names the gate verified. Otherwise the plain fork
-	 * loads (morph: null) and one log line says why: this never fails a load.
+	 * when the ref resolves to that commit; with fingerprint, only when the
+	 * seed makes that copy (a changed secret does not); with namesHash, only
+	 * when the copy renames exactly the names the gate verified. Otherwise the
+	 * plain fork loads (morph: null) and one log line says why: this never
+	 * fails a load.
 	 */
-	morph?: { epoch: number; onlyAt?: string; namesHash?: string };
+	morph?: { epoch: number; onlyAt?: string; fingerprint?: string; namesHash?: string };
 }
 
 /** The renamed copy a fork loaded as. */
@@ -221,6 +223,10 @@ async function copyFor(env: Env, repoName: string, sha: string, plain: CachedBui
 	if (options.extraFiles) throw new PolymorphUnavailableError("a build with extra files (a candidate under validation) is never renamed");
 	if (morph.onlyAt !== undefined && morph.onlyAt !== sha) throw new PolymorphUnavailableError(`the copy is only for commit ${morph.onlyAt.slice(0, 7)}`);
 	const plan = await planCopy(env, { repo: repoName, sha, epoch: morph.epoch, fluidToml: plain.fluidToml });
+	// Another secret seeds another copy, one the gate never saw: refuse it before building anything.
+	if (morph.fingerprint !== undefined && morph.fingerprint !== plan.fingerprint) {
+		throw new PolymorphUnavailableError(`this copy's fingerprint ${plan.fingerprint} is not the verified copy's (${morph.fingerprint})`);
+	}
 	const seeded = `${repoName}:${sha}:m${plan.epoch}.${plan.fingerprint}`;
 	// A hash this isolate learned by building comes first; the caller's expected hash may name a copy built from it.
 	const hash = copyHashes.get(seeded) ?? morph.namesHash;
