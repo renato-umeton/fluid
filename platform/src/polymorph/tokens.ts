@@ -106,8 +106,10 @@ function readTokens(js: string, parsed: unknown, kinds: TokenKinds): SourceToken
 		if (start < previousEnd || end < start || end > js.length) throw shapeError(`token ${index} spans ${start} to ${end}, out of order or outside the source`);
 		previousEnd = end;
 		const raw = js.slice(start, end);
-		if (type === kinds.name) identifiers.push({ start, end, text: identifierText(raw, index) });
-		else if (type === kinds.string) strings.push(stringValue(raw, index));
+		// A string module export or import name (export { a as "b" }) comes as a name token with its quotes: it is text.
+		const quotedName = type === kinds.name && (raw[0] === '"' || raw[0] === "'");
+		if (type === kinds.string || quotedName) strings.push(stringValue(raw, index));
+		else if (type === kinds.name) identifiers.push({ start, end, text: identifierText(raw, index) });
 		else if (type === kinds.template) strings.push(templateText(js, start, end, index));
 	}
 	if ((tokens[tokens.length - 1] as { type?: unknown }).type !== kinds.eof) throw shapeError("the last token is not the end of the file");
@@ -167,12 +169,13 @@ function decodeEscapes(text: string): string {
 }
 
 // A fixed sample covering every token the renamer relies on: import and
-// export names, member names after "." and "?.", object keys and shorthand,
-// computed keys, template text and substitutions, private class members, and
-// an escaped identifier. If sucrase ever reads it differently, renaming stops.
-const SAMPLE = 'import { a as b } from "./m.js";\nexport const c = { d: b?.e, f, [g]: `h${i.j}k`, "l": 1 };\nclass M { #n = 1; o() { return this.#n; } }\np\\u0071;\n';
-const SAMPLE_IDENTIFIERS = ["a", "as", "b", "from", "c", "d", "b", "e", "f", "g", "i", "j", "M", "n", "o", "n", "pq"];
-const SAMPLE_STRINGS = ["./m.js", "h", "k", "l"];
+// export names (string names too), member names after "." and "?.", object
+// keys and shorthand, computed keys, template text and substitutions, private
+// class members, and an escaped identifier. If sucrase ever reads it
+// differently, renaming stops.
+const SAMPLE = 'import { a as b } from "./m.js";\nexport const c = { d: b?.e, f, [g]: `h${i.j}k`, "l": 1 };\nclass M { #n = 1; o() { return this.#n; } }\np\\u0071;\nexport { c as "v w" };\n';
+const SAMPLE_IDENTIFIERS = ["a", "as", "b", "from", "c", "d", "b", "e", "f", "g", "i", "j", "M", "n", "o", "n", "pq", "c", "as"];
+const SAMPLE_STRINGS = ["./m.js", "h", "k", "l", "v w"];
 
 function checkSample({ identifiers, strings }: SourceTokens): void {
 	const names = identifiers.map((token) => token.text);

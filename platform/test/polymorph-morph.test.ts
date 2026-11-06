@@ -74,6 +74,12 @@ describe("scanTokens", () => {
 		expect(scanTokens(`f("c\\${lineSeparator}d");`).strings).toEqual(["cd"]);
 	});
 
+	it("reads string module export and import names as text, not as identifiers", () => {
+		expect(scanTokens('const a = 1; export { a as "some name" };')).toMatchObject({ strings: ["some name"] });
+		expect(scanTokens('const a = 1; export { a as "some name" };').identifiers.map((token) => token.text)).toEqual(["a", "a", "as"]);
+		expect(scanTokens("import { 'evi\\x64ence' as x } from \"./a.js\";")).toMatchObject({ strings: ["evidence", "./a.js"] });
+	});
+
 	it("accepts identifiers with a zero-width joiner or non-joiner", () => {
 		expect(scanTokens("const a\\u200cb = 1;").identifiers[0]!.text).toBe(`a${String.fromCharCode(0x200c)}b`);
 	});
@@ -236,6 +242,14 @@ describe("usableNames", () => {
 		const morphed = morphModuleMap(map, usable);
 		expect(jsOf(morphed, "app/b.js")).toBe('import { secretName$abcd1234, otherName } from "./a.js";\nexport const thirdName$abcd1234 = () => [secretName$abcd1234(), otherName({})];');
 		expect(() => morphModuleMap(map, variants)).toThrow(/"otherName" appears in a string or template text in app\/a\.js/);
+	});
+
+	it("skips a name another module imports by its string name", () => {
+		const map = forkMap({
+			"app/a.ts": "export const secretName = 1;",
+			"app/b.ts": 'import { "secretName" as value } from "./a.js";\nexport const read = () => value;',
+		});
+		expect(usableNames(variants, map).skipped).toEqual([{ name: "secretName", reason: "appears in a string or template text in app/b.js" }]);
 	});
 
 	it("gives one reason per skipped name, naming every place the fork's text uses it", () => {
