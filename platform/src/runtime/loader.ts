@@ -125,8 +125,8 @@ export interface LoadOptions {
 	 * when the ref resolves to that commit; with fingerprint, only when the
 	 * seed makes that copy (a changed secret does not); with namesHash, only
 	 * when the copy renames exactly the names the gate verified. Otherwise the
-	 * plain fork loads (morph: null) and one log line says why: this never
-	 * fails a load.
+	 * plain fork loads (morph: null) and one log line per reason (per fork
+	 * commit and epoch) says why: this never fails a load.
 	 */
 	morph?: { epoch: number; onlyAt?: string; fingerprint?: string; namesHash?: string };
 }
@@ -246,6 +246,18 @@ async function copyFor(env: Env, repoName: string, sha: string, plain: CachedBui
 	return build;
 }
 
+/** Plain-fallback lines already logged, by repo:sha:epoch and reason: the live path loads on every ask, and one line per reason says enough. */
+const reportedFallbacks = new Set<string>();
+const REPORTED_FALLBACK_LIMIT = 1000;
+
+function reportPlain(repo: string, sha: string, epoch: number, reason: string): void {
+	const key = `${repo}:${sha}:${epoch}:${reason}`;
+	if (reportedFallbacks.has(key)) return;
+	if (reportedFallbacks.size >= REPORTED_FALLBACK_LIMIT) reportedFallbacks.delete(reportedFallbacks.values().next().value!);
+	reportedFallbacks.add(key);
+	console.warn(`polymorph: ${repo}@${sha.slice(0, 7)} runs plain: ${reason}`);
+}
+
 /** Resolves `ref` (branch, tag, or SHA) in `repoName` and returns an RPC handle to its runtime. */
 export async function loadForkRuntime(deps: RuntimeDeps, repoName: string, ref = "main", options: LoadOptions = {}): Promise<LoadedFork> {
 	if (options.extraFiles && !options.variant) throw new Error("loadForkRuntime: extraFiles requires a variant");
@@ -264,7 +276,7 @@ export async function loadForkRuntime(deps: RuntimeDeps, repoName: string, ref =
 			copy = copied.copy;
 		} catch (error) {
 			// Whatever stops a copy (no secret, no list, code the renamer cannot read, Artifacts failing), the plain fork still serves.
-			console.warn(`polymorph: ${repoName}@${sha.slice(0, 7)} runs plain: ${error instanceof Error ? error.message : String(error)}`);
+			reportPlain(repoName, sha, options.morph.epoch, error instanceof Error ? error.message : String(error));
 		}
 	}
 	const id = isolateId(repoName, sha, { variant: options.variant, useModel: options.useModel === true, ...(copy ? { copy } : {}) });

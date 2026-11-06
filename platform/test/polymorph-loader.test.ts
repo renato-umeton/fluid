@@ -103,6 +103,7 @@ beforeAll(() => {
 		// More JavaScript in one module than the renamer reads: V8 runs it, the renamer will not.
 		"user-big": { ...published, "app/big.js": `// ${"x".repeat(SCAN_LIMITS.moduleChars)}\nexport const big = 1;\n` },
 		"user-reflect": reflecting,
+		"user-flaky": { ...published, "app/flaky.ts": "export const flaky = 1;\n" },
 		"user-weight": { ...weighing, "tests/user/manifest.json": JSON.stringify({ probes: [weightProbe] }, null, 2) },
 		"user-weight-untested": weighing,
 		"user-weight-e2e": { ...weighing, "tests/user/e2e.json": JSON.stringify({ suite: "e2e", scenarios: [{ id: "weighed", steps: [{ op: "ask", request: weighed }] }] }) },
@@ -284,6 +285,42 @@ describe("loadForkRuntime with a renamed copy", () => {
 		expect(String(warn.mock.calls[0]![0])).toMatch(/runs plain: this copy's fingerprint [0-9a-f]{8} is not the verified copy's \(00000000\)$/);
 		expect(reads.mock.calls.map(([args]) => args.path)).toEqual([]);
 	});
+
+	it("logs each reason once per fork commit and epoch, not on every load", async () => {
+		const warn = warnings();
+		const load = (morph: NonNullable<Parameters<typeof loadForkRuntime>[3]>["morph"]) => loadForkRuntime(deps, "user-1", "main", { morph });
+		for (let i = 0; i < 3; i++) await load({ epoch: 12, namesHash: "11111111" });
+		expect(warn).toHaveBeenCalledTimes(1);
+		await load({ epoch: 13, namesHash: "11111111" });
+		await load({ epoch: 12, onlyAt: "e".repeat(40) });
+		await load({ epoch: 12, onlyAt: "e".repeat(40) });
+		expect(warn.mock.calls.map(([line]) => String(line).replace(/^.* runs plain: /, ""))).toEqual([
+			expect.stringMatching(/^this copy renames other names .* \(11111111\)$/),
+			expect.stringMatching(/^this copy renames other names .* \(11111111\)$/),
+			"the copy is only for commit eeeeeee",
+		]);
+	});
+
+	it(
+		"serves the plain fork while Artifacts fails to read the fork's tests, and the copy on the next load",
+		async () => {
+			const warn = warnings();
+			const git = t.artifacts.repos.get("user-flaky")!.git;
+			const read = git.readFile.bind(git);
+			let failures = 0;
+			vi.spyOn(git, "readFile").mockImplementation(async (args: { ref: string; path: string }) => {
+				if (args.path === "tests/user/manifest.json" && failures++ === 0) throw new Error("Artifacts: 503 service unavailable");
+				return read(args);
+			});
+			const first = await loadForkRuntime(deps, "user-flaky", "main", { morph: { epoch: 1 } });
+			const second = await loadForkRuntime(deps, "user-flaky", "main", { morph: { epoch: 1 } });
+			expect([first.morph, first.isolateId]).toEqual([null, `user-flaky:${heads["user-flaky"]}`]);
+			expect(String(warn.mock.calls[0]![0])).toMatch(/runs plain: Artifacts: 503 service unavailable$/);
+			expect(copyOf(second).epoch).toBe(1);
+			expect(warn).toHaveBeenCalledTimes(1);
+		},
+		SLOW_MS,
+	);
 
 	it("never renames a build with extra files, which only a candidate check makes", async () => {
 		const warn = warnings();
