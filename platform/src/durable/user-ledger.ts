@@ -24,6 +24,8 @@ export interface RunTimeRecord {
 	stock_tag: string;
 	/** Set by the platform on a re-ask (override or attestation): the answer_id of the question's first answer. */
 	reask_of?: string;
+	/** Set by the platform when a renamed copy of the fork answered (polymorph/): the copy's fingerprint. */
+	variant?: string;
 	[key: string]: Json | undefined;
 }
 
