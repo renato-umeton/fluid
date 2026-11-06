@@ -5,7 +5,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import stockSource from "../src/generated/stock-source.json";
 import synthetic from "../src/generated/synthetic.json";
 import { APP_MODULE, ENTRY_MODULE, ForkCodeError, RUNNER_ENTRY_MODULE, buildModuleMap, buildRunnerModuleMap, entrySource, isRuntimePath, moduleName, transformTs } from "../src/runtime/modules.ts";
-import { askCard, MAX_CARD_CHARS } from "../src/runtime/loader.ts";
+import { askLoaded, MAX_CARD_CHARS, type LoadedFork } from "../src/runtime/loader.ts";
 
 const files = stockSource.files as Record<string, string>;
 
@@ -148,19 +148,21 @@ describe("transformed stock runtime", () => {
 
 describe("card serialization across RPC", () => {
 	const fork = (value: unknown) => ({ ask: async () => value as string });
+	// A plain fork answering with value, asked the only way the platform asks one.
+	const askPlain = (value: unknown) => askLoaded({ fork: fork(value), morph: null } as LoadedFork, {});
 
 	it("the generated entry returns the card as a JSON string", () => {
 		expect(entrySource()).toContain("return JSON.stringify(card);");
 	});
 
 	it("parses a JSON card into plain data", async () => {
-		expect(await askCard(fork(JSON.stringify({ mode: "clinical", computed_dose: null })), {})).toEqual({ mode: "clinical", computed_dose: null });
+		expect(await askPlain(JSON.stringify({ mode: "clinical", computed_dose: null }))).toEqual({ mode: "clinical", computed_dose: null });
 	});
 
 	it("refuses anything that is not a JSON object string", async () => {
-		await expect(askCard(fork({ mode: "clinical" }), {})).rejects.toThrow(/JSON card/);
-		await expect(askCard(fork("[1]"), {})).rejects.toThrow(/not a JSON object/);
-		await expect(askCard(fork(`"${"x".repeat(MAX_CARD_CHARS)}"`), {})).rejects.toThrow(/larger than/);
+		await expect(askPlain({ mode: "clinical" })).rejects.toThrow(/JSON card/);
+		await expect(askPlain("[1]")).rejects.toThrow(/not a JSON object/);
+		await expect(askPlain(`"${"x".repeat(MAX_CARD_CHARS)}"`)).rejects.toThrow(/larger than/);
 	});
 
 	it("marks fork code that does not build as the fork's fault", () => {

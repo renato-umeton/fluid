@@ -13,7 +13,8 @@ import { POLYMORPH_LIST_PATH, parsePolymorphList } from "../src/polymorph/list.t
 import { deriveSeed, fingerprint, namesHash } from "../src/polymorph/names.ts";
 import { SCAN_LIMITS } from "../src/polymorph/tokens.ts";
 import { scanRequest } from "../src/polymorph/tripwire.ts";
-import { askCard, askLoaded, ForkRuntimeError, loadForkRuntime, type LoadedFork, type RuntimeDeps } from "../src/runtime/loader.ts";
+import * as loaderModule from "../src/runtime/loader.ts";
+import { askLoaded, ForkRuntimeError, loadForkRuntime, type LoadedFork, type RuntimeDeps } from "../src/runtime/loader.ts";
 import { releaseMetadata, releaseMetadataPath } from "../src/stock/releases.ts";
 import { apiEnv } from "./helpers/api-env.ts";
 import { fakeLoader } from "./helpers/fake-loader.ts";
@@ -192,7 +193,7 @@ describe("loadForkRuntime with a renamed copy", () => {
 			expect([copy.epoch, copy.fingerprint, copy.namesHash, copy.skipped]).toEqual([1, print, await namesHash(listed), []]);
 			expect([...copy.names.keys()]).toEqual(listed);
 			expect([...copy.names.values()].every((renamed, i) => renamed.startsWith(`${listed[i]}$`))).toBe(true);
-			await askCard(loaded.fork, requests.administrative);
+			await askLoaded(loaded, requests.administrative);
 			expect(loader.built).toContain(loaded.isolateId);
 		},
 		SLOW_MS,
@@ -204,7 +205,7 @@ describe("loadForkRuntime with a renamed copy", () => {
 			const plain = await loadForkRuntime(deps, "user-1", "main");
 			const copy = await loadForkRuntime(deps, "user-1", "main", { morph: { epoch: 1 } });
 			for (const request of Object.values(requests)) {
-				expect(cardDifferences(await askCard(plain.fork, request), await askCard(copy.fork, request))).toEqual([]);
+				expect(cardDifferences(await askLoaded(plain, request), await askLoaded(copy, request))).toEqual([]);
 			}
 		},
 		SLOW_MS,
@@ -219,7 +220,7 @@ describe("loadForkRuntime with a renamed copy", () => {
 			expect([first.isolateId, second.isolateId]).toEqual([await copyId("user-1", 2), await copyId("user-1", 3)]);
 			expect(again.isolateId).toBe(first.isolateId);
 			expect(copyOf(first).names.get("researchNeedsAttestation")).not.toBe(copyOf(second).names.get("researchNeedsAttestation"));
-			for (const loaded of [first, second, again]) await askCard(loaded.fork, requests.administrative);
+			for (const loaded of [first, second, again]) await askLoaded(loaded, requests.administrative);
 			expect(loader.built.filter((id) => id === first.isolateId)).toHaveLength(1);
 			expect(loader.built).toContain(second.isolateId);
 		},
@@ -257,7 +258,7 @@ describe("loadForkRuntime with a renamed copy", () => {
 			expect(line).toMatch(new RegExp(`^polymorph: ${repo}@${heads[repo]!.slice(0, 7)} runs plain: `));
 			expect(line).toMatch(reason);
 			expect(line).not.toMatch(/\$[0-9a-z]{8}/);
-			expect((await askCard(loaded.fork, requests.administrative)).mode).toBe("administrative");
+			expect((await askLoaded(loaded, requests.administrative)).mode).toBe("administrative");
 		},
 		SLOW_MS,
 	);
@@ -312,10 +313,15 @@ describe("asking a renamed copy", () => {
 		SLOW_MS,
 	);
 
-	it("asks a plain fork exactly as askCard does", async () => {
+	it("gives a plain fork's card and errors as the fork sent them", async () => {
 		const plain = await loadForkRuntime(deps, "user-reflect", "main");
-		expect(cardDifferences(await askLoaded(plain, requests.research), await askCard(plain.fork, requests.research))).toEqual([]);
+		const sent = JSON.parse(await plain.fork.ask(requests.research, {}));
+		expect(cardDifferences(await askLoaded(plain, requests.research), sent)).toEqual([]);
 		await expect(askLoaded(plain, which)).rejects.toThrow(/^decision fields: /);
+	});
+
+	it("is the only way the loader offers to ask a fork, so no caller can skip the mapping", () => {
+		expect(Object.keys(loaderModule).filter((name) => /^ask/.test(name)).sort()).toEqual(["askFork", "askLoaded"]);
 	});
 });
 

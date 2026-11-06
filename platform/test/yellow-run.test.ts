@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { askCard, ForkRuntimeError, ForkTimeoutError } from "../src/runtime/loader.ts";
+import { askLoaded, ForkRuntimeError, ForkTimeoutError, type LoadedFork } from "../src/runtime/loader.ts";
 import { ForkCodeError } from "../src/runtime/modules.ts";
 import { hostError, runTierSafely } from "../src/yellow/run.ts";
 import { FORK_ERROR_PREFIX, type E2ETierResult } from "../src/yellow/tiers.ts";
@@ -16,11 +16,12 @@ describe("host errors in the end-to-end host", () => {
 		expect(hostError(new ForkTimeoutError("fork did not answer within 10000 ms")).message).not.toMatch(/^fork error/);
 	});
 
-	it("askCard reports a fork that throws or answers garbage as a fork runtime error", async () => {
-		await expect(askCard({ ask: async () => { throw new TypeError("cards is undefined"); } } as never, {})).rejects.toBeInstanceOf(ForkRuntimeError);
-		await expect(askCard({ ask: async () => 42 } as never, {})).rejects.toBeInstanceOf(ForkRuntimeError);
-		await expect(askCard({ ask: async () => "{not json" } as never, {})).rejects.toBeInstanceOf(ForkRuntimeError);
-		await expect(askCard({ ask: async () => JSON.stringify({ mode: "clinical" }) } as never, {})).resolves.toMatchObject({ mode: "clinical" });
+	it("askLoaded reports a fork that throws or answers garbage as a fork runtime error", async () => {
+		const plain = (ask: () => Promise<unknown>) => ({ fork: { ask }, morph: null }) as unknown as LoadedFork;
+		await expect(askLoaded(plain(async () => { throw new TypeError("cards is undefined"); }), {})).rejects.toBeInstanceOf(ForkRuntimeError);
+		await expect(askLoaded(plain(async () => 42), {})).rejects.toBeInstanceOf(ForkRuntimeError);
+		await expect(askLoaded(plain(async () => "{not json"), {})).rejects.toBeInstanceOf(ForkRuntimeError);
+		await expect(askLoaded(plain(async () => JSON.stringify({ mode: "clinical" })), {})).resolves.toMatchObject({ mode: "clinical" });
 	});
 });
 

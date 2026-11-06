@@ -51,19 +51,13 @@ export class ForkRuntimeError extends Error {
 }
 
 /**
- * Asks a fork and parses its card. The fork serializes the card itself, so
- * the platform and the gate only ever see plain JSON data: no RPC stubs,
- * getters, or toJSON methods that could answer differently on each read.
- */
-export async function askCard(fork: ForkEntrypoint, request: unknown, options?: AskOptions): Promise<AnswerCardLike> {
-	return askMapped(fork, request, options, null);
-}
-
-/**
- * Asks a loaded fork, as askCard does. A renamed copy's card text and error
- * messages have the copy's names mapped back to the originals before anything
- * else sees them, so the caller gets what the plain fork would have sent and
- * never a renamed name. Ask a loaded fork through this, never through askCard.
+ * Asks a loaded fork and parses its card. The fork serializes the card
+ * itself, so the platform and the gate only ever see plain JSON data: no RPC
+ * stubs, getters, or toJSON methods that could answer differently on each
+ * read. A renamed copy's card text and error messages have the copy's names
+ * mapped back to the originals before anything else sees them, so the caller
+ * gets what the plain fork would have sent and never a renamed name. It is
+ * the only way the platform asks a fork, so no caller can skip the mapping.
  */
 export function askLoaded(loaded: LoadedFork, request: unknown, options?: AskOptions): Promise<AnswerCardLike> {
 	return askMapped(loaded.fork, request, options, loaded.morph?.names ?? null);

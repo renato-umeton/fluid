@@ -1,5 +1,5 @@
 // The fork runtime and the gate through the platform's own code paths
-// (loadForkRuntime, askCard, runGate, serveAsk) on in-memory Artifacts repos
+// (loadForkRuntime, askLoaded, runGate, serveAsk) on in-memory Artifacts repos
 // and a fake Worker Loader. Stock is published at its bundled release tag and
 // user-1 is a fresh fork of it, so its main holds the same files. Nothing
 // reaches the network: fetch is the fake git remote, which serves only the
@@ -10,7 +10,7 @@ import { serveAsk } from "../src/api/ask.ts";
 import { runGate } from "../src/gate/run.ts";
 import { listRemoteRefs } from "../src/git/ops.ts";
 import { setTomlValue } from "../src/lib/toml.ts";
-import { askCard, loadForkRuntime, type RuntimeDeps } from "../src/runtime/loader.ts";
+import { askLoaded, loadForkRuntime, type RuntimeDeps } from "../src/runtime/loader.ts";
 import { isRuntimePath } from "../src/runtime/modules.ts";
 import { RefNotFoundError, resolveCommit } from "../src/runtime/refs.ts";
 import { listCommitFiles, openRepo, readCommitFiles } from "../src/runtime/repo-files.ts";
@@ -375,7 +375,7 @@ export class Probe extends WorkerEntrypoint {
 describe("loadForkRuntime", () => {
 	it("loads the fork's main into an isolate keyed by repo and commit, and the fork answers", async () => {
 		const loaded = await loadForkRuntime(deps, "user-1", "main");
-		const card = await askCard(loaded.fork, research);
+		const card = await askLoaded(loaded, research);
 		expect([loaded.repo, loaded.ref, loaded.sha, loaded.isolateId]).toEqual(["user-1", "main", main, `user-1:${main}`]);
 		expect(loader.built).toContain(`user-1:${main}`);
 		expect(card).toMatchObject({ mode: "research", computed_dose: { value: 7, unit: "mg" }, ledger: { fork_commit: main, stock_tag: TAG } });
@@ -383,8 +383,8 @@ describe("loadForkRuntime", () => {
 	});
 
 	it("reuses the isolate for the same commit instead of building it again", async () => {
-		await askCard((await loadForkRuntime(deps, "user-1", "main")).fork, research);
-		await askCard((await loadForkRuntime(deps, "user-1", main)).fork, research);
+		await askLoaded(await loadForkRuntime(deps, "user-1", "main"), research);
+		await askLoaded(await loadForkRuntime(deps, "user-1", main), research);
 		expect(loader.built.filter((id) => id === `user-1:${main}`)).toHaveLength(1);
 	});
 });
