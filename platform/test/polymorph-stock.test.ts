@@ -1,7 +1,9 @@
 // Every polymorphic copy of stock must answer every probe exactly like plain
-// stock. Renames stock's module map under five seeds, runs the invariant and
-// functional suites through the stock runner with an ask that sends each
-// request to both the plain app and the copy, and compares every card.
+// stock. Takes names the way the loader will (variantNames, then usableNames,
+// then morphModuleMap) under five seeds, runs the invariant and functional
+// suites through the stock runner with an ask that sends each request to both
+// the plain app and the copy, and compares every card. A fork that reads one
+// listed name by string key loses only that name and still answers the same.
 import { rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,7 +12,7 @@ import stockSource from "../src/generated/stock-source.json";
 import synthetic from "../src/generated/synthetic.json";
 import type { RunnerManifestResult } from "../src/gate/tiers.ts";
 import { cardDifferences, type CardDifference } from "../src/polymorph/equivalence.ts";
-import { POLYMORPH_LIST_PATH, parsePolymorphList } from "../src/polymorph/list.ts";
+import { POLYMORPH_LIST_PATH, parsePolymorphList, usableNames, type SkippedName } from "../src/polymorph/list.ts";
 import { morphModuleMap } from "../src/polymorph/morph.ts";
 import { deriveSeed, variantNames } from "../src/polymorph/names.ts";
 import { scanTokens } from "../src/polymorph/tokens.ts";
@@ -23,23 +25,33 @@ const listed = parsePolymorphList(files[POLYMORPH_LIST_PATH]!);
 const SECRET = "polymorph-stock-test-secret-0123";
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 const EPOCHS = [0, 1, 2, 3, 4];
-// Writing seven module maps to disk and running both suites five times takes
-// well under a second alone, but much longer while other work holds the disk.
+// Writing nine module maps to disk and running both suites six times takes
+// about a second alone, but much longer while other work holds the disk.
 const SLOW_MS = 60_000;
 
 type App = { ask(request: unknown, env: unknown): Promise<unknown> };
 type Runner = { runManifest(options: Record<string, unknown>): Promise<RunnerManifestResult> };
-type Copy = { epoch: number; variants: Map<string, string>; map: ModuleMap; app: App };
+type Copy = { usable: Map<string, string>; skipped: SkippedName[]; map: ModuleMap; app: App };
+type Found = { request: unknown; differences: CardDifference[] }[];
 
 const env = { data: synthetic, fluidToml: files["fluid.toml"] };
 const manifests = {
 	invariant: JSON.parse(files["tests/invariants/manifest.json"]!),
 	functional: JSON.parse(files["tests/functional/manifest.json"]!),
 };
+const TIERS = ["invariant", "functional"] as const;
 const plainMap = buildModuleMap(files);
+
+// A fork that reads one listed property by string key. Renaming that property
+// would leave the read pointing at the old name, so the copy must keep it.
+const keyedFiles = { ...files, "intent/classifier.ts": files["intent/classifier.ts"]!.replace("signal.evidence[mode]", 'signal["evidence"][mode]') };
+const keyedMap = buildModuleMap(keyedFiles);
+
 const dirs: string[] = [];
 const copies: Copy[] = [];
 let plainApp: App;
+let keyedApp: App;
+let keyedCopy: Copy;
 let runner: Runner;
 
 async function loadApp(map: ModuleMap, name: string): Promise<App> {
@@ -48,16 +60,21 @@ async function loadApp(map: ModuleMap, name: string): Promise<App> {
 	return (await materialize<{ default: App }>(map, dir, APP_MODULE, [ENTRY_MODULE])).default;
 }
 
+/** The loader's order: names for this copy, the ones this module map can use, then the renamed map. */
+async function makeCopy(map: ModuleMap, epoch: number, dir: string): Promise<Copy> {
+	const { usable, skipped } = usableNames(await variantNames(await deriveSeed(SECRET, "user-ada", SHA, epoch), listed), map);
+	const morphed = morphModuleMap(map, usable);
+	return { usable, skipped, map: morphed, app: await loadApp(morphed, dir) };
+}
+
 beforeAll(async () => {
 	plainApp = await loadApp(plainMap, ".tmp-polymorph-plain");
+	keyedApp = await loadApp(keyedMap, ".tmp-polymorph-keyed-plain");
 	const runnerDir = join(here, ".tmp-polymorph-runner");
 	dirs.push(runnerDir);
 	runner = await materialize<Runner>(buildRunnerModuleMap(files), runnerDir, "tests/runner.js", [RUNNER_ENTRY_MODULE]);
-	for (const epoch of EPOCHS) {
-		const variants = await variantNames(await deriveSeed(SECRET, "user-ada", SHA, epoch), listed);
-		const map = morphModuleMap(plainMap, variants);
-		copies.push({ epoch, variants, map, app: await loadApp(map, `.tmp-polymorph-copy-${epoch}`) });
-	}
+	for (const epoch of EPOCHS) copies.push(await makeCopy(plainMap, epoch, `.tmp-polymorph-copy-${epoch}`));
+	keyedCopy = await makeCopy(keyedMap, 0, ".tmp-polymorph-keyed-copy");
 }, SLOW_MS);
 afterAll(() => {
 	for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
@@ -68,14 +85,22 @@ function run(manifest: unknown, ask: (request: unknown) => Promise<unknown>): Pr
 	return runner.runManifest({ app: { ask }, manifest, forkFiles: { "fluid.toml": files["fluid.toml"] }, env: {}, samples: 1 });
 }
 
-/** Sends each request to plain stock and to the copy at once, records any difference, and answers with the copy's card. */
-function dualAsk(copy: Copy, found: { request: unknown; differences: CardDifference[] }[]) {
+/** Sends each request to the plain app and to its copy at once, records any difference, and answers with the copy's card. */
+function dualAsk(plain: App, copy: App, found: Found) {
 	return async (request: unknown) => {
-		const [plainCard, copyCard] = await Promise.all([plainApp.ask(request, env), copy.app.ask(request, env)]);
+		const [plainCard, copyCard] = await Promise.all([plain.ask(request, env), copy.ask(request, env)]);
 		const differences = cardDifferences(plainCard, copyCard);
 		if (differences.length > 0) found.push({ request, differences });
 		return copyCard;
 	};
+}
+
+/** Runs a suite against the plain app, then through the dual ask; returns what differed and both results. */
+async function compareSuite(tier: (typeof TIERS)[number], plain: App, copy: App) {
+	const plainResult = await run(manifests[tier], (request) => plain.ask(request, env));
+	const found: Found = [];
+	const copyResult = await run(manifests[tier], dualAsk(plain, copy, found));
+	return { plainResult, found, resultDifferences: cardDifferences(plainResult, copyResult) };
 }
 
 /** Identifier names used across a module map's JS modules, the generated entry aside. */
@@ -94,17 +119,26 @@ const sourceOf = (map: ModuleMap) =>
 		.join("\n");
 
 describe("polymorphic copies of stock", () => {
-	it.each(["invariant", "functional"] as const)("answer every %s probe exactly like plain stock, under five seeds", async (tier) => {
-		const plainResult = await run(manifests[tier], (request) => plainApp.ask(request, env));
-		expect(plainResult.passed).toBe(true);
-		expect(plainResult.total).toBe(manifests[tier].probes.length);
+	it.each(TIERS)(
+		"answer every %s probe exactly like plain stock, under five seeds",
+		async (tier) => {
+			for (const [index, copy] of copies.entries()) {
+				const { plainResult, found, resultDifferences } = await compareSuite(tier, plainApp, copy.app);
+				expect(plainResult.passed).toBe(true);
+				expect(plainResult.total).toBe(manifests[tier].probes.length);
+				expect({ epoch: EPOCHS[index], found }).toEqual({ epoch: EPOCHS[index], found: [] });
+				expect(resultDifferences).toEqual([]);
+			}
+		},
+		SLOW_MS,
+	);
+
+	it("skip no listed name, since stock's own text uses none of them", () => {
 		for (const copy of copies) {
-			const found: { request: unknown; differences: CardDifference[] }[] = [];
-			const copyResult = await run(manifests[tier], dualAsk(copy, found));
-			expect({ epoch: copy.epoch, found }).toEqual({ epoch: copy.epoch, found: [] });
-			expect(cardDifferences(plainResult, copyResult)).toEqual([]);
+			expect(copy.skipped).toEqual([]);
+			expect([...copy.usable.keys()]).toEqual(listed);
 		}
-	}, SLOW_MS);
+	});
 
 	it("use every listed name in stock's JavaScript, so every one is renamed", () => {
 		const plainIdentifiers = identifiersOf(plainMap);
@@ -115,7 +149,7 @@ describe("polymorphic copies of stock", () => {
 		for (const copy of copies) {
 			const identifiers = identifiersOf(copy.map);
 			expect(listed.filter((name) => identifiers.has(name))).toEqual([]);
-			expect([...copy.variants.values()].filter((variant) => !identifiers.has(variant))).toEqual([]);
+			expect([...copy.usable.values()].filter((variant) => !identifiers.has(variant))).toEqual([]);
 		}
 	});
 
@@ -129,5 +163,32 @@ describe("polymorphic copies of stock", () => {
 	it("differ from plain stock and from each other", () => {
 		const sources = [plainMap, ...copies.map((copy) => copy.map)].map(sourceOf);
 		expect(new Set(sources).size).toBe(sources.length);
+	});
+});
+
+describe("a polymorphic copy of a fork that reads a listed name by string key", () => {
+	it("skips only that name and renames every other one", () => {
+		expect(keyedFiles["intent/classifier.ts"]).toContain('signal["evidence"][mode]');
+		expect(keyedCopy.skipped).toEqual([{ name: "evidence", reason: "appears in a string or template text in intent/classifier.js" }]);
+		expect([...keyedCopy.usable.keys()]).toEqual(listed.filter((name) => name !== "evidence"));
+		const identifiers = identifiersOf(keyedCopy.map);
+		expect(identifiers.has("evidence")).toBe(true);
+		expect(listed.filter((name) => name !== "evidence" && identifiers.has(name))).toEqual([]);
+	});
+
+	it.each(TIERS)(
+		"answers every %s probe exactly like the plain fork",
+		async (tier) => {
+			const { plainResult, found, resultDifferences } = await compareSuite(tier, keyedApp, keyedCopy.app);
+			expect(plainResult.passed).toBe(true);
+			expect(found).toEqual([]);
+			expect(resultDifferences).toEqual([]);
+		},
+		SLOW_MS,
+	);
+
+	it("is refused by morphModuleMap when handed every name, the skipped one included", async () => {
+		const every = await variantNames(await deriveSeed(SECRET, "user-ada", SHA, 0), listed);
+		expect(() => morphModuleMap(keyedMap, every)).toThrow(/"evidence" appears in a string or template text in intent\/classifier\.js/);
 	});
 });
