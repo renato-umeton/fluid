@@ -11,15 +11,25 @@
 // Kept from a real isolate: each id has its own folder and so its own module
 // instances (module state stays per isolate), the env is copied into each
 // isolate, calls cross a boundary like Workers RPC (see overRpc), and an
-// isolate whose modules import anything but cloudflare:workers and each
-// other does not start (see assertSelfContained). Not kept: every fake
-// isolate shares one Node realm with the platform and the test, so globals
-// and built-in prototypes are common to all of them and fork code that
-// patches them affects everyone; a dynamic import whose specifier is not a
-// string literal resolves as in Node; globalOutbound null is not enforced
-// (stub fetch to keep tests off the network); and there are no CPU or memory
-// limits.
+// isolate whose modules import a package does not start (see
+// assertSelfContained).
+//
+// Not kept:
+// - Every fake isolate shares one Node realm with the platform and the test,
+//   so globals and built-in prototypes are common to all of them, and fork
+//   code that patches them affects everyone.
+// - A Node builtin loads Node's implementation, which differs from workerd's
+//   at call time (workerd's node:fs is virtual, its child_process throws);
+//   Node also has builtins workerd lacks.
+// - workerd resolves a bare or absolute specifier such as "lib.js" or
+//   "/lib.js" to a module of that name, and provides cloudflare:sockets; the
+//   fake refuses both.
+// - A dynamic import whose specifier is not a string literal resolves as in
+//   Node.
+// - globalOutbound null is not enforced (stub fetch to keep tests off the
+//   network), and there are no CPU or memory limits.
 import { mkdtempSync, rmSync } from "node:fs";
+import { isBuiltin } from "node:module";
 import { dirname, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
@@ -124,12 +134,14 @@ export function fakeLoader() {
 }
 
 /**
- * Refuses to start an isolate, as the real loader would, when a module
- * imports anything but cloudflare:workers or a relative path to another of
- * its modules; Node would otherwise resolve it from node_modules or its
- * builtins. A dynamic import is checked when its specifier is a string
- * literal (stricter than workerd, which fails only when the import runs);
- * any other dynamic import resolves as in Node when it runs.
+ * Refuses to start an isolate when a module imports anything but a relative
+ * path to another of its modules, cloudflare:workers, or a Node builtin
+ * (workerd's loader provides node: modules and bare names such as path and
+ * fs at the platform's compatibility date). A package, which Node would
+ * resolve from node_modules, is refused, as the real loader refuses it. A
+ * dynamic import is checked when its specifier is a string literal (stricter
+ * than workerd, which fails only when the import runs); any other dynamic
+ * import resolves as in Node when it runs.
  */
 function assertSelfContained(id: string, modules: ModuleMap["modules"]): void {
 	for (const [name, module] of Object.entries(modules)) {
@@ -143,10 +155,10 @@ function assertSelfContained(id: string, modules: ModuleMap["modules"]): void {
 			...dynamicImports.flatMap((entry) => stringLiteral(module.js.slice(entry.moduleRequest.start, entry.moduleRequest.end))),
 		];
 		for (const specifier of specifiers) {
-			if (specifier === "cloudflare:workers") continue;
+			if (specifier === "cloudflare:workers" || isBuiltin(specifier)) continue;
 			const target = /^\.\.?\//.test(specifier) ? posix.normalize(posix.join(posix.dirname(name), specifier)) : null;
 			if (target === null || !Object.hasOwn(modules, target)) {
-				throw new Error(`${id}: ${name} imports "${specifier}", which is not a module of this isolate (an isolate resolves only cloudflare:workers and relative paths to its own modules)`);
+				throw new Error(`${id}: ${name} imports "${specifier}", which is not a module of this isolate (the fake accepts relative paths to the isolate's own modules, cloudflare:workers, and Node builtins)`);
 			}
 		}
 	}

@@ -302,18 +302,25 @@ export class Probe extends WorkerEntrypoint {
 		expect(await probeOf("probe_twin", () => code("B")).whoami!()).toBe("B");
 	});
 
-	it("refuses to start an isolate whose modules import anything but cloudflare:workers and their own modules", async () => {
+	describe("checks imports when an isolate starts", () => {
 		const importing = (line: string) => () => ({ ...code(), modules: { "probe.js": { js: `${line}\n${probeSource("A")}` } } });
-		const cases: [string, string, string][] = [
-			["probe:bare", 'import "sucrase";', "sucrase"],
-			["probe:builtin", 'import { join } from "node:path";', "node:path"],
-			["probe:missing", 'export * from "./missing.js";', "./missing.js"],
-			["probe:outside", 'import "../outside.js";', "../outside.js"],
-			["probe:dynamic", 'const later = () => import("node:fs");', "node:fs"],
-		];
-		for (const [id, line, specifier] of cases) {
-			await expect(probeOf(id, importing(line)).whoami!()).rejects.toThrow(`${id}: probe.js imports "${specifier}"`);
-		}
+
+		it("refuses what the real loader refuses too: a package, or a relative path outside the isolate's modules", async () => {
+			const cases: [string, string, string][] = [
+				["probe:bare", 'import "sucrase";', "sucrase"],
+				["probe:missing", 'export * from "./missing.js";', "./missing.js"],
+				["probe:outside", 'import "../outside.js";', "../outside.js"],
+				["probe:dynamic", 'const later = () => import("sucrase");', "sucrase"],
+			];
+			for (const [id, line, specifier] of cases) {
+				await expect(probeOf(id, importing(line)).whoami!()).rejects.toThrow(`${id}: probe.js imports "${specifier}"`);
+			}
+		});
+
+		it("accepts Node builtins, which the real loader provides at the platform's compatibility date", async () => {
+			const builtins = 'import { join } from "node:path";\nimport { posix } from "path";\nconst later = () => import("node:fs");';
+			expect(await probeOf("probe:builtins", importing(builtins)).whoami!()).toBe("A");
+		});
 	});
 
 	it("keeps one isolate per id when the same code is requested again", async () => {
