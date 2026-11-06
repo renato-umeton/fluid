@@ -127,6 +127,29 @@ export function parseDemo(text) {
   return { demo: problems.length ? null : data, problems };
 }
 
+/**
+ * Fetches the recording at `url` with `fetchFn`: `{ demo, missing, problems }`. `missing` is true when there is no
+ * file to read: an error status, a failed request, or an HTML page a server sent in its place. When `demo` is null,
+ * `problems` says why.
+ */
+export async function readRecording(fetchFn, url) {
+  try {
+    const res = await fetchFn(url, { headers: { accept: "application/json" }, cache: "no-cache" });
+    if (!res.ok) return { demo: null, missing: true, problems: [`HTTP ${res.status}`] };
+    if (/text\/html/i.test(res.headers?.get("content-type") ?? "")) return { demo: null, missing: true, problems: ["an HTML page was sent in its place"] };
+    return { missing: false, ...parseDemo(await res.text()) };
+  } catch (err) {
+    return { demo: null, missing: true, problems: [`the request failed: ${err.message}`] };
+  }
+}
+
+/** What the page says without a recording to show, in three parts; the middle one is the command, shown as code. */
+export function noRecordingMessage(missing) {
+  return missing
+    ? ["No recorded run yet. Record one with ", RECORD_COMMAND, ", then reload this page."]
+    : ["The recorded run in data/polymorph-demo.json cannot be shown (the console says why). Record it again with ", RECORD_COMMAND, ", then reload this page."];
+}
+
 function findAttack(data, attackId) {
   const attack = data.attacks.find((a) => a.id === attackId);
   if (!attack) throw new Error(`the recording has no attack ${JSON.stringify(attackId)}`);

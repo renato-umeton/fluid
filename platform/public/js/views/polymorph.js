@@ -7,7 +7,7 @@
 // no valid recording the page says so and shows no numbers. Built with h()
 // only, and every tile state is written out, never shown by color alone.
 import { h, mount } from "../dom.js";
-import { RECORD_COMMAND, afterRotationLine, equivalenceLine, introLines, latestOnly, parseDemo, replayer, scoreRows } from "../polymorph-replay.js";
+import { afterRotationLine, equivalenceLine, introLines, latestOnly, noRecordingMessage, readRecording, replayer, scoreRows } from "../polymorph-replay.js";
 
 export const title = "Polymorphic installation";
 export const sub = "Every fork runs its own renamed copy of upstream's code.";
@@ -28,14 +28,18 @@ let polymorphOn = true;
 /** The replay on the page, or null before a recording is shown. */
 let replay = null;
 /** Only the latest render shows its recording, so a slow load never replaces a newer page. */
-const loads = latestOnly(loadDemo);
+const loads = latestOnly(load);
 
 export function render(root) {
   leave();
   mount(root, h("p", { class: "muted" }, "Loading the recorded run..."));
-  return loads.start((demo) => {
-    if (demo) layout(root, demo);
-    else mount(root, h("p", { class: "empty" }, "No recorded run yet. Record one with ", h("code", {}, RECORD_COMMAND), ", then reload this page."));
+  return loads.start(({ demo, missing }) => {
+    if (demo) {
+      layout(root, demo);
+      return;
+    }
+    const [lead, command, end] = noRecordingMessage(missing);
+    mount(root, h("p", { class: "empty" }, lead, h("code", {}, command), end));
   });
 }
 
@@ -44,21 +48,13 @@ export function leave() {
   replay?.stop();
 }
 
-/** The recording, or null when the file is missing or cannot be shown; the console says which. */
-async function loadDemo() {
-  try {
-    const res = await fetch(DATA_URL, { headers: { accept: "application/json" }, cache: "no-cache" });
-    if (!res.ok) {
-      console.info(`Fluid: no polymorph recording at ${DATA_URL.pathname} (HTTP ${res.status}).`);
-      return null;
-    }
-    const { demo, problems } = parseDemo(await res.text());
-    if (!demo) console.warn(`Fluid: the polymorph recording at ${DATA_URL.pathname} cannot be shown: ${problems.join("; ")}`);
-    return demo;
-  } catch (err) {
-    console.warn(`Fluid: could not read the polymorph recording (${err.message}).`);
-    return null;
-  }
+/** Reads the recording; when there is none to show, the console says why. */
+async function load() {
+  const result = await readRecording(fetch, DATA_URL);
+  const why = result.problems.join("; ");
+  if (result.missing) console.info(`Fluid: no polymorph recording at ${DATA_URL.pathname} (${why}).`);
+  else if (!result.demo) console.warn(`Fluid: the polymorph recording at ${DATA_URL.pathname} cannot be shown: ${why}`);
+  return result;
 }
 
 function layout(root, demo) {

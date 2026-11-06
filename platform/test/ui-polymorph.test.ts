@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // @ts-expect-error plain ES module from the static UI
-import { afterRotationLine, equivalenceLine, introLines, latestOnly, outcomeLine, parseDemo, replayer, replaySteps, scoreRows, tileStates, validateDemo } from "../public/js/polymorph-replay.js";
+import { afterRotationLine, equivalenceLine, introLines, latestOnly, noRecordingMessage, outcomeLine, parseDemo, readRecording, replayer, replaySteps, scoreRows, tileStates, validateDemo } from "../public/js/polymorph-replay.js";
 // @ts-expect-error plain ES module from the static UI
 import * as view from "../public/js/views/polymorph.js";
 
@@ -171,6 +171,38 @@ describe("parseDemo", () => {
 
 	it("has no recording when the JSON has the wrong shape", () => {
 		expect(parseDemo(JSON.stringify({ version: 1 })).demo).toBeNull();
+	});
+});
+
+describe("readRecording", () => {
+	const json = { "content-type": "application/json" };
+	const answer = (body: string, init: ResponseInit) => async () => new Response(body, init);
+
+	it.each<[string, () => Promise<Response>, boolean, boolean]>([
+		["a valid recording", answer(JSON.stringify(demo()), { headers: json }), true, false],
+		["no file", answer("not found", { status: 404 }), false, true],
+		["a page served in its place", answer("<!doctype html><title>Fluid</title>", { headers: { "content-type": "text/html; charset=utf-8" } }), false, true],
+		["a file that is not JSON", answer("version = 1", { headers: json }), false, false],
+		["a file of the wrong shape", answer(JSON.stringify({ version: 1 }), { headers: json }), false, false],
+		["nothing, when the network fails", async () => { throw new TypeError("Failed to fetch"); }, false, true],
+	])("reads %s", async (_what, fetchFn, shown, missing) => {
+		const out = await readRecording(fetchFn, "data/polymorph-demo.json");
+		expect({ shown: out.demo !== null, missing: out.missing, explained: out.problems.length > 0 }).toEqual({ shown, missing, explained: !shown });
+	});
+
+	it("asks for the file past any cached copy, so a new recording shows on reload", async () => {
+		const calls: unknown[][] = [];
+		await readRecording(async (...args: unknown[]) => { calls.push(args); return new Response(JSON.stringify(demo()), { headers: json }); }, "data/polymorph-demo.json");
+		expect(calls).toEqual([["data/polymorph-demo.json", { headers: { accept: "application/json" }, cache: "no-cache" }]]);
+	});
+
+	it.each<[boolean, string]>([
+		[true, "No recorded run yet. Record one with cd platform && npm run polymorph:record, then reload this page."],
+		[false, "The recorded run in data/polymorph-demo.json cannot be shown (the console says why). Record it again with cd platform && npm run polymorph:record, then reload this page."],
+	])("when the file is missing: %s, says %j, with the command on its own", (missing, text) => {
+		const parts = noRecordingMessage(missing);
+		expect(parts.join("")).toBe(text);
+		expect(parts[1]).toBe("cd platform && npm run polymorph:record");
 	});
 });
 
