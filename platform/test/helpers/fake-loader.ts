@@ -54,6 +54,7 @@ export function fakeLoader() {
 	// A directory per loader: test files run in parallel, and a new loader starts with fresh module instances.
 	const dir = mkdtempSync(join(TEST_DIR, ".tmp-loader-"));
 	const built: string[] = [];
+	const background: Promise<unknown>[] = [];
 	const factories = new Map<string, () => WorkerCode | Promise<WorkerCode>>();
 	const codes = new Map<string, Promise<WorkerCode>>();
 	const isolates = new Map<string, Promise<{ exports: Record<string, unknown>; env: unknown }>>();
@@ -77,9 +78,18 @@ export function fakeLoader() {
 		return isolates.get(id)!;
 	};
 
+	const waitUntil = (promise: unknown): void => {
+		const kept = Promise.resolve(promise);
+		// The handler only marks the rejection handled; it stays in `background` for a test to inspect.
+		kept.catch(() => undefined);
+		background.push(kept);
+	};
+
 	return {
-		/** Ids of the isolates whose factory ran, in order. */
+		/** Ids of the isolates booted, in order. */
 		built,
+		/** What entrypoints handed to ctx.waitUntil, in order; inspect with Promise.allSettled. */
+		background,
 		get(id: string, factory: () => WorkerCode | Promise<WorkerCode>) {
 			const again = factories.has(id);
 			if (!again) factories.set(id, factory);
@@ -94,7 +104,7 @@ export function fakeLoader() {
 						await sameCode();
 						const { exports, env } = await isolate(id);
 						const Class = entrypointClass(exports, id, name);
-						const ctx = { props: options.props ?? {}, waitUntil: () => undefined };
+						const ctx = { props: options.props ?? {}, waitUntil };
 						// The stand-in WorkerEntrypoint ignores its constructor arguments, so env and ctx are set on the instance.
 						const instance = Object.assign(new Class(ctx, env), { ctx, env }) as Record<string, unknown>;
 						const fn = instance[method];

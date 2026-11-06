@@ -166,6 +166,10 @@ export class Probe extends WorkerEntrypoint {
   async whoami() {
     return ${JSON.stringify(who)};
   }
+  async later(fail) {
+    this.ctx.waitUntil(fail ? Promise.reject(new Error("background failure")) : Promise.resolve("done"));
+    return "answered";
+  }
 }
 `;
 	const code = (who = "A", env: Record<string, unknown> = { label: "from the factory", nested: { n: 1 } }) => ({
@@ -272,6 +276,15 @@ export class Probe extends WorkerEntrypoint {
 			first.n = 99;
 			expect(await probe.state!()).toEqual({ n: 1 });
 		});
+	});
+
+	it("collects what an entrypoint hands to ctx.waitUntil, a rejection included, without leaving it unhandled", async () => {
+		const probe = probeOf("probe:later");
+		expect([await probe.later!(true), await probe.later!(false)]).toEqual(["answered", "answered"]);
+		expect(await Promise.allSettled(loader.background)).toEqual([
+			{ status: "rejected", reason: expect.objectContaining({ message: "background failure" }) },
+			{ status: "fulfilled", value: "done" },
+		]);
 	});
 
 	it("runs each isolate's own code even when ids differ only in punctuation", async () => {
