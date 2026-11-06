@@ -208,15 +208,16 @@ async function crossCall(fn: Callable, args: unknown[], site: Error): Promise<un
 	}
 }
 
-/** Types structured clone copies faithfully; they cross as it copies them. */
-const CLONED_TYPES = [Date, Map, Set, RegExp, ArrayBuffer, Blob];
+/** Types that hold no other values; they cross as structured clone copies them. */
+const CLONED_TYPES = [Date, RegExp, ArrayBuffer, Blob];
 
 /**
  * A value as the other side of a Workers RPC call receives it. Arrays and
  * plain objects (prototype Object.prototype) are copied with their own
- * enumerable properties, shared references and cycles kept. Date, Map, Set,
- * RegExp, ArrayBuffer and its views, and Blob go through structured clone.
- * A function becomes an async callback whose calls cross the same way. An
+ * enumerable properties, and Map and Set with their entries, all crossing
+ * the same way, so shared references and cycles are kept. Date, RegExp,
+ * ArrayBuffer and its views, and Blob go through structured clone. A
+ * function becomes an async callback whose calls cross the same way. An
  * error keeps its type when built in, its name, message, cause, and own
  * enumerable properties, but not the thrower's stack. Anything else, a
  * class instance or a null-prototype object included, throws DataCloneError
@@ -235,6 +236,18 @@ function cross(value: unknown, seen: Map<object, unknown>): unknown {
 	if (value instanceof Error) return copyError(value, seen);
 	if (Array.isArray(value)) return copyOwn(value, new Array(value.length), seen);
 	if (Object.getPrototypeOf(value) === Object.prototype) return copyOwn(value, {}, seen);
+	if (value instanceof Map) {
+		const copy = new Map();
+		seen.set(value, copy);
+		for (const [key, entry] of value) copy.set(cross(key, seen), cross(entry, seen));
+		return copy;
+	}
+	if (value instanceof Set) {
+		const copy = new Set();
+		seen.set(value, copy);
+		for (const entry of value) copy.add(cross(entry, seen));
+		return copy;
+	}
 	if (ArrayBuffer.isView(value) || CLONED_TYPES.some((type) => value instanceof type)) {
 		const copy = structuredClone(value);
 		seen.set(value, copy);

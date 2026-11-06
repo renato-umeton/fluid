@@ -223,11 +223,27 @@ export class Probe extends WorkerEntrypoint {
 			expect(copy.n).toBe(1);
 		});
 
-		it("passes Date, Map, Set, RegExp, ArrayBuffer, views, and Blob through structured clone", async () => {
-			const value = { date: new Date(0), map: new Map([["k", 1]]), set: new Set([1]), regexp: /a+/g, buffer: new Uint8Array([1, 2]).buffer, bytes: new Uint8Array([3]), view: new DataView(new ArrayBuffer(2)), blob: new Blob(["hi"]) };
+		it("copies Map and Set contents like any other value: shared references kept, class instances refused", async () => {
+			const probe = probeOf("probe:rpc");
+			const shared = { n: 1 };
+			const copy = (await probe.echo!({ direct: shared, map: new Map([[shared, shared]]), set: new Set([shared]) })) as { direct: object; map: Map<object, object>; set: Set<object> };
+			const [[key, value]] = [...copy.map];
+			expect(copy.direct).toEqual({ n: 1 });
+			expect(key).toBe(copy.direct);
+			expect(value).toBe(copy.direct);
+			expect([...copy.set][0]).toBe(copy.direct);
+			class Point {
+				x = 1;
+			}
+			await expect(probe.echo!(new Map([["k", new Point()]]))).rejects.toMatchObject({ name: "DataCloneError" });
+			await expect(probe.echo!(new Set([new Point()]))).rejects.toMatchObject({ name: "DataCloneError" });
+		});
+
+		it("passes Date, RegExp, ArrayBuffer, views, and Blob through structured clone", async () => {
+			const value = { date: new Date(0), regexp: /a+/g, buffer: new Uint8Array([1, 2]).buffer, bytes: new Uint8Array([3]), view: new DataView(new ArrayBuffer(2)), blob: new Blob(["hi"]) };
 			const copy = (await probeOf("probe:rpc").echo!(value)) as typeof value;
 			expect(copy.date).not.toBe(value.date);
-			expect([copy.date, copy.map, copy.set, copy.regexp]).toEqual([new Date(0), new Map([["k", 1]]), new Set([1]), /a+/g]);
+			expect([copy.date, copy.regexp]).toEqual([new Date(0), /a+/g]);
 			expect([new Uint8Array(copy.buffer), copy.bytes]).toEqual([new Uint8Array([1, 2]), new Uint8Array([3])]);
 			expect(copy.view).toBeInstanceOf(DataView);
 			expect(await copy.blob.text()).toBe("hi");
