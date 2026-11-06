@@ -279,6 +279,20 @@ export class Probe extends WorkerEntrypoint {
 		expect(await probeOf("probe_twin", () => code("B")).whoami!()).toBe("B");
 	});
 
+	it("refuses to start an isolate whose modules import anything but cloudflare:workers and their own modules", async () => {
+		const importing = (line: string) => () => ({ ...code(), modules: { "probe.js": { js: `${line}\n${probeSource("A")}` } } });
+		const cases: [string, string, string][] = [
+			["probe:bare", 'import "sucrase";', "sucrase"],
+			["probe:builtin", 'import { join } from "node:path";', "node:path"],
+			["probe:missing", 'export * from "./missing.js";', "./missing.js"],
+			["probe:outside", 'import "../outside.js";', "../outside.js"],
+			["probe:dynamic", 'const later = () => import("node:fs");', "node:fs"],
+		];
+		for (const [id, line, specifier] of cases) {
+			await expect(probeOf(id, importing(line)).whoami!()).rejects.toThrow(`${id}: probe.js imports "${specifier}"`);
+		}
+	});
+
 	it("keeps one isolate per id when the same code is requested again", async () => {
 		const first = probeOf("probe:same", () => code("A"));
 		const again = probeOf("probe:same", () => code("A"));

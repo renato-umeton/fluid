@@ -1,25 +1,29 @@
 // A Worker Loader binding (env.LOADER) for Node tests. get(id, factory) keeps
-// one isolate per id, as the real loader does: the factory runs once, on the
-// first call into the isolate. Its module map is written under
-// test/.tmp-loader-<random>/<boot order>-<id>/ and its main module imported through
-// vitest, which transforms these files like any other file of the project.
-// So the alias in vitest.config.ts applies to them and cloudflare:workers
-// resolves to test/helpers/cloudflare-workers.ts with no rewriting
-// (entrypointClass checks that it did).
+// one isolate per id, as the real loader does: the first factory for an id
+// boots it, on the first call into it. A later factory for the same id runs
+// too and must return the same code (see get). The module map is written
+// under test/.tmp-loader-<random>/<boot order>-<id>/ and its main module
+// imported through vitest, which transforms these files like any other file
+// of the project. So the alias in vitest.config.ts applies to them and
+// cloudflare:workers resolves to test/helpers/cloudflare-workers.ts with no
+// rewriting (entrypointClass checks that it did).
 //
-// Kept from a real isolate: each id has its own directory and so its own
-// module instances (module state stays per isolate), the env is the
-// factory's, and calls cross a boundary like Workers RPC (see overRpc).
-// Not kept: every fake isolate shares one Node realm with the platform and
-// the test, so globals and built-in prototypes are common to all of them and
-// fork code that patches them affects everyone. Imports resolve as in Node
-// (node: builtins load where an isolate would refuse them), globalOutbound
-// null is not enforced (stub fetch to keep tests off the network), and there
-// are no CPU or memory limits.
+// Kept from a real isolate: each id has its own folder and so its own module
+// instances (module state stays per isolate), the env is copied into each
+// isolate, calls cross a boundary like Workers RPC (see overRpc), and an
+// isolate whose modules import anything but cloudflare:workers and each
+// other does not start (see assertSelfContained). Not kept: every fake
+// isolate shares one Node realm with the platform and the test, so globals
+// and built-in prototypes are common to all of them and fork code that
+// patches them affects everyone; a dynamic import whose specifier is not a
+// string literal resolves as in Node; globalOutbound null is not enforced
+// (stub fetch to keep tests off the network); and there are no CPU or memory
+// limits.
 import { mkdtempSync, rmSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
+import { parseSync } from "vite";
 import type { ModuleMap } from "../../src/runtime/modules.ts";
 import { WorkerEntrypoint } from "./cloudflare-workers.ts";
 import { materialize } from "./materialize.ts";
@@ -64,6 +68,7 @@ export function fakeLoader() {
 		// one, and the second isolate would run the first one's modules.
 		const folder = `${built.push(id)}-${id.replace(/[^A-Za-z0-9._-]/g, "_")}`;
 		const code = await codeOf(id);
+		assertSelfContained(id, code.modules);
 		const exports = await materialize<Record<string, unknown>>(code, join(dir, folder), code.mainModule);
 		return { exports, env: overRpc(code.env ?? {}) };
 	};
@@ -106,6 +111,41 @@ export function fakeLoader() {
 			rmSync(dir, { recursive: true, force: true });
 		},
 	};
+}
+
+/**
+ * Refuses to start an isolate, as the real loader would, when a module
+ * imports anything but cloudflare:workers or a relative path to another of
+ * its modules; Node would otherwise resolve it from node_modules or its
+ * builtins. A dynamic import is checked when its specifier is a string
+ * literal (stricter than workerd, which fails only when the import runs);
+ * any other dynamic import resolves as in Node when it runs.
+ */
+function assertSelfContained(id: string, modules: ModuleMap["modules"]): void {
+	for (const [name, module] of Object.entries(modules)) {
+		if (!("js" in module)) continue;
+		const parsed = parseSync(name, module.js);
+		if (parsed.errors.length) throw new Error(`${id}: ${name} does not parse: ${parsed.errors[0]!.message}`);
+		const { staticImports, staticExports, dynamicImports } = parsed.module;
+		const specifiers = [
+			...staticImports.map((entry) => entry.moduleRequest.value),
+			...staticExports.flatMap((entry) => entry.entries.flatMap((exported) => (exported.moduleRequest ? [exported.moduleRequest.value] : []))),
+			...dynamicImports.flatMap((entry) => stringLiteral(module.js.slice(entry.moduleRequest.start, entry.moduleRequest.end))),
+		];
+		for (const specifier of specifiers) {
+			if (specifier === "cloudflare:workers") continue;
+			const target = /^\.\.?\//.test(specifier) ? posix.normalize(posix.join(posix.dirname(name), specifier)) : null;
+			if (target === null || !Object.hasOwn(modules, target)) {
+				throw new Error(`${id}: ${name} imports "${specifier}", which is not a module of this isolate (an isolate resolves only cloudflare:workers and relative paths to its own modules)`);
+			}
+		}
+	}
+}
+
+/** The value of a string literal without escapes or substitutions, as the only element, or nothing. */
+function stringLiteral(source: string): string[] {
+	const match = /^(["'`])([^"'`\\$]*)\1$/.exec(source.trim());
+	return match ? [match[2]!] : [];
 }
 
 async function assertSameCode(id: string, firstCode: Promise<WorkerCode>, nextCode: Promise<WorkerCode>): Promise<void> {
