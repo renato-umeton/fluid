@@ -1,7 +1,7 @@
 // A Worker Loader binding (env.LOADER) for Node tests. get(id, factory) keeps
 // one isolate per id, as the real loader does: the factory runs once, on the
 // first call into the isolate. Its module map is written under
-// test/.tmp-loader-<random>/<id>/ and its main module imported through
+// test/.tmp-loader-<random>/<boot order>-<id>/ and its main module imported through
 // vitest, which transforms these files like any other file of the project.
 // So the alias in vitest.config.ts applies to them and cloudflare:workers
 // resolves to test/helpers/cloudflare-workers.ts with no rewriting
@@ -53,9 +53,11 @@ export function fakeLoader() {
 	const isolates = new Map<string, Promise<{ exports: Record<string, unknown>; env: unknown }>>();
 
 	const boot = async (id: string) => {
-		built.push(id);
+		// Boot order makes the folder unique: ids that differ only in punctuation or case would otherwise share
+		// one, and the second isolate would run the first one's modules.
+		const folder = `${built.push(id)}-${id.replace(/[^A-Za-z0-9._-]/g, "_")}`;
 		const code = await factories.get(id)!();
-		const exports = await materialize<Record<string, unknown>>(code, join(dir, id.replace(/[^A-Za-z0-9._-]/g, "_")), code.mainModule);
+		const exports = await materialize<Record<string, unknown>>(code, join(dir, folder), code.mainModule);
 		return { exports, env: overRpc(code.env ?? {}) };
 	};
 	const isolate = (id: string) => {

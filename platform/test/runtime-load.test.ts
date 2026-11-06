@@ -234,6 +234,11 @@ export class Probe extends WorkerEntrypoint {
 		});
 	});
 
+	it("runs each isolate's own code even when ids differ only in punctuation", async () => {
+		expect(await probeOf("probe:twin", () => code("A")).whoami!()).toBe("A");
+		expect(await probeOf("probe_twin", () => code("B")).whoami!()).toBe("B");
+	});
+
 	it("runs the factory once per id", async () => {
 		const factory = vi.fn(code);
 		await loader.get("probe:once", factory).getEntrypoint("Probe").poke!({}, () => null);
