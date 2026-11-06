@@ -23,6 +23,9 @@ const listed = parsePolymorphList(files[POLYMORPH_LIST_PATH]!);
 const SECRET = "polymorph-stock-test-secret-0123";
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 const EPOCHS = [0, 1, 2, 3, 4];
+// Writing seven module maps to disk and running both suites five times takes
+// well under a second alone, but much longer while other work holds the disk.
+const SLOW_MS = 60_000;
 
 type App = { ask(request: unknown, env: unknown): Promise<unknown> };
 type Runner = { runManifest(options: Record<string, unknown>): Promise<RunnerManifestResult> };
@@ -55,7 +58,7 @@ beforeAll(async () => {
 		const map = morphModuleMap(plainMap, variants);
 		copies.push({ epoch, variants, map, app: await loadApp(map, `.tmp-polymorph-copy-${epoch}`) });
 	}
-});
+}, SLOW_MS);
 afterAll(() => {
 	for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
 });
@@ -101,7 +104,7 @@ describe("polymorphic copies of stock", () => {
 			expect({ epoch: copy.epoch, found }).toEqual({ epoch: copy.epoch, found: [] });
 			expect(cardDifferences(plainResult, copyResult)).toEqual([]);
 		}
-	});
+	}, SLOW_MS);
 
 	it("use every listed name in stock's JavaScript, so every one is renamed", () => {
 		const plainIdentifiers = identifiersOf(plainMap);
