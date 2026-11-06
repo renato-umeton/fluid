@@ -45,7 +45,7 @@ Limits, stated plainly: a transform that keeps behavior also keeps every bug tha
 
 ### 1. Upstream lists the names that may move
 
-`stock/polymorph.json` lists internal names: names that never appear in a request, a card, a ledger record, a probe, an env key, a JSON key, or a string in runtime code. Upstream checks its own list in a unit test. The platform reads the list from upstream at the fork's pinned tag, the same way it reads the tests, so a fork cannot shrink it. The platform also rejects keywords, built-in names, and names that appear in strings or JSON keys of the fork's code.
+`stock/polymorph.json` lists internal names: names that never appear in a request, a card, a ledger record, a probe, an env key, a JSON key, or a string in runtime code. Upstream checks its own list in a unit test. The platform reads the list from upstream at the fork's pinned tag, the same way it reads the tests, so a fork cannot shrink it. The platform rejects a list with keywords or contract names in it. It skips any listed name that the fork's own text uses (a string, template text, a regular expression, JSON, the fork's own tests, `fluid.toml`) or that the runtime already defines. A skipped name is neither renamed nor a tripwire, so a fork's own words cost only those names.
 
 ### 2. A secret seed per fork, commit, and epoch
 
@@ -65,7 +65,7 @@ In a renamed copy, the original names are dead. A request that uses one as a key
 
 ### 6. Nothing renamed leaves the platform
 
-Seeds and renamed copies never leave the platform. When a renamed copy throws, the platform maps renamed names back to the original names in the error message before it logs or returns it, so an error cannot leak a copy. A refused request gets the same answer whether it used an original name or a wrong suffix.
+Seeds and renamed copies never leave the platform. Everything a renamed copy sends back, its cards and its error messages, passes through one step that maps renamed names back to the original names, so neither an answer nor an error can leak a copy. A refused request gets the same answer whether it used an original name or a wrong suffix. When the rename step itself cannot run safely (code too large, code the parser cannot read), the fork runs plain and the platform logs why.
 
 ### 7. Rotation
 
