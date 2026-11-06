@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import stockSource from "../src/generated/stock-source.json";
+import { POLYMORPH_LIST_PATH, RESERVED_NAMES, parsePolymorphList } from "../src/polymorph/list.ts";
 import { VARIANT_PATTERN, deriveSeed, fingerprint, variantNames } from "../src/polymorph/names.ts";
 
 const files = stockSource.files as Record<string, string>;
@@ -12,8 +13,46 @@ const seedFor = (epoch: number) => deriveSeed(SECRET, "user-ada", SHA, epoch);
 
 describe("published stock", () => {
 	it("carries upstream's polymorph name list", () => {
-		expect(typeof files["polymorph.json"]).toBe("string");
+		expect(typeof files[POLYMORPH_LIST_PATH]).toBe("string");
+		expect(parsePolymorphList(files[POLYMORPH_LIST_PATH]!)).toEqual(stockNames);
 		expect(stockNames).toContain("researchNeedsAttestation");
+	});
+});
+
+describe("parsePolymorphList", () => {
+	it("returns the names of a version 1 list", () => {
+		expect(parsePolymorphList(JSON.stringify({ version: 1, description: "d", names: ["b", "a"] }))).toEqual(["b", "a"]);
+		expect(parsePolymorphList(JSON.stringify({ version: 1, names: [] }))).toEqual([]);
+	});
+
+	it.each([
+		["text that is not JSON", "{", /not valid JSON/],
+		["a list that is not an object", "[]", /object/],
+		["another version", JSON.stringify({ version: 2, names: [] }), /version must be 1, got 2/],
+		["a missing version", JSON.stringify({ names: [] }), /version must be 1/],
+		["names that are not an array", JSON.stringify({ version: 1, names: "a" }), /names must be an array of strings/],
+		["a name that is not a string", JSON.stringify({ version: 1, names: ["a", 3] }), /names must be an array of strings/],
+		["a name listed twice", JSON.stringify({ version: 1, names: ["a", "b", "a"] }), /"a" is listed twice/],
+	])("refuses %s", (_label, text, message) => {
+		expect(() => parsePolymorphList(text)).toThrow(message);
+	});
+});
+
+describe("RESERVED_NAMES", () => {
+	it.each([
+		["keywords and reserved words", ["if", "class", "enum", "let", "yield", "static", "implements"]],
+		["contextual keywords, including the ones sucrase may tokenize specially", ["as", "async", "await", "from", "get", "set", "of", "type", "declare"]],
+		["special names", ["constructor", "prototype", "__proto__", "arguments", "eval", "undefined", "NaN", "Infinity"]],
+		["globals", ["globalThis", "Math", "JSON", "crypto", "caches"]],
+		["properties of built-ins and their prototypes", ["floor", "map", "includes", "toLocaleString", "subarray", "format", "test", "lastIndex", "groups"]],
+		["protocol names", ["then", "catch", "finally", "next", "done", "value", "return", "throw", "toJSON", "default", "__esModule"]],
+		["runtime contract names", ["ask", "env", "fluidToml", "forkCommit", "data", "llm", "newId", "LLM"]],
+	])("holds %s", (_label, words) => {
+		expect(words.filter((word) => !RESERVED_NAMES.has(word))).toEqual([]);
+	});
+
+	it("holds none of upstream's listed names", () => {
+		expect(stockNames.filter((name) => RESERVED_NAMES.has(name))).toEqual([]);
 	});
 });
 
