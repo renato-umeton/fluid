@@ -220,11 +220,11 @@ export function afterRotationLine(data) {
   return `After the leaked copy's fork moved to a new copy, the leaked names compromised ${plural(after.compromised.length, "fork")} and were refused on ${plural(after.refused.length, "fork")}.`;
 }
 
-/** How many copies answered every probe like the plain fork, from each fork's mismatch count. */
+/** On how many forks the copy answered every probe like the plain fork, from each fork's mismatch count. */
 export function equivalenceLine(data) {
   const total = data.forks.length;
   const differ = data.forks.filter((f) => f.mismatches > 0);
-  const same = total - differ.length;
-  if (differ.length === 0) return `Equivalence check: every copy answered all ${data.probes} probes like the plain fork (${same} of ${total} copies had 0 differences).`;
-  return `Equivalence check: ${same} of ${total} copies answered all ${data.probes} probes like the plain fork with 0 differences. Copies with differences: ${differ.map((f) => `${f.repo} (${f.mismatches})`).join(", ")}.`;
+  const head = `Equivalence check: on ${total - differ.length} of ${plural(total, "fork")} the copy answered all ${data.probes} probes like the plain fork`;
+  if (differ.length === 0) return `${head}, with 0 differences.`;
+  return `${head}. Forks with differences: ${differ.map((f) => `${f.repo} (${f.mismatches})`).join(", ")}.`;
 }
