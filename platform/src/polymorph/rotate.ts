@@ -4,11 +4,11 @@
 // never goes live, and the fork keeps the copy it has. A gate that could make
 // no copy changes nothing.
 import { runGate } from "../gate/run.ts";
-import type { GateFailure } from "../gate/tiers.ts";
+import type { GateFailure, GateResult } from "../gate/tiers.ts";
 import type { RuntimeDeps } from "../runtime/loader.ts";
 import { headOf, openRepo } from "../runtime/repo-files.ts";
 import { fleetStub } from "../stubs.ts";
-import { polymorphSecret } from "./install.ts";
+import { polymorphSecret, PolymorphTransientError } from "./install.ts";
 
 /** Why a rotation runs: the schedule, a tripwire hit, a change landing on main, or an admin. */
 export type RotationReason = "schedule" | "tripwire" | "landed" | "admin";
@@ -31,8 +31,10 @@ const MAX_REFUSAL_FAILURES = 10;
  * do not vary), stores the copy in Fleet when the gate passes, and records a
  * security event for a rotation or a refusal. Skips, changing nothing, when
  * the platform has no secret, the fork is not in the fleet or is busy, the
- * gate could make no copy, main moved while the gate ran, or another
- * rotation stored a copy first.
+ * gate could make no copy (the skip says why), main moved while the gate
+ * ran, or another rotation stored a copy first. Throws, like runGate, when
+ * reading what the copy needs failed (PolymorphTransientError), so a workflow
+ * step retries the rotation rather than skip it.
  */
 export async function rotateFork(deps: RuntimeDeps, repo: string, reason: RotationReason): Promise<RotationResult> {
 	const skipped = (why: string): RotationResult => ({ outcome: "skipped", repo, reason, why });
@@ -45,7 +47,10 @@ export async function rotateFork(deps: RuntimeDeps, repo: string, reason: Rotati
 	const current = await fleet.morphState(repo);
 	const epoch = (current?.epoch ?? 0) + 1;
 	const gate = await runGate(deps, { repo, ref: "main", mode: "check", samples: 1, morph: { epoch } });
-	if (!gate.polymorph) return skipped(`the gate made no renamed copy of main${gate.error ? `: ${gate.error}` : "; the platform log says why"}`);
+	if (!gate.polymorph) {
+		if (gate.polymorphPlain?.kind === "transient") throw new PolymorphTransientError(`the gate could not read what the renamed copy of main needs: ${gate.polymorphPlain.reason}`);
+		return skipped(`the gate made no renamed copy of main: ${noCopyReason(gate)}`);
+	}
 	if (!gate.passed) {
 		await fleet.recordSecurityEvent(repo, { kind: "rotation_refused", detail: { reason, epoch, failures: gate.failures.length } });
 		return { outcome: "refused", repo, reason, epoch, sha: gate.commit, failures: gate.failures.slice(0, MAX_REFUSAL_FAILURES), more: Math.max(0, gate.failures.length - MAX_REFUSAL_FAILURES) };
@@ -60,6 +65,15 @@ export async function rotateFork(deps: RuntimeDeps, repo: string, reason: Rotati
 	}
 	await fleet.recordSecurityEvent(repo, { kind: "rotated", detail: { reason, epoch, fingerprint } });
 	return { outcome: "rotated", repo, reason, epoch, sha: gate.commit, fingerprint, namesHash };
+}
+
+/** Why a gate asked to check a copy ran without one: its error, the loader's reason, or the failure that stopped it before the copy loaded. */
+function noCopyReason(gate: GateResult): string {
+	if (gate.error) return gate.error;
+	if (gate.polymorphPlain) return gate.polymorphPlain.reason;
+	const first = gate.failures[0];
+	if (!first) return "the gate stopped before it loaded a copy";
+	return `${first.probe} failed: ${typeof first.actual === "string" ? first.actual : JSON.stringify(first.actual)}`;
 }
 
 async function mainHead(env: Env, repo: string): Promise<string | null> {

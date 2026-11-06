@@ -6,7 +6,7 @@
 import { clipValue } from "../lib/clip.ts";
 import { parseToml } from "../lib/toml.ts";
 import { equivalenceCheck, type EquivalenceReport } from "../polymorph/equivalence.ts";
-import { askLoaded, FORK_CALL_TIMEOUT_MS, loadForkRuntime, loadRunner, withTimeout, type LoadedCopy, type LoadedFork, type RuntimeDeps } from "../runtime/loader.ts";
+import { askLoaded, FORK_CALL_TIMEOUT_MS, loadForkRuntime, loadRunner, withTimeout, type LoadedCopy, type LoadedFork, type PlainLoad, type RuntimeDeps } from "../runtime/loader.ts";
 import { resolveCommit, shortRef } from "../runtime/refs.ts";
 import { headOf, openRepo, readTextFile } from "../runtime/repo-files.ts";
 import { pinnedTagOf } from "../stock/releases.ts";
@@ -110,6 +110,8 @@ async function gateCore(deps: RuntimeDeps, input: GateInput, observe: ObserveOpt
 	const failures: GateFailure[] = [];
 	// Set once the renamed copy was compared with the plain fork.
 	let polymorph: GatePolymorph | null = null;
+	// Set when a copy was asked for and the fork loaded plain.
+	let plainCopy: PlainLoad | null = null;
 	const finish = (stockTag: string | null, stockCommit: string | null, error?: string): { gate: GateResult } => {
 		const result: GateResult = {
 			repo: input.repo,
@@ -125,6 +127,7 @@ async function gateCore(deps: RuntimeDeps, input: GateInput, observe: ObserveOpt
 		};
 		if (error) result.error = error;
 		if (input.morph) result.polymorph = polymorph;
+		if (input.morph && polymorph === null && plainCopy) result.polymorphPlain = { kind: plainCopy.kind, reason: String(clipValue(plainCopy.reason)) };
 		return { gate: result };
 	};
 	const record = (tier: TierName, part: { summary: TierSummary; failures: GateFailure[] }) => {
@@ -189,6 +192,8 @@ async function gateCore(deps: RuntimeDeps, input: GateInput, observe: ObserveOpt
 				const check = equivalenceCheck(ask, askOf(renamed), MAX_EQUIVALENCE_FAILURES);
 				ask = check.ask;
 				equivalence = { copy: renamed.morph, report: check.report };
+			} else {
+				plainCopy = renamed.plain;
 			}
 		}
 		if (observe) {

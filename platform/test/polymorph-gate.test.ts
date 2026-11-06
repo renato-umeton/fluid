@@ -126,11 +126,27 @@ describe("runGate with a renamed copy", () => {
 	);
 
 	it(
+		"says why it ran without a copy, as the loader said, and nothing when the copy loaded",
+		async () => {
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+			const plain = await runGate(p.withoutSecret(), { repo: "user-1", ref: "main", mode: "check", samples: 1, morph: { epoch: 2 } });
+			expect(plain.polymorph).toBeNull();
+			expect(plain.polymorphPlain).toEqual({ kind: "none", reason: "POLYMORPH_SECRET is not set" });
+			warn.mockRestore();
+			const renamed = await gateOf("user-1", { epoch: 2 });
+			expect(renamed.polymorph).not.toBeNull();
+			expect("polymorphPlain" in renamed).toBe(false);
+		},
+		SLOW_MS,
+	);
+
+	it(
 		"leaves a gate that asks for no copy exactly as it was",
 		async () => {
 			const gate = await gateOf("user-1");
 			expect(gate.passed).toBe(true);
 			expect("polymorph" in gate).toBe(false);
+			expect("polymorphPlain" in gate).toBe(false);
 			expect(gate.tiers.invariant!.probes.map((probe) => probe.id)).not.toContain("polymorph-equivalence");
 		},
 		SLOW_MS,

@@ -7,6 +7,7 @@
 import { validateProbe, type Probe } from "../agents/suggester.ts";
 import { clipValue } from "../lib/clip.ts";
 import type { SkippedName } from "../polymorph/list.ts";
+import type { PlainLoad } from "../runtime/loader.ts";
 
 export type TierName = "invariant" | "functional" | "user";
 export const TIER_NAMES: readonly TierName[] = ["invariant", "functional", "user"];
@@ -92,6 +93,8 @@ export interface GateResult {
 	error?: string;
 	/** Only when the gate was asked to check a renamed copy: what it compared, or null when no copy could be made and the fork ran plain. */
 	polymorph?: GatePolymorph | null;
+	/** Only when the gate was asked to check a renamed copy and the fork loaded plain: why, as the loader said (reason clipped). */
+	polymorphPlain?: PlainLoad;
 }
 
 const MAX_FAILURES_PER_PROBE = 3;

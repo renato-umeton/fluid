@@ -5,6 +5,7 @@
 // loaded machine.
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { deriveSeed, fingerprint, namesHash } from "../src/polymorph/names.ts";
+import { PolymorphTransientError } from "../src/polymorph/install.ts";
 import { rotateFork } from "../src/polymorph/rotate.ts";
 import { SCAN_LIMITS } from "../src/polymorph/tokens.ts";
 import { loadForkRuntime } from "../src/runtime/loader.ts";
@@ -27,6 +28,7 @@ beforeAll(() => {
 		"user-moving": MOVING,
 		"user-reflective": REFLECTIVE,
 		"user-busy": { ...PUBLISHED, "app/busy.ts": "export const busy = 1;\n" },
+		"user-flaky": { ...PUBLISHED, "app/flaky.ts": "export const flaky = 1;\n" },
 		// More JavaScript in one module than the renamer reads: the plain fork runs, no copy can be made.
 		"user-big": { ...PUBLISHED, "app/big.js": `// ${"x".repeat(SCAN_LIMITS.moduleChars)}\nexport const big = 1;\n` },
 	});
@@ -179,6 +181,37 @@ describe("rotateFork", () => {
 			expect((result as { why: string }).why).toMatch(/no renamed copy/);
 			expect(p.t.fleet.morphState("user-big")).toBeNull();
 			expect(p.t.fleet.securityEvents("user-big")).toEqual([]);
+		},
+		SLOW_MS,
+	);
+
+	it(
+		"skips with the loader's reason when the gate could make no renamed copy",
+		async () => {
+			vi.spyOn(console, "warn").mockImplementation(() => undefined);
+			const result = await rotateFork(p.deps, "user-big", "tripwire");
+			expect(result).toMatchObject({ outcome: "skipped", repo: "user-big", reason: "tripwire" });
+			expect((result as { why: string }).why).toMatch(/^the gate made no renamed copy of main: app\/big\.js: polymorph: the module has \d+ characters, more than/);
+		},
+		SLOW_MS,
+	);
+
+	it(
+		"throws when Artifacts failed to read what the copy needs, so a workflow step retries it, and stores nothing",
+		async () => {
+			vi.spyOn(console, "warn").mockImplementation(() => undefined);
+			const git = p.t.artifacts.repos.get("user-flaky")!.git;
+			const read = git.readFile.bind(git);
+			// Only the copy reads the fork's end-to-end scenarios (as part of its contract); the gate itself does not.
+			vi.spyOn(git, "readFile").mockImplementation(async (args: { ref: string; path: string }) => {
+				if (args.path === "tests/user/e2e.json") throw new Error("Artifacts: 503 service unavailable");
+				return read(args);
+			});
+			const failure = await rotateFork(p.deps, "user-flaky", "schedule").catch((error: unknown) => error);
+			expect(failure).toBeInstanceOf(PolymorphTransientError);
+			expect((failure as Error).message).toMatch(/Artifacts: 503 service unavailable$/);
+			expect(p.t.fleet.morphState("user-flaky")).toBeNull();
+			expect(p.t.fleet.securityEvents("user-flaky")).toEqual([]);
 		},
 		SLOW_MS,
 	);
