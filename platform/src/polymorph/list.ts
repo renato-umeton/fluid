@@ -198,7 +198,8 @@ function nameProblem(name: unknown): string | null {
  * hands to it: stream sources, sinks, and transformers, event listener objects
  * and listener options, and WebCrypto algorithm parameters. No built-in
  * carries most of them, so the runtime walk cannot find them, yet renaming one
- * breaks the call that reads it.
+ * breaks the call that reads it. They get their own reason, whether or not a
+ * runtime also builds them in, so the reason is the same in every runtime.
  */
 const HOST_READ_NAMES: ReadonlySet<string> = new Set([
 	"pull", "start", "cancel", "flush", "transform", "write", "close", "abort", "handleEvent", "passive", "once", "capture", "signal",
@@ -206,6 +207,7 @@ const HOST_READ_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 const BUILT_IN_REASON = "a built-in name in this runtime";
+const HOST_READ_REASON = "a name the runtime reads from objects the fork creates";
 
 export interface SkippedName {
 	name: string;
@@ -240,7 +242,10 @@ export function usableNames(
 	contract: ContractTexts = {},
 ): { usable: Map<string, string>; skipped: SkippedName[] } {
 	const reasons = new Map<string, string[]>();
-	for (const name of names.keys()) if (runtimeBuiltInNames().has(name) || HOST_READ_NAMES.has(name)) reasons.set(name, [BUILT_IN_REASON]);
+	for (const name of names.keys()) {
+		if (HOST_READ_NAMES.has(name)) reasons.set(name, [HOST_READ_REASON]);
+		else if (runtimeBuiltInNames().has(name)) reasons.set(name, [BUILT_IN_REASON]);
+	}
 	for (const { name, reason } of textUses([...names.keys()], map, scanned, contract)) {
 		const found = reasons.get(name) ?? [];
 		found.push(reason);

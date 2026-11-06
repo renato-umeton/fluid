@@ -3,7 +3,7 @@ import * as sucraseBase from "sucrase/dist/esm/parser/traverser/base.js";
 import { TokenType } from "sucrase/dist/esm/parser/tokenizer/types.js";
 import { describe, expect, it } from "vitest";
 import stockSource from "../src/generated/stock-source.json";
-import { POLYMORPH_LIST_PATH, parsePolymorphList, usableNames } from "../src/polymorph/list.ts";
+import { POLYMORPH_LIST_PATH, parsePolymorphList, runtimeBuiltInNames, usableNames } from "../src/polymorph/list.ts";
 import { morphFork, morphModuleMap, morphSource, unmorphText } from "../src/polymorph/morph.ts";
 import { PolymorphUnavailableError, SCAN_LIMITS, scanModuleMap, scanTokens, tokenScanner } from "../src/polymorph/tokens.ts";
 import { ENTRY_MODULE, buildModuleMap, type ModuleMap } from "../src/runtime/modules.ts";
@@ -323,10 +323,12 @@ describe("usableNames", () => {
 		expect([...usable.keys()]).toEqual(["secretName"]);
 	});
 
-	it("skips the member names a host reads from objects the fork hands it, which no built-in carries", () => {
-		const hostRead = ["pull", "flush", "transform", "handleEvent", "passive", "capture", "iv", "salt", "iterations", "namedCurve", "counter", "additionalData", "tagLength"];
+	it("skips the member names a host reads from objects the fork creates, with their own reason, built in or not", () => {
+		// Most carry no built-in; close and once do in Node, and the reason must not depend on the runtime.
+		const hostRead = ["pull", "flush", "transform", "handleEvent", "passive", "capture", "iv", "salt", "iterations", "namedCurve", "counter", "additionalData", "tagLength", "close", "once"];
+		expect(runtimeBuiltInNames().has("close")).toBe(true);
 		const { usable, skipped } = usableNames(new Map([...hostRead, "secretName"].map((name) => [name, `${name}$abcd1234`])), forkMap({}));
-		expect(skipped).toEqual(hostRead.map((name) => ({ name, reason: "a built-in name in this runtime" })));
+		expect(skipped).toEqual(hostRead.map((name) => ({ name, reason: "a name the runtime reads from objects the fork creates" })));
 		expect([...usable.keys()]).toEqual(["secretName"]);
 	});
 
@@ -335,7 +337,7 @@ describe("usableNames", () => {
 			"app/a.ts": 'export function main() { let calls = 0; const target = new EventTarget(); target.addEventListener("ping", { handleEvent() { calls++; } }); target.dispatchEvent(new Event("ping")); return calls; }',
 		});
 		const { usable, skipped } = usableNames(new Map([["handleEvent", "handleEvent$abcd1234"]]), map);
-		expect(skipped).toEqual([{ name: "handleEvent", reason: "a built-in name in this runtime" }]);
+		expect(skipped).toEqual([{ name: "handleEvent", reason: "a name the runtime reads from objects the fork creates" }]);
 		expect(runMain(jsOf(morphModuleMap(map, usable), "app/a.js"))).toBe(1);
 	});
 
