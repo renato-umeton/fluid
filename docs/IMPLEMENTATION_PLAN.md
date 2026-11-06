@@ -70,11 +70,11 @@ Tasks (3a, then 3b):
 Tasks:
 1. `platform/test/fixtures/zero-day.ts`: `zeroDayRelease(files)` patches `app/cards.ts` in `draftFor` so display options are spread into the `enforceContract` options after the safety flag (mass assignment), and adds a public `display.preview` switch that skips the attestation hold. Anchors must throw if stock changes. Stock itself stays clean.
 2. `platform/test/polymorph-e2e.test.ts` with the fakes from stage 2 and the wiring from stage 3. Exploits: A, built from upstream source (`display: { researchNeedsAttestation: false }`); A2, built from fork 7's copy; A3, 1000 random suffixes on fork 3; B, `display: { preview: true }`. Measure direct compromise (calling the fork without the platform's scan) and platform outcomes (refused, rotations started).
-3. `platform/package.json`: `polymorph:demo` script (content step first).
+3. `platform/package.json`: `polymorph:demo` prints the scoreboard for 20 forks, and `polymorph:record` writes `platform/public/data/polymorph-demo.json` (committed, so the deployed demo has it) after checking it with `validateDemo` from `platform/public/js/polymorph-replay.js`, so the recorder and the view cannot drift apart. Both run the content step first. Every attack starts from the installed copies (`before`), and `after` is each fork's copy after one rotation; the shape is the one the view validates.
 4. Docs: `docs/POLYMORPH.md` (what it does, how to run it, measured results, limits), README section, `docs/DEPLOY.md` (the secret, thirteen workflows), `docs/GATE_AND_AGENTS.md` and `docs/API.md` (new tier 1 check, rotation, admin route), `docs/OVERVIEW.md` tenant hooks, and the results in the design doc.
 
 ## Stage 5: Mock mode view
 **Goal**: show the experiment in the browser like the other demos.
 **Success Criteria**: `/?mock=1#polymorph` replays a recorded run of the stage 4 experiment (forks, fingerprints, attacks, refusals, rotations), says plainly that it is a replay, builds DOM only with `h()`, and passes a UI test.
 **Tests**: `platform/test/ui-polymorph.test.ts`.
-**Status**: Not Started
+**Status**: In Progress (spec review passed; last code quality fix being confirmed)
