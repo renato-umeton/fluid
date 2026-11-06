@@ -4,6 +4,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { serveAsk } from "../src/api/ask.ts";
 import { Fleet, SECURITY_EVENTS_PER_REPO } from "../src/durable/fleet.ts";
+import { clipValue } from "../src/gate/tiers.ts";
 import { construct, fakeState } from "./helpers/durable.ts";
 import { PUBLISHED, TAG, polymorphPlatform, type PolymorphPlatform } from "./helpers/polymorph-platform.ts";
 
@@ -112,6 +113,15 @@ describe("Fleet security events", () => {
 		]);
 		expect(fleet.securityEvents("user-a", 1)).toEqual([{ kind: "rotated", at: iso(t0 + 2), detail: { epoch: 2 } }]);
 		expect(fleet.securityEvents("user-b")).toEqual([{ kind: "tripwire", at: iso(t0 + 1) }]);
+	});
+
+	it("clips long detail values, so one event stays small", () => {
+		const fleet = fleetWith("user-a");
+		const long = `context.${"x".repeat(5000)}`;
+		const event = fleet.recordSecurityEvent("user-a", { kind: "tripwire", detail: { path: long, keys: Array.from({ length: 500 }, (_, i) => `k${i}`), epoch: 3 } }, t0)!;
+		expect(event.detail).toEqual({ path: clipValue(long), keys: clipValue(Array.from({ length: 500 }, (_, i) => `k${i}`)), epoch: 3 });
+		expect(JSON.stringify(event).length).toBeLessThan(1200);
+		expect(fleet.securityEvents("user-a")).toEqual([event]);
 	});
 
 	it("keeps the latest ones per fork", () => {

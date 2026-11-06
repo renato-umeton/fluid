@@ -4,6 +4,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Json } from "../lib/json.ts";
 import { upsertWishNote, wishNotesKey, type WishNote } from "../contest/wishes.ts";
+import { clipValue } from "../gate/tiers.ts";
 import { contestKey, joinDecision, type ContestState } from "../contest/plan.ts";
 import { addImportNote, importLogKey, type ImportNote } from "../forks/import-log.ts";
 import type { BaselineRecord } from "../yellow/baseline.ts";
@@ -341,15 +342,17 @@ export class Fleet extends DurableObject<Env> {
 	}
 
 	/**
-	 * Records a security event for a fork, keeping the latest
-	 * SECURITY_EVENTS_PER_REPO, and tells stream subscribers only that one
-	 * happened: the repo, the kind, and the time. Null when the fork is not in
-	 * the fleet.
+	 * Records a security event for a fork, its detail values clipped, keeping
+	 * the latest SECURITY_EVENTS_PER_REPO, and tells stream subscribers only
+	 * that one happened: the repo, the kind, and the time. Null when the fork
+	 * is not in the fleet.
 	 */
 	recordSecurityEvent(repo: string, input: { kind: SecurityEventKind; detail?: Record<string, Json> }, at = Date.now()): SecurityEvent | null {
 		if (!SECURITY_EVENT_KINDS.includes(input.kind)) throw new Error(`recordSecurityEvent: unknown kind ${JSON.stringify(input.kind)}; kinds are ${SECURITY_EVENT_KINDS.join(", ")}`);
 		if (!this.get(repo)) return null;
-		const event: SecurityEvent = { kind: input.kind, at: new Date(at).toISOString(), ...(input.detail ? { detail: input.detail } : {}) };
+		// Detail can hold request text (a tripwire path): each value is clipped, as gate failures are, so one event stays small.
+		const detail = input.detail ? Object.fromEntries(Object.entries(input.detail).map(([key, value]) => [key, clipValue(value) as Json])) : undefined;
+		const event: SecurityEvent = { kind: input.kind, at: new Date(at).toISOString(), ...(detail ? { detail } : {}) };
 		const sql = this.ctx.storage.sql;
 		sql.exec("INSERT INTO security_events (repo, event) VALUES (?, ?)", repo, JSON.stringify(event));
 		sql.exec("DELETE FROM security_events WHERE repo = ? AND seq NOT IN (SELECT seq FROM security_events WHERE repo = ? ORDER BY seq DESC LIMIT ?)", repo, repo, SECURITY_EVENTS_PER_REPO);
