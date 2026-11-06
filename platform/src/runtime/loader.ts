@@ -7,7 +7,7 @@
 // polymorph/) adds ":m<epoch>.<fingerprint>.<names hash>" to both, which
 // names exactly the code it runs.
 import synthetic from "../generated/synthetic.json";
-import { buildCopy, planCopy, readContract } from "../polymorph/install.ts";
+import { buildCopy, clearCopyCaches, planCopy, readContract } from "../polymorph/install.ts";
 import type { SkippedName } from "../polymorph/list.ts";
 import { unmorphText } from "../polymorph/morph.ts";
 import { PolymorphUnavailableError } from "../polymorph/tokens.ts";
@@ -370,7 +370,14 @@ export function loadE2ERunner(env: Env, key: string, stockFiles: Record<string, 
 	return worker.getEntrypoint("E2ERunner") as unknown as E2ERunnerEntrypoint;
 }
 
-/** Drops cached module maps (tests and admin use). */
+/**
+ * Drops every cache the loader keeps, as a new isolate starts: module maps,
+ * the names hash each copy built with, the fallback lines already logged, and
+ * the copies' plans and upstream lists (tests and admin use).
+ */
 export function clearRuntimeCache(): void {
 	builds.clear();
+	copyHashes.clear();
+	reportedFallbacks.clear();
+	clearCopyCaches();
 }

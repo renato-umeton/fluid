@@ -14,7 +14,7 @@ import { deriveSeed, fingerprint, namesHash } from "../src/polymorph/names.ts";
 import { SCAN_LIMITS } from "../src/polymorph/tokens.ts";
 import { scanRequest } from "../src/polymorph/tripwire.ts";
 import * as loaderModule from "../src/runtime/loader.ts";
-import { askLoaded, ForkRuntimeError, isolateId, loadForkRuntime, type LoadedFork, type RuntimeDeps } from "../src/runtime/loader.ts";
+import { askLoaded, clearRuntimeCache, ForkRuntimeError, isolateId, loadForkRuntime, type LoadedFork, type RuntimeDeps } from "../src/runtime/loader.ts";
 import { releaseMetadata, releaseMetadataPath } from "../src/stock/releases.ts";
 import { apiEnv } from "./helpers/api-env.ts";
 import { fakeLoader } from "./helpers/fake-loader.ts";
@@ -443,6 +443,29 @@ describe("polymorphSecret", () => {
 			expect(lines.filter((line) => line.includes("shorter than 16 characters"))).toEqual(["polymorph: POLYMORPH_SECRET is shorter than 16 characters, so it counts as not set and every fork runs plain"]);
 			expect(lines.join("\n")).not.toContain("too-short-01");
 			expect(polymorphSecret(deps.env)).toBe(SECRET);
+		},
+		SLOW_MS,
+	);
+});
+
+describe("clearRuntimeCache", () => {
+	it(
+		"drops every cache the loader keeps, so the next load plans, reads upstream's list, builds, and logs again",
+		async () => {
+			const warn = warnings();
+			const stale = { epoch: 51, namesHash: "33333333" };
+			expect(copyOf(await loadForkRuntime(deps, "user-1", "main", { morph: { epoch: 51 } })).epoch).toBe(51);
+			await loadForkRuntime(deps, "user-1", "main", { morph: stale });
+			expect(warn).toHaveBeenCalledTimes(1);
+			clearRuntimeCache();
+			const listReads = vi.spyOn(stock, "readFile");
+			const treeReads = vi.spyOn(t.artifacts.repos.get("user-1")!.git, "readTree");
+			expect(copyOf(await loadForkRuntime(deps, "user-1", "main", { morph: { epoch: 51 } })).epoch).toBe(51);
+			// A plan still cached would have skipped the list, so this read shows both the plan and the list were dropped.
+			expect(listReads.mock.calls.map(([args]) => args.path)).toContain(POLYMORPH_LIST_PATH);
+			expect(treeReads).toHaveBeenCalled();
+			await loadForkRuntime(deps, "user-1", "main", { morph: stale });
+			expect(warn).toHaveBeenCalledTimes(2);
 		},
 		SLOW_MS,
 	);

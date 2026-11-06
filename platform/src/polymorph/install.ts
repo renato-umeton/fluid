@@ -109,6 +109,12 @@ export async function planCopy(env: Env, input: { repo: string; sha: string; epo
 	return plan;
 }
 
+/** Drops the plans and upstream lists this isolate keeps, as a new isolate starts (clearRuntimeCache). */
+export function clearCopyCaches(): void {
+	plans.clear();
+	lists.clear();
+}
+
 /** The fork's own tests: the requests it sends itself. Read with fluid.toml as its contract. */
 const CONTRACT_FILES = [USER_MANIFEST_PATH, USER_E2E_PATH] as const;
 
