@@ -6,6 +6,7 @@
 import { runGate } from "../gate/run.ts";
 import type { GateFailure } from "../gate/tiers.ts";
 import type { RuntimeDeps } from "../runtime/loader.ts";
+import { headOf, openRepo } from "../runtime/repo-files.ts";
 import { fleetStub } from "../stubs.ts";
 import { polymorphSecret } from "./install.ts";
 
@@ -30,7 +31,8 @@ const MAX_REFUSAL_FAILURES = 10;
  * do not vary), stores the copy in Fleet when the gate passes, and records a
  * security event for a rotation or a refusal. Skips, changing nothing, when
  * the platform has no secret, the fork is not in the fleet or is busy, the
- * gate could make no copy, or another rotation stored a copy first.
+ * gate could make no copy, main moved while the gate ran, or another
+ * rotation stored a copy first.
  */
 export async function rotateFork(deps: RuntimeDeps, repo: string, reason: RotationReason): Promise<RotationResult> {
 	const skipped = (why: string): RotationResult => ({ outcome: "skipped", repo, reason, why });
@@ -48,10 +50,18 @@ export async function rotateFork(deps: RuntimeDeps, repo: string, reason: Rotati
 		return { outcome: "refused", repo, reason, epoch, sha: gate.commit, failures: gate.failures.slice(0, MAX_REFUSAL_FAILURES), more: Math.max(0, gate.failures.length - MAX_REFUSAL_FAILURES) };
 	}
 	const { fingerprint, namesHash } = gate.polymorph;
+	// A copy serves only the commit it is of. If main moved while the gate ran, the landed change gets a rotation of its own.
+	const head = await mainHead(deps.env, repo);
+	if (head !== gate.commit) return skipped(head === null ? "main could not be read after the gate" : "main moved during the rotation");
 	// Stored only over the epoch read before the gate: a rotation that finished first wins, and a retired copy stays retired.
 	if (!(await fleet.setMorph(repo, { epoch, sha: gate.commit, fingerprint, namesHash }, { from: current?.epoch ?? null }))) {
 		return skipped((await fleet.get(repo)) ? "another rotation moved the fork first" : "the fork left the fleet during the rotation");
 	}
 	await fleet.recordSecurityEvent(repo, { kind: "rotated", detail: { reason, epoch, fingerprint } });
 	return { outcome: "rotated", repo, reason, epoch, sha: gate.commit, fingerprint, namesHash };
+}
+
+async function mainHead(env: Env, repo: string): Promise<string | null> {
+	using handle = await openRepo(env.ARTIFACTS, repo);
+	return headOf(handle, "main");
 }

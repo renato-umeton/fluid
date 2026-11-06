@@ -11,6 +11,9 @@ import { loadForkRuntime } from "../src/runtime/loader.ts";
 import { LISTED, POLYMORPH_TEST_SECRET, PUBLISHED, REFLECTIVE, TAG, polymorphPlatform, type PolymorphPlatform } from "./helpers/polymorph-platform.ts";
 
 const SLOW_MS = 120_000;
+// A fork whose main moves on to a second commit while a rotation's gate runs.
+const MOVING = { ...PUBLISHED, "app/moving.ts": "export const moving = 1;\n" };
+const MOVED_ON = { ...MOVING, "app/moving.ts": "export const moving = 2;\n" };
 const t0 = Date.parse("2026-11-06T10:00:00Z");
 const iso = (at: number) => new Date(at).toISOString();
 
@@ -21,6 +24,7 @@ beforeAll(() => {
 		"user-1": PUBLISHED,
 		"user-resecret": { ...PUBLISHED, "app/resecret.ts": "export const resecret = 1;\n" },
 		"user-race": { ...PUBLISHED, "app/race.ts": "export const race = 1;\n" },
+		"user-moving": MOVING,
 		"user-reflective": REFLECTIVE,
 		"user-busy": { ...PUBLISHED, "app/busy.ts": "export const busy = 1;\n" },
 		// More JavaScript in one module than the renamer reads: the plain fork runs, no copy can be made.
@@ -81,6 +85,27 @@ describe("rotateFork", () => {
 			expect(await slow).toEqual({ outcome: "skipped", repo: "user-race", reason: "schedule", why: "another rotation moved the fork first" });
 			expect(fleet.morphState("user-race")).toMatchObject({ epoch: 2, fingerprint: await printOf("user-race", 2) });
 			expect(fleet.securityEvents("user-race").map((event) => event.detail?.epoch)).toEqual([2, 1]);
+		},
+		SLOW_MS,
+	);
+
+	it(
+		"stores nothing when main moved while the gate ran, since the copy is of a commit main no longer serves",
+		async () => {
+			const get = p.loader.get.bind(p.loader);
+			let moved = false;
+			// The gate has resolved main when it asks for its first isolate; main moves on right then.
+			vi.spyOn(p.loader, "get").mockImplementation((id, factory) => {
+				if (!moved && id.startsWith("user-moving:")) {
+					moved = true;
+					p.t.artifacts.seed("user-moving", { commits: [MOVING, MOVED_ON] });
+				}
+				return get(id, factory);
+			});
+			expect(await rotateFork(p.deps, "user-moving", "schedule")).toEqual({ outcome: "skipped", repo: "user-moving", reason: "schedule", why: "main moved during the rotation" });
+			expect(moved).toBe(true);
+			expect(p.t.fleet.morphState("user-moving")).toBeNull();
+			expect(p.t.fleet.securityEvents("user-moving")).toEqual([]);
 		},
 		SLOW_MS,
 	);
