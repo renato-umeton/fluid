@@ -70,28 +70,43 @@ export function polymorphSecret(env: Env): string | null {
 
 /** What names one copy, worked out before the copy is built: enough for its isolate id and build cache key. */
 export interface CopyPlan {
-	epoch: number;
-	seed: string;
+	readonly epoch: number;
+	readonly seed: string;
 	/** Eight hex characters naming the copy; safe to show. */
-	fingerprint: string;
+	readonly fingerprint: string;
 	/** Upstream's list at the fork's pinned tag. */
-	list: string[];
+	readonly list: readonly string[];
 }
 
 /**
- * Plans the copy of one fork commit for one epoch. Throws, saying why, when
- * there is no secret, fluid.toml pins no stock tag, or the pinned release
- * publishes no list or a broken one.
+ * Plans by repo:sha:epoch, with the secret each was made with. A plan never
+ * changes under one secret: the list is upstream's at the tag that fluid.toml
+ * pins at that commit. Loading a copy already planned then signs nothing.
+ */
+const plans = new Map<string, { secret: string; plan: CopyPlan }>();
+const PLAN_CACHE_LIMIT = 500;
+
+/**
+ * Plans the copy of one fork commit for one epoch, once per secret. Throws,
+ * saying why, when there is no secret, fluid.toml pins no stock tag, or the
+ * pinned release publishes no list or a broken one.
  */
 export async function planCopy(env: Env, input: { repo: string; sha: string; epoch: number; fluidToml: string | undefined }): Promise<CopyPlan> {
 	const secret = polymorphSecret(env);
 	if (secret === null) throw new PolymorphUnavailableError("POLYMORPH_SECRET is not set");
+	const key = `${input.repo}:${input.sha}:${input.epoch}`;
+	const cached = plans.get(key);
+	// Another secret seeds another copy: a plan made with the old one must never stand in for it.
+	if (cached !== undefined && cached.secret === secret) return cached.plan;
 	const tag = pinnedTagOf(input.fluidToml);
 	if (tag === null) throw new PolymorphUnavailableError("fluid.toml names no stock_tag");
 	const list = await loadPolymorphList(env, tag);
 	if (list === null) throw new PolymorphUnavailableError(`stock ${tag} publishes no ${POLYMORPH_LIST_PATH}`);
 	const seed = await deriveSeed(secret, input.repo, input.sha, input.epoch);
-	return { epoch: input.epoch, seed, fingerprint: await fingerprint(seed), list };
+	const plan: CopyPlan = { epoch: input.epoch, seed, fingerprint: await fingerprint(seed), list };
+	if (plans.size >= PLAN_CACHE_LIMIT) plans.delete(plans.keys().next().value!);
+	plans.set(key, { secret, plan });
+	return plan;
 }
 
 /** The fork's own tests: the requests it sends itself. Read with fluid.toml as its contract. */

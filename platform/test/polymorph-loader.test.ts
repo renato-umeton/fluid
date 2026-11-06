@@ -227,6 +227,19 @@ describe("loadForkRuntime with a renamed copy", () => {
 		SLOW_MS,
 	);
 
+	it(
+		"loads a copy it already made without signing anything or reading Artifacts again",
+		async () => {
+			await loadForkRuntime(deps, "user-1", "main", { morph: { epoch: 4 } });
+			const git = t.artifacts.repos.get("user-1")!.git;
+			const work = [vi.spyOn(crypto.subtle, "sign"), vi.spyOn(crypto.subtle, "importKey"), vi.spyOn(git, "readFile"), vi.spyOn(git, "readBlob"), vi.spyOn(stock, "readFile"), vi.spyOn(stock, "readBlob")];
+			const again = await loadForkRuntime(deps, "user-1", "main", { morph: { epoch: 4 } });
+			expect(copyOf(again).epoch).toBe(4);
+			expect(work.map((spy) => spy.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+		},
+		SLOW_MS,
+	);
+
 	it("names a variant's copy after the variant and the copy, and gives the model isolate its own id", async () => {
 		const gate = await loadForkRuntime(deps, "user-1", "main", { variant: "gate-0000test", morph: { epoch: 1 } });
 		const model = await loadForkRuntime(deps, "user-1", "main", { useModel: true, morph: { epoch: 1 } });
