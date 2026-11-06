@@ -1,11 +1,13 @@
 // A Worker env for route tests: Durable Objects over the in-memory SQLite
-// fake, and a fake Artifacts binding that records token calls. Nothing here
-// reaches the network.
+// fake, and a fake Artifacts binding that records token calls and reads
+// seeded in-memory repositories (fake-repos.ts). Nothing here reaches the
+// network.
 import { Fleet } from "../../src/durable/fleet.ts";
 import { Quota } from "../../src/durable/quota.ts";
 import { Runs } from "../../src/durable/runs.ts";
 import { signSession, SESSION_COOKIE, type Session } from "../../src/lib/session.ts";
 import { construct } from "./durable.ts";
+import { fakeGitRepo, type FakeGitRepo, type RepoSeed } from "./fake-repos.ts";
 
 export const SECRET = "test-session-secret-0123456789abcdef";
 
@@ -25,13 +27,27 @@ export interface FakeRepo {
 	tokens: { id: string; scope: string; ttl: number; revoked: boolean }[];
 	forkedFrom: string | null;
 	revokeResult: boolean;
+	/** The repository's content: empty unless seeded. */
+	git: FakeGitRepo;
 }
+
+const REMOTE_BASE = "https://acct.artifacts.cloudflare.net/git/fluid/";
+const REF_LISTING = ".git/info/refs?service=git-upload-pack";
 
 export function fakeArtifacts() {
 	const repos = new Map<string, FakeRepo>();
 	const deletedNames: string[] = [];
+	const add = (name: string) => {
+		repos.set(name, { name, tokens: [], forkedFrom: null, revokeResult: true, git: fakeGitRepo() });
+	};
 	const handle = (repo: FakeRepo) => ({
-		info: async () => ({ name: repo.name, remote: `https://acct.artifacts.cloudflare.net/git/fluid/${repo.name}.git` }),
+		info: async () => ({ name: repo.name, remote: `${REMOTE_BASE}${repo.name}.git` }),
+		// Reads see the repo's current content, so seeding it again shows through handles already open.
+		log: (options?: { ref?: string; limit?: number; offset?: number }) => repo.git.log(options),
+		readCommit: (hash: string) => repo.git.readCommit(hash),
+		readTree: (hash: string) => repo.git.readTree(hash),
+		readBlob: (hash: string) => repo.git.readBlob(hash),
+		readFile: (args: { ref: string; path: string }) => repo.git.readFile(args),
 		createToken: async (scope: string, ttl: number) => {
 			const id = `tok_${repo.name}_${repo.tokens.length + 1}`;
 			repo.tokens.push({ id, scope, ttl, revoked: false });
@@ -45,15 +61,34 @@ export function fakeArtifacts() {
 		},
 		fork: async (name: string, _opts?: unknown) => {
 			if (repos.has(name)) throw new Error(`repo ${name} already exists`);
-			repos.set(name, { name, tokens: [], forkedFrom: repo.name, revokeResult: true });
+			repos.set(name, { name, tokens: [], forkedFrom: repo.name, revokeResult: true, git: fakeGitRepo() });
 			return { name };
 		},
 		[Symbol.dispose]: () => undefined,
 	});
 	return {
 		repos,
-		add(name: string) {
-			repos.set(name, { name, tokens: [], forkedFrom: null, revokeResult: true });
+		add,
+		/** Creates the repo if needed and replaces its content with the seeded history; returns that content (commit ids in seed order). */
+		seed(name: string, seed: RepoSeed): FakeGitRepo {
+			if (!repos.has(name)) add(name);
+			const git = fakeGitRepo(seed);
+			repos.get(name)!.git = git;
+			return git;
+		},
+		/**
+		 * A stand-in for global fetch (vi.stubGlobal) that answers the ref
+		 * listing of a repo's git remote, which the platform reads without
+		 * cloning (listRemoteRefs: stock/suite.ts resolves a release tag with
+		 * it). Any other request fails, so a test never reaches the network.
+		 */
+		fetch: async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+			const url = input instanceof Request ? input.url : String(input);
+			const name = url.startsWith(REMOTE_BASE) && url.endsWith(REF_LISTING) ? url.slice(REMOTE_BASE.length, -REF_LISTING.length) : null;
+			if (name === null) throw new Error(`no network in tests: ${init?.method ?? "GET"} ${url}`);
+			const repo = repos.get(name);
+			if (!repo) return new Response(`repository ${name} not found`, { status: 404 });
+			return new Response(repo.git.advertisement(), { headers: { "content-type": "application/x-git-upload-pack-advertisement" } });
 		},
 		deleted: deletedNames,
 		binding: {
