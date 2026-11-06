@@ -12,14 +12,27 @@ Every Fluid fork starts from the same upstream code. A bug in upstream sits in e
 Yes, for a large class of exploits, and Fluid is well placed to do it safely.
 
 - Many exploits depend on details that callers never see: internal property names, internal function names, the shape of internal objects. If each fork runs a copy where those details are renamed with a secret seed, an exploit built against upstream stops working on the forks.
-- The hard part of software diversity has always been knowing that the changed copy still works. Fluid already answers that question for every change: the gate runs upstream's probes. A renamed copy goes live only when every probe gives the same answer as the plain fork.
+- The hard part of software diversity has always been knowing that the changed copy still works. Fluid already checks that for every change: the gate runs upstream's probes. A renamed copy goes live only when every probe gives the same answer as the plain fork. That shows equivalence on tested behavior; it is not a formal proof.
 - The original names stay behind as tripwires. Only someone working from upstream's source would use them, so a blind attempt raises an alarm, and the platform moves that fork to a new copy at once.
 
 Limits, stated plainly: a transform that keeps behavior also keeps every bug that the public behavior exposes. A wrong rule or a missing check on a public request field stays exploitable. Polymorphic installation does not replace a patch. It buys time between "bug found" and "fix shipped", and it stops one exploit from reaching the whole fleet in that window.
 
 ## Background
 
-(filled in from the research brief)
+**Why now.** In October 2026 a cluster of incidents was reported under the name "Black October" (INCIBE-CERT, "Vulnerabilities and security incidents during Black October 2026", 3 Nov 2026). It included PHP2Shell (CVE-2026-109618 and CVE-2026-109619), which Wiz reports frontier models helped find and exploit ([Wiz, 21 Oct 2026](https://www.wiz.io/blog/php2shell-php-rce)); CISA added both to its Known Exploited Vulnerabilities list on 26 Oct 2026. Automated bug finding at scale was already public: in DARPA's AI Cyber Challenge, finalists found 54 of 63 synthetic vulnerabilities and 18 real ones ([DARPA, 8 Aug 2025](https://www.darpa.mil/news/2025/aixcc-results)), and Google reported that Big Sleep found SQLite CVE-2025-6965 ([Google, 15 Jul 2025](https://blog.google/technology/safety-security/cybersecurity-updates-summer-2025/)). When finding bugs gets cheap, one exploit that works on every copy of a program is the expensive part to take away.
+
+**The idea is old.** Cohen proposed an "evolver that operates at program installation" ([Computers & Security 1993](https://doi.org/10.1016/0167-4048(93)90054-9)). Forrest, Somayaji and Ackley argued that what a language leaves arbitrary should be random ([HotOS 1997](https://doi.org/10.1109/HOTOS.1997.595185)). Franz proposed an app store that hands every downloader "a unique, but functionally identical version" of each program ([NSPW 2010](https://doi.org/10.1145/1900546.1900550)). SQLrand appends a random key to SQL keywords so injected SQL fails, and strips the key from error messages ([ACNS 2004](https://doi.org/10.1007/978-3-540-24852-1_21)); renaming identifiers is the same move. Larsen et al. survey the field ([IEEE S&P 2014](https://doi.org/10.1109/SP.2014.25)). Crane et al. pair diversity with booby traps that only an attack can trigger ([NSPW 2013](https://doi.org/10.1145/2535813.2535824)), which is what our tripwires are. RaJa randomized JavaScript identifiers in the browser against cross-site scripting ([ISC 2010](https://doi.org/10.1007/978-3-642-18178-8_18)). We found no published work that renames server-side JavaScript names per installation against exploit reuse; that may only mean we did not find it.
+
+**What the research says to watch for.**
+
+| Finding | Rule we follow |
+| :-- | :-- |
+| Randomization that is not refreshed falls to brute force and to probing, and fast re-randomization adds little on its own ([Shacham et al., CCS 2004](https://doi.org/10.1145/1030083.1030124); [Bittau et al., S&P 2014](https://doi.org/10.1109/SP.2014.22)). | Strength comes from entropy per copy: every listed name gets its own 41-bit suffix. Copies are seeded independently, and a tripwire hit rotates that copy. |
+| A tripwire that takes a service down turns detection into denial of service (Shacham et al.). | A hit refuses that one request and rotates the copy. The fork keeps serving. One rotation starts per copy, however many hits it gets. |
+| One leak can reveal a randomized layout ([Snow et al., S&P 2013](https://doi.org/10.1109/SP.2013.45)). | Copies and seeds stay inside the platform. Renamed names are mapped back to the originals in error messages before they leave it, as SQLrand does. |
+| Diversity gives no advantage against attacks that do not depend on the randomized detail, and helps most against probing ([Evans, Nguyen-Tuong, Knight 2011](https://doi.org/10.1007/978-1-4614-0977-9_2)). | We claim protection only for exploits that name internal properties or functions, and the experiment includes an exploit that does not. Wrong guesses all get the same refusal, so names cannot be learned one at a time. |
+| A test-based check shows equivalence only on tested behavior ([Baudry, Allier, Monperrus, ISSTA 2014](https://doi.org/10.1145/2610384.2610415)). | The rename is a consistent change of identifiers, and the list checks rule out the usual ways names leak into behavior (strings, JSON keys, card fields). The gate compares every probe answer on top of that. |
+| Prototype pollution gadgets in Node.js and Deno read names fixed by the runtime, such as `shell` and `env` ([Silent Spring, USENIX Security 2023](https://www.usenix.org/conference/usenixsecurity23/presentation/shcherbakov); GHunter, Cornelissen, Shcherbakov and Balliu, USENIX Security 2024). | Renaming app names does not touch those. Fork isolates have no shell or network, and the next steps below add the hardening GHunter recommends. |
 
 ## Threat model
 
@@ -50,9 +63,13 @@ For a fork with a list, the gate sends every probe request to the plain fork and
 
 In a renamed copy, the original names are dead. A request that uses one as a key, at any depth, can only come from someone working from upstream's source. The platform refuses that request, records a security event, and starts a rotation for that fork. A key shaped like a renamed name with another copy's suffix is treated the same way. The fork's own renamed names are not flagged, so the experiment can show honestly what a leaked copy does.
 
-### 6. Rotation
+### 6. Nothing renamed leaves the platform
 
-A new workflow, `fluid-rotate`, moves every fork to its next epoch every 6 hours, and moves one fork at once after a tripwire hit. It runs the equivalence check first and keeps the old copy when the new one fails. Whatever an attacker learned about a copy goes stale at the next rotation.
+Seeds and renamed copies never leave the platform. When a renamed copy throws, the platform maps renamed names back to the original names in the error message before it logs or returns it, so an error cannot leak a copy. A refused request gets the same answer whether it used an original name or a wrong suffix.
+
+### 7. Rotation
+
+A new workflow, `fluid-rotate`, moves every fork to its next epoch every 6 hours, moves one fork at once after a tripwire hit, and moves a fork right after a change lands on its `main`. It runs the equivalence check first and keeps the old copy when the new one fails. A rotation starts at most once per copy, so a flood of hits costs one gate run. Whatever an attacker learned about a copy goes stale at the next rotation.
 
 ## The proof of concept
 
@@ -83,7 +100,7 @@ Twenty forks on the fixture release, run through the real loader, gate, and ask 
 
 ## Next steps beyond the proof of concept
 
-- A tripwire inside the isolate for prototype pollution (a check of built-in prototypes after each answer).
+- Freeze built-in prototypes in the fork isolate before the app loads, as GHunter recommends, and add a tripwire inside the isolate that checks them after each answer.
 - Trace a foreign suffix back to the fork that leaked it and rotate that fork too.
 - Let a fork raise its rotation rate in `fluid.toml`, a preference that only moves toward safety.
 - Derive the list from the contract automatically instead of by hand.
