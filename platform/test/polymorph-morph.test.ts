@@ -1,6 +1,6 @@
-import { parse } from "sucrase/dist/parser/index.js";
-import sucraseBase from "sucrase/dist/parser/traverser/base.js";
-import { TokenType } from "sucrase/dist/parser/tokenizer/types.js";
+import { parse } from "sucrase/dist/esm/parser/index.js";
+import * as sucraseBase from "sucrase/dist/esm/parser/traverser/base.js";
+import { TokenType } from "sucrase/dist/esm/parser/tokenizer/types.js";
 import { describe, expect, it } from "vitest";
 import stockSource from "../src/generated/stock-source.json";
 import { POLYMORPH_LIST_PATH, parsePolymorphList, usableNames } from "../src/polymorph/list.ts";

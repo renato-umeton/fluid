@@ -5,11 +5,16 @@ import { defineConfig } from "vitest/config";
 // (git over MemoryFS, transforms, toml, cookies, refs) and never touch the network.
 // Durable Object classes run against an in-memory SQLite fake of their storage
 // (test/helpers/durable.ts); cloudflare:workers resolves to a small stand-in.
+// Sucrase is loaded through Vite, as the Worker bundle loads it, so tests use
+// its ES module build (whose files import each other without extensions, which
+// plain Node does not resolve) and the polymorph token adapter shares that
+// build's parser with transform.
 export default defineConfig({
 	resolve: {
 		alias: { "cloudflare:workers": fileURLToPath(new URL("./test/helpers/cloudflare-workers.ts", import.meta.url)) },
 	},
 	test: {
 		include: ["test/**/*.test.ts"],
+		server: { deps: { inline: ["sucrase"] } },
 	},
 });

@@ -2,9 +2,11 @@
 // parser: it is already bundled into the Worker and is the only parser that
 // runs there. Its token API is internal (no public entry point), so this
 // adapter checks everything it relies on and fails loudly, rather than let a
-// sucrase upgrade silently change what gets renamed.
-import { parse } from "sucrase/dist/parser/index.js";
-import { TokenType } from "sucrase/dist/parser/tokenizer/types.js";
+// sucrase upgrade silently change what gets renamed. It imports the parser
+// from sucrase's ES module build, the one the Worker bundle already holds for
+// transform, so the bundle carries a single parser.
+import { parse } from "sucrase/dist/esm/parser/index.js";
+import { TokenType } from "sucrase/dist/esm/parser/tokenizer/types.js";
 import { ENTRY_MODULE, type ModuleMap } from "../runtime/modules.ts";
 
 export interface IdentifierToken {
