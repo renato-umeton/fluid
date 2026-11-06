@@ -3,4 +3,5 @@ dist/
 .cloudflare/
 .wrangler/
 src/generated/
-test/.tmp-modules/
+# Modules tests write to disk; removed after each run, ignored in case a run is interrupted.
+test/.tmp-*/
