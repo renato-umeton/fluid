@@ -21,8 +21,9 @@ const stockRoot = join(repoRoot, "stock");
 const generatedDir = join(platformRoot, "src", "generated");
 
 // What the published stock repo contains: the runtime, the suites the gate
-// reads, the probe runner, the intent ledger, and configuration. Unit tests,
-// build scripts, and tooling stay in the monorepo.
+// reads, the probe runner, the intent ledger, configuration, and the list of
+// internal names that polymorphic copies rename. Unit tests, build scripts,
+// and tooling stay in the monorepo.
 const STOCK_INCLUDE = [
 	"app/",
 	"intent/",
@@ -36,6 +37,7 @@ const STOCK_INCLUDE = [
 	".intent/",
 	"fluid.toml",
 	"README.md",
+	"polymorph.json",
 ];
 
 const fromWorktree = process.env.FLUID_CONTENT_SOURCE === "worktree";
