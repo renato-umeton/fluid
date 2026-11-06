@@ -13,7 +13,15 @@ export const sub = "Every fork runs its own renamed copy of upstream's code.";
 /** The recording sits next to the page (platform/public/data), served the same way in mock and live mode. */
 export const DATA_URL = new URL("../../data/polymorph-demo.json", import.meta.url);
 
-const SCORE_HEADERS = ["Attack", "Sent", "Plain fleet compromised", "Renamed copies compromised, platform scan bypassed", "Compromised through the platform", "Refused by the platform", "Moved to a new copy"];
+/** Scoreboard columns after the attack: the key in a scoreRows row, and its name. */
+export const SCORE_COLUMNS = [
+  ["sent", "Sent"],
+  ["plain", "Plain fleet compromised"],
+  ["direct", "Renamed copies compromised, platform scan bypassed"],
+  ["compromised", "Compromised through the platform"],
+  ["refused", "Refused by the platform"],
+  ["rotated", "Moved to a new copy"],
+];
 /** The summary replaces "Replaying..." a moment after the last tile changes. */
 const SETTLE_MS = 150;
 
@@ -69,6 +77,7 @@ function layout(root, demo) {
   const switchWord = h("span", { class: "muted", "aria-hidden": "true" });
   const toggle = h("input", { type: "checkbox", role: "switch", id: "polymorph-switch", checked: polymorphOn, onchange: (e) => { polymorphOn = e.target.checked; reset(); } });
   const afterLine = afterRotationLine(demo);
+  const rows = scoreRows(demo);
   current = { demo, tiles, status, switchWord };
   reset();
   mount(root, h("div", { class: "polymorph" },
@@ -79,25 +88,39 @@ function layout(root, demo) {
         fleet,
         h("label", { class: "row small", for: "polymorph-switch" }, toggle, h("strong", {}, "Polymorphic installation"), switchWord),
         h("div", { class: "row", role: "group", "aria-label": "Replay the recorded attacks" },
-          demo.attacks.map((a) => h("button", { type: "button", class: "btn", title: a.detail, onclick: () => play(a.id) }, h("strong", {}, `Attack ${a.id}:`), " ", a.label)),
+          demo.attacks.map((a) => h("button", { type: "button", class: "btn", title: a.detail, onclick: () => play(a.id) }, attackName(a))),
           h("button", { type: "button", class: "btn", onclick: reset }, "Reset")),
         status)),
     h("section", { class: "panel" },
-      h("div", { class: "panel-head" }, h("div", {}, h("h2", {}, "Scoreboard"), h("p", {}, `Each count is forks out of the ${demo.forks.length} in the recorded run.`))),
-      h("div", { class: "panel-body stack" },
-        scoreTable(demo),
+      h("div", { class: "panel-head" }, h("div", {}, h("h2", { id: "polymorph-score-heading" }, "Scoreboard"), h("p", {}, `Each count is forks out of the ${demo.forks.length} in the recorded run.`))),
+      h("div", { class: "panel-body stack polymorph-scoreboard" },
+        scoreTable(rows),
+        scoreList(rows),
         afterLine ? h("p", { class: "small" }, afterLine) : null,
         h("p", { class: "small" }, equivalenceLine(demo))))));
 }
 
-function scoreTable(demo) {
-  return h("div", { class: "table-wrap" },
+/** "Attack A: label", the same on the buttons and in the scoreboard. */
+function attackName(attack) {
+  return [h("strong", {}, `Attack ${attack.id}:`), " ", attack.label];
+}
+
+function scoreTable(rows) {
+  return h("div", { class: "table-wrap polymorph-score-wide" },
     h("table", { class: "data polymorph-score" },
       h("caption", { class: "visually-hidden" }, "Scoreboard: one row per attack, with the forks it compromised on the plain fleet, on renamed copies with the platform scan bypassed, and through the platform"),
-      h("thead", {}, h("tr", {}, SCORE_HEADERS.map((name) => h("th", { scope: "col" }, name)))),
-      h("tbody", {}, scoreRows(demo).map((r) => h("tr", {},
-        h("th", { scope: "row" }, h("strong", {}, `Attack ${r.id}:`), " ", r.label, h("div", { class: "xsmall muted" }, r.detail)),
-        [r.sent, r.plain, r.direct, r.compromised, r.refused, r.rotated].map((text) => h("td", {}, text)))))));
+      h("thead", {}, h("tr", {}, h("th", { scope: "col" }, "Attack"), SCORE_COLUMNS.map(([, name]) => h("th", { scope: "col" }, name)))),
+      h("tbody", {}, rows.map((r) => h("tr", {},
+        h("th", { scope: "row" }, attackName(r), h("div", { class: "xsmall muted" }, r.detail)),
+        SCORE_COLUMNS.map(([key]) => h("td", {}, r[key])))))));
+}
+
+/** The same rows where seven columns do not fit (styles.css shows one or the other by the scoreboard's width): one short list per attack. */
+function scoreList(rows) {
+  return h("ul", { class: "polymorph-score-narrow", "aria-labelledby": "polymorph-score-heading" }, rows.map((r) => h("li", {},
+    h("p", {}, attackName(r)),
+    h("p", { class: "xsmall muted" }, r.detail),
+    h("dl", {}, SCORE_COLUMNS.map(([key, name]) => h("div", {}, h("dt", {}, name), h("dd", {}, r[key])))))));
 }
 
 /** Back to the starting tiles for the switch's position. */

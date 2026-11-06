@@ -276,6 +276,12 @@ describe("the Polymorph view is wired in like the others", () => {
 		expect(typeof view.leave).toBe("function");
 	});
 
+	it("fills every scoreboard column from a field of scoreRows, Sent first", () => {
+		const row = scoreRows(demo())[0];
+		expect(view.SCORE_COLUMNS.map(([key]: [string, string]) => key)).toEqual(["sent", "plain", "direct", "compromised", "refused", "rotated"]);
+		for (const [key] of view.SCORE_COLUMNS as [string, string][]) expect(row).toHaveProperty(key);
+	});
+
 	it("reads the recording from public/data, next to the page", () => {
 		expect(fileURLToPath(view.DATA_URL)).toBe(fileURLToPath(new URL("../public/data/polymorph-demo.json", import.meta.url)));
 	});
