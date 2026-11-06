@@ -21,7 +21,7 @@ describe("published stock", () => {
 
 describe("parsePolymorphList", () => {
 	it("returns the names of a version 1 list", () => {
-		expect(parsePolymorphList(JSON.stringify({ version: 1, description: "d", names: ["b", "a"] }))).toEqual(["b", "a"]);
+		expect(parsePolymorphList(JSON.stringify({ version: 1, description: "d", names: ["secretName", "otherName"] }))).toEqual(["secretName", "otherName"]);
 		expect(parsePolymorphList(JSON.stringify({ version: 1, names: [] }))).toEqual([]);
 	});
 
@@ -30,11 +30,19 @@ describe("parsePolymorphList", () => {
 		["a list that is not an object", "[]", /object/],
 		["another version", JSON.stringify({ version: 2, names: [] }), /version must be 1, got 2/],
 		["a missing version", JSON.stringify({ names: [] }), /version must be 1/],
-		["names that are not an array", JSON.stringify({ version: 1, names: "a" }), /names must be an array of strings/],
-		["a name that is not a string", JSON.stringify({ version: 1, names: ["a", 3] }), /names must be an array of strings/],
-		["a name listed twice", JSON.stringify({ version: 1, names: ["a", "b", "a"] }), /"a" is listed twice/],
+		["names that are not an array", JSON.stringify({ version: 1, names: "secretName" }), /names must be an array of strings/],
+		["a name that is not a string", JSON.stringify({ version: 1, names: ["secretName", 3] }), /names must be an array of strings/],
+		["a name listed twice", JSON.stringify({ version: 1, names: ["secretName", "otherName", "secretName"] }), /"secretName" is listed twice/],
+		["a reserved name", JSON.stringify({ version: 1, names: ["secretName", "then"] }), /"then" is reserved/],
+		["a name that is not a valid identifier", JSON.stringify({ version: 1, names: ["secret-name"] }), /"secret-name" is not a valid identifier/],
+		["a name that already carries a suffix separator", JSON.stringify({ version: 1, names: ["secret$name"] }), /"secret\$name" is not a valid identifier/],
 	])("refuses %s", (_label, text, message) => {
 		expect(() => parsePolymorphList(text)).toThrow(message);
+	});
+
+	it("names every problem of the list at once", () => {
+		const text = JSON.stringify({ version: 1, names: ["then", "secret-name", "secretName", "secretName"] });
+		expect(() => parsePolymorphList(text)).toThrow(/"then" is reserved.*; "secret-name" is not a valid identifier.*; "secretName" is listed twice/);
 	});
 });
 

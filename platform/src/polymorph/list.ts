@@ -10,7 +10,12 @@ import { scanTokens } from "./tokens.ts";
 /** Where stock publishes the list. */
 export const POLYMORPH_LIST_PATH = "polymorph.json";
 
-/** Parses polymorph.json: { version: 1, description?, names: string[] } with no name listed twice. */
+/**
+ * Parses polymorph.json: { version: 1, description?, names: string[] }, where
+ * every name is listed once, is a plain identifier, and is not reserved. These
+ * are upstream's mistakes, whatever a fork's code says, so any of them is
+ * fatal, and all of them are reported at once.
+ */
 export function parsePolymorphList(text: string): string[] {
 	let parsed: unknown;
 	try {
@@ -22,11 +27,14 @@ export function parsePolymorphList(text: string): string[] {
 	const { version, names } = parsed as { version?: unknown; names?: unknown };
 	if (version !== 1) throw new Error(`${POLYMORPH_LIST_PATH}: version must be 1, got ${JSON.stringify(version)}`);
 	if (!Array.isArray(names) || !names.every((name) => typeof name === "string")) throw new Error(`${POLYMORPH_LIST_PATH}: names must be an array of strings`);
+	const problems: string[] = [];
 	const seen = new Set<string>();
 	for (const name of names as string[]) {
-		if (seen.has(name)) throw new Error(`${POLYMORPH_LIST_PATH}: ${JSON.stringify(name)} is listed twice`);
+		const problem = seen.has(name) ? `${JSON.stringify(name)} is listed twice` : nameProblem(name);
+		if (problem !== null) problems.push(problem);
 		seen.add(name);
 	}
+	if (problems.length > 0) throw new Error(`${POLYMORPH_LIST_PATH}: ${problems.join("; ")}`);
 	return [...seen];
 }
 
@@ -110,6 +118,15 @@ export const RESERVED_NAMES: ReadonlySet<string> = new Set([
 // suffix, so a tripwire can tell a renamed name from anything else.
 const LISTABLE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
+/** Why a name can never be renamed, whatever the module map, or null when it can be. */
+function nameProblem(name: unknown): string | null {
+	if (typeof name !== "string" || !LISTABLE.test(name)) {
+		return `${JSON.stringify(name)} is not a valid identifier (letters, digits, and underscores, not starting with a digit; "$" marks renamed names)`;
+	}
+	if (RESERVED_NAMES.has(name)) return `${JSON.stringify(name)} is reserved (a keyword, a global, a property of a built-in, or a name of the runtime contract)`;
+	return null;
+}
+
 /**
  * Why renaming these names in this module map would not be safe, one plain
  * message per problem. A name that no module uses is fine (forks differ); it
@@ -120,13 +137,9 @@ export function listProblems(names: readonly string[], map: ModuleMap): string[]
 	const problems: string[] = [];
 	const renamed: string[] = [];
 	for (const name of names) {
-		if (typeof name !== "string" || !LISTABLE.test(name)) {
-			problems.push(`${JSON.stringify(name)} is not a valid identifier (letters, digits, and underscores, not starting with a digit; "$" marks renamed names)`);
-		} else if (RESERVED_NAMES.has(name)) {
-			problems.push(`${JSON.stringify(name)} is reserved (a keyword, a global, a property of a built-in, or a name of the runtime contract)`);
-		} else {
-			renamed.push(name);
-		}
+		const problem = nameProblem(name);
+		if (problem === null) renamed.push(name);
+		else problems.push(problem);
 	}
 	if (renamed.length === 0) return problems;
 	for (const [path, module] of Object.entries(map.modules)) {
