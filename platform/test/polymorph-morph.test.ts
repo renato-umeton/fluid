@@ -277,6 +277,22 @@ describe("usableNames", () => {
 		expect([...usable.keys()]).toEqual(["secretName"]);
 	});
 
+	it("skips the member names a host reads from objects the fork hands it, which no built-in carries", () => {
+		const hostRead = ["pull", "flush", "transform", "handleEvent", "passive", "capture", "iv", "salt", "iterations", "namedCurve", "counter", "additionalData", "tagLength"];
+		const { usable, skipped } = usableNames(new Map([...hostRead, "secretName"].map((name) => [name, `${name}$abcd1234`])), forkMap({}));
+		expect(skipped).toEqual(hostRead.map((name) => ({ name, reason: "a built-in name in this runtime" })));
+		expect([...usable.keys()]).toEqual(["secretName"]);
+	});
+
+	it("keeps an event listener object working when handleEvent is listed", () => {
+		const map = forkMap({
+			"app/a.ts": 'export function main() { let calls = 0; const target = new EventTarget(); target.addEventListener("ping", { handleEvent() { calls++; } }); target.dispatchEvent(new Event("ping")); return calls; }',
+		});
+		const { usable, skipped } = usableNames(new Map([["handleEvent", "handleEvent$abcd1234"]]), map);
+		expect(skipped).toEqual([{ name: "handleEvent", reason: "a built-in name in this runtime" }]);
+		expect(runMain(jsOf(morphModuleMap(map, usable), "app/a.js"))).toBe(1);
+	});
+
 	it("keeps a host API call working when its member name is listed", () => {
 		const map = forkMap({ "app/a.ts": "function encode(s: string) { return new TextEncoder().encode(s).length; }\nexport function main() { return encode('abc'); }" });
 		const { usable, skipped } = usableNames(new Map([["encode", "encode$abcd1234"]]), map);

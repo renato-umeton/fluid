@@ -193,6 +193,18 @@ function nameProblem(name: unknown): string | null {
 	return null;
 }
 
+/**
+ * Member names the runtime reads by name from objects the fork creates and
+ * hands to it: stream sources, sinks, and transformers, event listener objects
+ * and listener options, and WebCrypto algorithm parameters. No built-in
+ * carries most of them, so the runtime walk cannot find them, yet renaming one
+ * breaks the call that reads it.
+ */
+const HOST_READ_NAMES: ReadonlySet<string> = new Set([
+	"pull", "start", "cancel", "flush", "transform", "write", "close", "abort", "handleEvent", "passive", "once", "capture", "signal",
+	"iv", "salt", "iterations", "namedCurve", "hash", "length", "name", "counter", "additionalData", "tagLength", "info",
+]);
+
 const BUILT_IN_REASON = "a built-in name in this runtime";
 
 export interface SkippedName {
@@ -217,7 +229,7 @@ export function usableNames(
 	scanned: ReadonlyMap<string, SourceTokens> = scanModuleMap(map),
 ): { usable: Map<string, string>; skipped: SkippedName[] } {
 	const reasons = new Map<string, string[]>();
-	for (const name of names.keys()) if (runtimeBuiltInNames().has(name)) reasons.set(name, [BUILT_IN_REASON]);
+	for (const name of names.keys()) if (runtimeBuiltInNames().has(name) || HOST_READ_NAMES.has(name)) reasons.set(name, [BUILT_IN_REASON]);
 	for (const { name, reason } of textUses([...names.keys()], map, scanned)) {
 		const found = reasons.get(name) ?? [];
 		found.push(reason);
