@@ -77,6 +77,17 @@ export interface FleetFork {
 	baseline: BaselineRecord | null;
 }
 
+export const SECURITY_EVENT_KINDS = ["tripwire", "rotated", "rotation_refused"] as const;
+/** A request tripped a wire of a renamed copy, or a rotation moved a fork to a new copy or was refused. */
+export type SecurityEventKind = (typeof SECURITY_EVENT_KINDS)[number];
+
+export interface SecurityEvent {
+	kind: SecurityEventKind;
+	at: string;
+	/** For admins only, never broadcast: which wire a request tripped, at what path, the copy's fingerprint and epoch. */
+	detail?: Record<string, Json>;
+}
+
 export interface FleetSnapshot {
 	stockTags: string[];
 	releases: ReleaseRecord[];
@@ -90,10 +101,13 @@ export type FleetEvent =
 	| { type: "fork"; fork: FleetFork }
 	| { type: "removed"; repo: string }
 	| { type: "stockTags"; stockTags: string[] }
-	| ({ type: "release"; at: string } & ReleaseRecord);
+	| ({ type: "release"; at: string } & ReleaseRecord)
+	// The stream is public: a security event says that something happened to a fork, never what was named or which copy.
+	| { type: "security"; repo: string; kind: SecurityEventKind; at: string };
 
 const GATES_PER_REPO = 20;
 const HEALTH_HISTORY_PER_REPO = 50;
+export const SECURITY_EVENTS_PER_REPO = 100;
 
 const encoder = new TextEncoder();
 const HEARTBEAT_MS = 25_000;
@@ -132,6 +146,8 @@ export class Fleet extends DurableObject<Env> {
 		if (!columns.includes("baseline")) sql.exec("ALTER TABLE forks ADD COLUMN baseline TEXT");
 		sql.exec("CREATE TABLE IF NOT EXISTS health_history (seq INTEGER PRIMARY KEY AUTOINCREMENT, repo TEXT NOT NULL, event TEXT NOT NULL)");
 		sql.exec("CREATE INDEX IF NOT EXISTS health_history_repo ON health_history (repo, seq)");
+		sql.exec("CREATE TABLE IF NOT EXISTS security_events (seq INTEGER PRIMARY KEY AUTOINCREMENT, repo TEXT NOT NULL, event TEXT NOT NULL)");
+		sql.exec("CREATE INDEX IF NOT EXISTS security_events_repo ON security_events (repo, seq)");
 		sql.exec("CREATE TABLE IF NOT EXISTS stock_tags (tag TEXT PRIMARY KEY, published_at TEXT NOT NULL)");
 		sql.exec("CREATE TABLE IF NOT EXISTS releases (tag TEXT PRIMARY KEY, record TEXT NOT NULL)");
 		sql.exec("CREATE TABLE IF NOT EXISTS gates (seq INTEGER PRIMARY KEY AUTOINCREMENT, repo TEXT NOT NULL, at TEXT NOT NULL, result TEXT NOT NULL)");
@@ -275,8 +291,33 @@ export class Fleet extends DurableObject<Env> {
 		return { state: result.state, stale: result.stale === true };
 	}
 
+	// ---------- polymorphic copies ----------
+
+	/**
+	 * Records a security event for a fork, keeping the latest
+	 * SECURITY_EVENTS_PER_REPO, and tells stream subscribers only that one
+	 * happened: the repo, the kind, and the time. Null when the fork is not in
+	 * the fleet.
+	 */
+	recordSecurityEvent(repo: string, input: { kind: SecurityEventKind; detail?: Record<string, Json> }, at = Date.now()): SecurityEvent | null {
+		if (!SECURITY_EVENT_KINDS.includes(input.kind)) throw new Error(`recordSecurityEvent: unknown kind ${JSON.stringify(input.kind)}; kinds are ${SECURITY_EVENT_KINDS.join(", ")}`);
+		if (!this.get(repo)) return null;
+		const event: SecurityEvent = { kind: input.kind, at: new Date(at).toISOString(), ...(input.detail ? { detail: input.detail } : {}) };
+		const sql = this.ctx.storage.sql;
+		sql.exec("INSERT INTO security_events (repo, event) VALUES (?, ?)", repo, JSON.stringify(event));
+		sql.exec("DELETE FROM security_events WHERE repo = ? AND seq NOT IN (SELECT seq FROM security_events WHERE repo = ? ORDER BY seq DESC LIMIT ?)", repo, repo, SECURITY_EVENTS_PER_REPO);
+		this.broadcast({ type: "security", repo, kind: event.kind, at: event.at });
+		return event;
+	}
+
+	/** A fork's security events, newest first. */
+	securityEvents(repo: string, limit = SECURITY_EVENTS_PER_REPO): SecurityEvent[] {
+		return this.ctx.storage.sql.exec("SELECT event FROM security_events WHERE repo = ? ORDER BY seq DESC LIMIT ?", repo, limit).toArray().map((r) => JSON.parse(r.event as string) as SecurityEvent);
+	}
+
 	remove(repo: string): boolean {
 		this.ctx.storage.sql.exec("DELETE FROM health_history WHERE repo = ?", repo);
+		this.ctx.storage.sql.exec("DELETE FROM security_events WHERE repo = ?", repo);
 		this.ctx.storage.sql.exec("DELETE FROM gates WHERE repo = ?", repo);
 		this.ctx.storage.sql.exec("DELETE FROM kv WHERE k = ?", importLogKey(repo));
 		const removed = this.ctx.storage.sql.exec("DELETE FROM forks WHERE repo = ? RETURNING repo", repo).toArray().length > 0;
