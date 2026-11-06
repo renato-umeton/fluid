@@ -3,6 +3,7 @@ import { TokenType } from "sucrase/dist/parser/tokenizer/types.js";
 import { describe, expect, it } from "vitest";
 import stockSource from "../src/generated/stock-source.json";
 import { POLYMORPH_LIST_PATH, listProblems, parsePolymorphList } from "../src/polymorph/list.ts";
+import { morphModuleMap, morphSource } from "../src/polymorph/morph.ts";
 import { scanTokens, tokenScanner } from "../src/polymorph/tokens.ts";
 import { ENTRY_MODULE, ForkCodeError, buildModuleMap, type ModuleMap } from "../src/runtime/modules.ts";
 
@@ -176,5 +177,123 @@ describe("listProblems", () => {
 		const map = forkMap({ "connectors/broken.js": "export const = ;" });
 		expect(() => listProblems(["secretName"], map)).toThrow(ForkCodeError);
 		expect(() => listProblems(["secretName"], map)).toThrow(/connectors\/broken\.js/);
+	});
+});
+
+const NAMES = new Map([
+	["secretName", "secretName$abcd1234"],
+	["helper", "helper$0000zzzz"],
+]);
+
+describe("morphSource", () => {
+	it("renames the listed identifiers in every position and changes nothing else", () => {
+		const source = [
+			'import { secretName, other as helper } from "./a.js";',
+			"export { secretName, helper as publicHelper };",
+			"export function run(input) {",
+			"  const { secretName: picked, ...rest } = input;",
+			"  const card = { secretName, helper: picked, [secretName]: rest };",
+			"  class Box { #secretName = 1; secretName() { return this.#secretName; } }",
+			"  // secretName and helper stay as they are in comments",
+			'  return [input.secretName, input?.secretName, card.helper, `text secretName ${secretName.length} ${helper()}`, "secretName", Box];',
+			"}",
+		].join("\n");
+		expect(morphSource(source, NAMES)).toBe(
+			[
+				'import { secretName$abcd1234, other as helper$0000zzzz } from "./a.js";',
+				"export { secretName$abcd1234, helper$0000zzzz as publicHelper };",
+				"export function run(input) {",
+				"  const { secretName$abcd1234: picked, ...rest } = input;",
+				"  const card = { secretName$abcd1234, helper$0000zzzz: picked, [secretName$abcd1234]: rest };",
+				"  class Box { #secretName$abcd1234 = 1; secretName$abcd1234() { return this.#secretName$abcd1234; } }",
+				"  // secretName and helper stay as they are in comments",
+				'  return [input.secretName$abcd1234, input?.secretName$abcd1234, card.helper$0000zzzz, `text secretName ${secretName$abcd1234.length} ${helper$0000zzzz()}`, "secretName", Box];',
+				"}",
+			].join("\n"),
+		);
+	});
+
+	it("keeps behavior: renamed code computes exactly what the original does", () => {
+		const code = [
+			"function main() {",
+			"  const secretName = 2;",
+			"  const helper = (x) => x * secretName;",
+			"  const o = { secretName, helper, nested: { secretName: 5 } };",
+			"  const { secretName: alias, ...rest } = o;",
+			"  class K { #secretName = 3; secretName() { return this.#secretName + o.nested?.secretName; } }",
+			"  return [o.secretName, alias, Object.keys(rest).length, new K().secretName(), `${helper(o.secretName)}`, o.helper(1), JSON.stringify(Object.values(o.nested))];",
+			"}",
+		].join("\n");
+		const run = (js: string) => new Function(`${js}\nreturn main();`)() as unknown[];
+		expect(run(morphSource(code, NAMES))).toEqual(run(code));
+		expect(run(code)).toEqual([2, 2, 2, 8, "4", 2, "[5]"]);
+	});
+
+	it("renames an identifier spelled with escapes", () => {
+		expect(morphSource("const secret\\u004eame = 1;", NAMES)).toBe("const secretName$abcd1234 = 1;");
+	});
+
+	it("returns the source unchanged when no listed name is used as an identifier", () => {
+		const js = 'const x = "secretName"; // helper\n';
+		expect(morphSource(js, NAMES)).toBe(js);
+	});
+
+	it("refuses to rename into a name the source already uses", () => {
+		expect(() => morphSource("const secretName$abcd1234 = 1; secretName;", NAMES)).toThrow(/already uses "secretName\$abcd1234"/);
+	});
+
+	it("refuses a map that would merge names or produce something that is not an identifier", () => {
+		expect(() => morphSource("a;", new Map([["a", "x"], ["b", "x"]]))).toThrow(/both map to "x"/);
+		expect(() => morphSource("a;", new Map([["a", "not valid"]]))).toThrow(/different valid identifier/);
+		expect(() => morphSource("a;", new Map([["a", "a"]]))).toThrow(/different valid identifier/);
+	});
+
+	it("throws a SyntaxError for code that does not parse", () => {
+		expect(() => morphSource("export const = ;", NAMES)).toThrow(SyntaxError);
+	});
+});
+
+describe("morphModuleMap", () => {
+	const variants = new Map([["secretName", "secretName$abcd1234"]]);
+	const jsOf = (map: ModuleMap, name: string) => (map.modules[name] as { js: string }).js;
+
+	it("renames every JS module but the generated entry, and keeps JSON modules and the main module", () => {
+		const map = forkMap({
+			"app/a.ts": "export const secretName = 1;",
+			"intent/b.ts": 'import { secretName } from "../app/a.js";\nexport const value = secretName;',
+			"policies/c.json": '{ "limit": 3 }',
+		});
+		map.modules[ENTRY_MODULE] = { js: "const secretName = 1;\nexport default secretName;" };
+		const morphed = morphModuleMap(map, variants);
+		expect(morphed.mainModule).toBe(map.mainModule);
+		expect(Object.keys(morphed.modules)).toEqual(Object.keys(map.modules));
+		expect(jsOf(morphed, "app/a.js")).toBe(jsOf(map, "app/a.js").replace("secretName", "secretName$abcd1234"));
+		expect(jsOf(morphed, "intent/b.js")).toBe(jsOf(map, "intent/b.js").replaceAll("secretName", "secretName$abcd1234"));
+		expect(morphed.modules[ENTRY_MODULE]).toEqual(map.modules[ENTRY_MODULE]);
+		expect(morphed.modules["policies/c.json"]).toEqual({ json: { limit: 3 } });
+	});
+
+	it("does not change the map it is given", () => {
+		const map = forkMap({ "app/a.ts": "export const secretName = 1;" });
+		const before = structuredClone(map);
+		morphModuleMap(map, variants);
+		expect(map).toEqual(before);
+	});
+
+	it("refuses, listing every problem, when renaming would not be safe", () => {
+		const map = forkMap({ "app/a.ts": 'export const secretName = 1;\nexport const key = "secretName";' });
+		const names = new Map([...variants, ["then", "then$abcd1234"]]);
+		expect(() => morphModuleMap(map, names)).toThrow(/cannot rename[\s\S]*"then" is reserved[\s\S]*"secretName" appears in a string or template text in app\/a\.js/);
+	});
+
+	it("blames the fork, with the module path, for a module that does not parse", () => {
+		const map = forkMap({ "connectors/broken.js": "export const = ;" });
+		expect(() => morphModuleMap(map, variants)).toThrow(ForkCodeError);
+		expect(() => morphModuleMap(map, variants)).toThrow(/connectors\/broken\.js/);
+	});
+
+	it("names the module when a target name is already taken", () => {
+		const map = forkMap({ "app/a.ts": "export const secretName$abcd1234 = 1;\nexport const secretName = 2;" });
+		expect(() => morphModuleMap(map, variants)).toThrow(/app\/a\.js: .*already uses "secretName\$abcd1234"/);
 	});
 });
