@@ -219,8 +219,7 @@ describe("scoreRows", () => {
 describe("the lines around the fleet and the scoreboard", () => {
 	it("says what polymorphic installation does, that this is a recorded run, and its limit", () => {
 		const [what, replay, limit] = introLines(demo());
-		expect(what).toContain("the 31 internal names on upstream's list");
-		expect(what).toContain("A request that uses an original name is refused, and that fork moves to a new copy.");
+		expect(what).toBe("Polymorphic installation renames the 31 internal names on upstream's list with a secret seed for each fork.");
 		expect(replay).toBe("This page replays a recorded run of the end-to-end test: 3 forks on release v1.15.0-zero-day, recorded 2026-11-06 at 18:30 UTC.");
 		expect(limit).toBe("Renaming cannot stop a bug that public fields alone can reach, as attack B shows.");
 	});
@@ -236,7 +235,8 @@ describe("the lines around the fleet and the scoreboard", () => {
 	});
 
 	it("says what the leaked names did after their fork moved to a new copy", () => {
-		expect(afterRotationLine(demo())).toBe("After the leaked copy's fork moved to a new copy, the leaked names compromised 0 forks and were refused on 1.");
+		expect(afterRotationLine(demo())).toBe("After the leaked copy's fork moved to a new copy, the leaked names compromised 0 forks and were refused on 1 fork.");
+		expect(afterRotationLine(changed((d) => d.afterRotation.refused.push("user-01")))).toBe("After the leaked copy's fork moved to a new copy, the leaked names compromised 0 forks and were refused on 2 forks.");
 		expect(afterRotationLine(changed((d) => Reflect.deleteProperty(d, "afterRotation")))).toBeNull();
 	});
 

@@ -174,7 +174,7 @@ function recordedText(iso) {
 export function introLines(data) {
   const hasB = data.attacks.some((a) => a.id === "B");
   return [
-    `Polymorphic installation gives every fork its own copy of upstream's code, with the ${data.listSize} internal names on upstream's list renamed by a secret seed for that fork. A request that uses an original name is refused, and that fork moves to a new copy.`,
+    `Polymorphic installation renames the ${data.listSize} internal names on upstream's list with a secret seed for each fork.`,
     `This page replays a recorded run of the end-to-end test: ${plural(data.forks.length, "fork")} on release ${data.release}, recorded ${recordedText(data.recordedAt)}.`,
     `Renaming cannot stop a bug that public fields alone can reach${hasB ? ", as attack B shows" : ""}.`,
   ];
@@ -194,7 +194,7 @@ export function outcomeLine(data, attackId, polymorphOn) {
 export function afterRotationLine(data) {
   const after = data.afterRotation;
   if (!after) return null;
-  return `After the leaked copy's fork moved to a new copy, the leaked names compromised ${plural(after.compromised.length, "fork")} and were refused on ${after.refused.length}.`;
+  return `After the leaked copy's fork moved to a new copy, the leaked names compromised ${plural(after.compromised.length, "fork")} and were refused on ${plural(after.refused.length, "fork")}.`;
 }
 
 /** How many copies answered every probe like the plain fork, from each fork's mismatch count. */
