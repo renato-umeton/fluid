@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // @ts-expect-error plain ES module from the static UI
-import { afterRotationLine, equivalenceLine, introLines, outcomeLine, parseDemo, replaySteps, scoreRows, tileStates, validateDemo } from "../public/js/polymorph-replay.js";
+import { afterRotationLine, equivalenceLine, introLines, latestOnly, outcomeLine, parseDemo, replayer, replaySteps, scoreRows, tileStates, validateDemo } from "../public/js/polymorph-replay.js";
 // @ts-expect-error plain ES module from the static UI
 import * as view from "../public/js/views/polymorph.js";
 
@@ -61,6 +61,9 @@ function changed(edit: Edit) {
 }
 
 const tile = (state: string, fingerprint: string | null, note: string): Tile => ({ state, fingerprint, note });
+
+/** Every attack in the fixture, with the switch on and off. */
+const CASES = demo().attacks.flatMap((a) => [[a.id, true], [a.id, false]] as [string, boolean][]);
 
 describe("validateDemo", () => {
 	it("accepts a recording in the documented shape", () => {
@@ -208,15 +211,13 @@ describe("tileStates", () => {
 });
 
 describe("replaySteps", () => {
-	const cases = demo().attacks.flatMap((a) => [[a.id, true], [a.id, false]] as [string, boolean][]);
-
-	it.each(cases)("attack %s, switch on: %s, ends on the tile states", (id, on) => {
+	it.each(CASES)("attack %s, switch on: %s, ends on the tile states", (id, on) => {
 		const tiles: Record<string, Tile> = tileStates(demo(), null, on);
 		for (const step of replaySteps(demo(), id, on) as Step[]) tiles[step.repo] = step.tile;
 		expect(tiles).toEqual(tileStates(demo(), id, on));
 	});
 
-	it.each(cases)("attack %s, switch on: %s, plays in order within about two seconds", (id, on) => {
+	it.each(CASES)("attack %s, switch on: %s, plays in order within about two seconds", (id, on) => {
 		const times = (replaySteps(demo(), id, on) as Step[]).map((s) => s.at);
 		expect(times).toEqual([...times].sort((a, b) => a - b));
 		expect(Math.min(...times)).toBe(0);
@@ -239,6 +240,121 @@ describe("replaySteps", () => {
 		const steps = replaySteps(demo(), "A", false) as Step[];
 		expect(steps.map((s) => s.repo)).toEqual(ALL);
 		expect(steps.every((s) => s.tile.fingerprint === null)).toBe(true);
+	});
+});
+
+describe("replayer", () => {
+	beforeEach(() => {
+		vi.useFakeTimers();
+	});
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	/** A replayer on the fixture that records what it paints and says. */
+	function recorder() {
+		const painted: [string, Tile][] = [];
+		const said: string[] = [];
+		const replay = replayer(demo(), { paint: (repo: string, t: Tile) => { painted.push([repo, t]); }, say: (text: string) => { said.push(text); } });
+		return { replay, painted, said };
+	}
+	/** Each repo's last painted tile. */
+	const shown = (painted: [string, Tile][]) => Object.fromEntries(painted);
+
+	it.each<[boolean, string]>([
+		[true, "Polymorphic installation is on: every fork runs its own copy. Pick an attack to replay it."],
+		[false, "Polymorphic installation is off: every fork runs upstream's plain code. Pick an attack to replay it."],
+	])("on reset with the switch on: %s, paints the starting tiles and says %j", (on, line) => {
+		const { replay, painted, said } = recorder();
+		replay.reset(on);
+		expect(shown(painted)).toEqual(tileStates(demo(), null, on));
+		expect(said).toEqual([line]);
+	});
+
+	it.each(CASES)("plays attack %s, switch on: %s, to its end state within 2.5 seconds, then sums it up", (id, on) => {
+		const { replay, painted, said } = recorder();
+		replay.play(id, on);
+		expect(said).toEqual([`Replaying attack ${id} with polymorphic installation ${on ? "on" : "off"}...`]);
+		vi.advanceTimersByTime(2500);
+		expect(shown(painted)).toEqual(tileStates(demo(), id, on));
+		expect(said.at(-1)).toBe(outcomeLine(demo(), id, on));
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
+	it("paints nothing after stop() in the middle of a replay", () => {
+		const { replay, painted } = recorder();
+		replay.play("A", true);
+		vi.advanceTimersByTime(800);
+		const count = painted.length;
+		replay.stop();
+		expect(vi.getTimerCount()).toBe(0);
+		vi.runAllTimers();
+		expect(painted).toHaveLength(count);
+	});
+
+	it("cancels the first replay when a second one starts", () => {
+		const { replay, painted, said } = recorder();
+		replay.play("A", true);
+		vi.advanceTimersByTime(800);
+		const mark = painted.length;
+		replay.play("B", true);
+		vi.runAllTimers();
+		const onlyB = [...Object.entries(tileStates(demo(), null, true)), ...(replaySteps(demo(), "B", true) as Step[]).map((s) => [s.repo, s.tile])];
+		expect(painted.slice(mark)).toEqual(onlyB);
+		expect(said.at(-1)).toBe(outcomeLine(demo(), "B", true));
+	});
+
+	it("cancels a replay on reset", () => {
+		const { replay, painted, said } = recorder();
+		replay.play("A3", true);
+		vi.advanceTimersByTime(800);
+		replay.reset(false);
+		expect(vi.getTimerCount()).toBe(0);
+		vi.runAllTimers();
+		expect(shown(painted)).toEqual(tileStates(demo(), null, false));
+		expect(said.at(-1)).toBe("Polymorphic installation is off: every fork runs upstream's plain code. Pick an attack to replay it.");
+	});
+
+	it("with reduced motion paints only the end state, at once, and sets no timer", () => {
+		const { replay, painted, said } = recorder();
+		replay.play("A", true, { reducedMotion: true });
+		expect(painted).toEqual(Object.entries(tileStates(demo(), "A", true)));
+		expect(said).toEqual([outcomeLine(demo(), "A", true)]);
+		expect(vi.getTimerCount()).toBe(0);
+	});
+});
+
+describe("latestOnly", () => {
+	/** A promise and the function that settles it. */
+	function deferred<T>() {
+		let resolve!: (value: T) => void;
+		const promise = new Promise<T>((r) => { resolve = r; });
+		return { promise, resolve };
+	}
+
+	it("hands over only the latest of two overlapping loads, even when the older one finishes last", async () => {
+		const first = deferred<string>();
+		const second = deferred<string>();
+		const pending = [first.promise, second.promise];
+		const loads = latestOnly(() => pending.shift());
+		const shown: string[] = [];
+		const older = loads.start((value: string) => shown.push(value));
+		const newer = loads.start((value: string) => shown.push(value));
+		second.resolve("second");
+		first.resolve("first");
+		await Promise.all([older, newer]);
+		expect(shown).toEqual(["second"]);
+	});
+
+	it("hands over nothing once stopped, as when the reader leaves the page during the load", async () => {
+		const load = deferred<string>();
+		const loads = latestOnly(() => load.promise);
+		const shown: string[] = [];
+		const started = loads.start((value: string) => shown.push(value));
+		loads.stop();
+		load.resolve("late");
+		await started;
+		expect(shown).toEqual([]);
 	});
 });
 

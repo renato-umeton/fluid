@@ -1,8 +1,9 @@
 // The Polymorph view's recorded run (data/polymorph-demo.json): checks its
-// shape and turns it into tile states, the steps of the animation, and plain
-// sentences. Every number comes from the recording; nothing here makes one
-// up. No DOM here: views/polymorph.js builds the elements with h(). Pure, so
-// it is unit tested.
+// shape, turns it into tile states, the steps of the animation, and plain
+// sentences, and runs the replay. Every number comes from the recording;
+// nothing here makes one up. No DOM here: views/polymorph.js builds the
+// elements with h() and passes in how to paint a tile and set the status line,
+// so all of this is unit tested.
 
 export const ATTACK_IDS = ["A", "A2", "A3", "B"];
 export const RECORD_COMMAND = "cd platform && npm run polymorph:record";
@@ -13,6 +14,8 @@ const FINGERPRINT = /^[0-9a-f]{8}$/;
 const HIT_MS = 1500;
 const MOVE_AT_MS = 1800;
 const MOVE_MS = 500;
+/** The summary replaces "Replaying..." a moment after the last tile changes. */
+const SETTLE_MS = 150;
 
 const isObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 const isText = (value) => typeof value === "string" && value.trim() !== "";
@@ -227,4 +230,69 @@ export function equivalenceLine(data) {
   const head = `Equivalence check: on ${total - differ.length} of ${plural(total, "fork")} the copy answered all ${data.probes} probes like the plain fork`;
   if (differ.length === 0) return `${head}, with 0 differences.`;
   return `${head}. Forks with differences: ${differ.map((f) => `${f.repo} (${f.mismatches})`).join(", ")}.`;
+}
+
+function startLine(polymorphOn) {
+  return polymorphOn
+    ? "Polymorphic installation is on: every fork runs its own copy. Pick an attack to replay it."
+    : "Polymorphic installation is off: every fork runs upstream's plain code. Pick an attack to replay it.";
+}
+
+/**
+ * The replay, apart from the page: paint(repo, tile) draws one tile, say(text) sets the status line, and clock
+ * schedules the animation (tests use fake timers). reset() and play() first cancel whatever is still scheduled, and
+ * stop() cancels it when the reader leaves the page. The clock calls the timer functions inside arrow functions,
+ * since browsers refuse setTimeout called as a method of another object.
+ */
+export function replayer(data, { paint, say, clock = { set: (fn, ms) => setTimeout(fn, ms), clear: (id) => clearTimeout(id) } }) {
+  let timers = [];
+  const stop = () => {
+    for (const id of timers) clock.clear(id);
+    timers = [];
+  };
+  const paintAll = (tiles) => {
+    for (const [repo, tile] of Object.entries(tiles)) paint(repo, tile);
+  };
+  return {
+    stop,
+    /** Back to the starting tiles for the switch's position. */
+    reset(polymorphOn) {
+      stop();
+      paintAll(tileStates(data, null, polymorphOn));
+      say(startLine(polymorphOn));
+    },
+    /** One attack over about two seconds; with reduced motion, only its end state, at once. */
+    play(attackId, polymorphOn, { reducedMotion = false } = {}) {
+      stop();
+      const done = outcomeLine(data, attackId, polymorphOn);
+      if (reducedMotion) {
+        paintAll(tileStates(data, attackId, polymorphOn));
+        say(done);
+        return;
+      }
+      paintAll(tileStates(data, null, polymorphOn));
+      say(`Replaying attack ${attackId} with polymorphic installation ${polymorphOn ? "on" : "off"}...`);
+      const steps = replaySteps(data, attackId, polymorphOn);
+      for (const step of steps) timers.push(clock.set(() => paint(step.repo, step.tile), step.at));
+      timers.push(clock.set(() => say(done), Math.max(...steps.map((s) => s.at)) + SETTLE_MS));
+    },
+  };
+}
+
+/**
+ * Keeps only the latest load: start(show) runs load() and passes its result to show() unless start() or stop() came
+ * again before it finished (the page rendered again, or the reader left it). start() returns the load's promise.
+ */
+export function latestOnly(load) {
+  let latest = 0;
+  return {
+    async start(show) {
+      const mine = ++latest;
+      const result = await load();
+      if (mine === latest) show(result);
+    },
+    stop() {
+      latest += 1;
+    },
+  };
 }
