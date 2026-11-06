@@ -209,7 +209,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 
 .main { min-width: 0; display: flex; flex-direction: column; }
 .topbar {
-  display: flex; align-items: center; gap: 16px; justify-content: space-between;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 16px; justify-content: space-between;
   padding: 16px 28px; border-bottom: 1px solid var(--line); background: var(--panel);
 }
 .topbar-title p { color: var(--ink-2); font-size: var(--fs-sm); }
@@ -626,7 +626,7 @@ table.behavior-diff details ul { margin: 4px 0 0; padding-left: 16px; font-size:
   .rail-foot { flex-direction: row; display: flex; flex-wrap: wrap; align-items: center; }
   .workspace, .fork-grid, .customize, .harvest, .proposals { grid-template-columns: 1fr; }
   .context-panel { position: static; max-height: none; }
-  .topbar { padding: 12px 16px; flex-wrap: wrap; }
+  .topbar { padding: 12px 16px; }
   .fork-pill { flex-wrap: wrap; border-radius: var(--r-md); max-width: 100%; }
   .fork-pill .hide-sm { display: none; }
   .fork-pill strong { overflow-wrap: anywhere; white-space: normal; }
