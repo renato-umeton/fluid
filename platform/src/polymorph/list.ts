@@ -7,7 +7,7 @@
 // expression, or JSON key or value can be read back as a property name at run
 // time, and that use would not be renamed.
 import type { ModuleMap } from "../runtime/modules.ts";
-import { scanModuleMap, walkJson, type SourceTokens } from "./tokens.ts";
+import { PolymorphUnavailableError, SCAN_LIMITS, scanModuleMap, walkJson, type SourceTokens } from "./tokens.ts";
 
 /** Where stock publishes the list. */
 export const POLYMORPH_LIST_PATH = "polymorph.json";
@@ -214,23 +214,34 @@ export interface SkippedName {
 }
 
 /**
+ * The fork's own contract as text, by repo path: its tier 3 tests
+ * (tests/user/manifest.json), its end-to-end scenarios (tests/user/e2e.json),
+ * and fluid.toml. Requests and config bring these words to the fork's code as
+ * data, which a renamed property would no longer find, so a copy skips them
+ * like the text of its modules.
+ */
+export type ContractTexts = Readonly<Record<string, string>>;
+
+/**
  * Splits one copy's names into those this module map can have renamed and
  * those it skips: names this runtime builds in, and names the fork's own text
- * uses (a string, template text, regular expression, or a JSON key or value),
- * where renaming the identifiers would leave the text pointing at the old
- * name. A skipped name is neither renamed nor treated as a tripwire, so it
- * costs the copy only that name. Whether a name may be listed at all is for
- * parsePolymorphList (and morphFork) to judge. Pass the tokens scanModuleMap
- * read when you have them, so each module is read once.
+ * uses (a string, template text, regular expression, or a JSON key or value,
+ * and the words of its contract), where renaming the identifiers would leave
+ * the text pointing at the old name. A skipped name is neither renamed nor
+ * treated as a tripwire, so it costs the copy only that name. Whether a name
+ * may be listed at all is for parsePolymorphList (and morphFork) to judge.
+ * Pass the tokens scanModuleMap read when you have them, so each module is
+ * read once.
  */
 export function usableNames(
 	names: ReadonlyMap<string, string>,
 	map: ModuleMap,
 	scanned: ReadonlyMap<string, SourceTokens> = scanModuleMap(map),
+	contract: ContractTexts = {},
 ): { usable: Map<string, string>; skipped: SkippedName[] } {
 	const reasons = new Map<string, string[]>();
 	for (const name of names.keys()) if (runtimeBuiltInNames().has(name) || HOST_READ_NAMES.has(name)) reasons.set(name, [BUILT_IN_REASON]);
-	for (const { name, reason } of textUses([...names.keys()], map, scanned)) {
+	for (const { name, reason } of textUses([...names.keys()], map, scanned, contract)) {
 		const found = reasons.get(name) ?? [];
 		found.push(reason);
 		reasons.set(name, found);
@@ -246,16 +257,18 @@ export function usableNames(
 }
 
 /**
- * Every place one of the names reaches this module map as text, in module
- * order: as a whole word of a string, template text, or regular expression, or
- * of a JSON key or string value. JS modules are read from their scanned
- * tokens, so the generated entry module, which is never renamed, is not read.
+ * Every place one of the names reaches this module map or the fork's contract
+ * as text, in module order and then contract order: as a whole word of a
+ * string, template text, or regular expression, of a JSON key or string value,
+ * or of a contract file that is not JSON. JS modules are read from their
+ * scanned tokens, so the generated entry module, which is never renamed, is
+ * not read.
  */
-function textUses(names: readonly string[], map: ModuleMap, scanned: ReadonlyMap<string, SourceTokens>): SkippedName[] {
+function textUses(names: readonly string[], map: ModuleMap, scanned: ReadonlyMap<string, SourceTokens>, contract: ContractTexts): SkippedName[] {
 	const uses: SkippedName[] = [];
 	if (names.length === 0) return uses;
 	const listed = new Set(names);
-	// Two kinds of text per module, each with the listed names found in it, and the reason each gives.
+	// The kinds of text in one module or file, each with the listed names found in it and the reason each gives.
 	const record = (path: string, found: [Set<string>, string][]): void => {
 		for (const name of names) for (const [inText, reason] of found) if (inText.has(name)) uses.push({ name, reason: `${reason} ${path}` });
 	};
@@ -269,16 +282,41 @@ function textUses(names: readonly string[], map: ModuleMap, scanned: ReadonlyMap
 			for (const text of tokens.regexes) addListedWords(text, listed, inRegexes);
 			record(path, [[inStrings, "appears in a string or template text in"], [inRegexes, "appears in a regular expression in"]]);
 		} else {
-			const inKeys = new Set<string>();
-			const inValues = new Set<string>();
-			walkJson(module.json, (kind, text) => {
-				if (kind !== "other") addListedWords(text, listed, kind === "key" ? inKeys : inValues);
-				return true;
-			});
-			record(path, [[inKeys, "appears in a key in"], [inValues, "appears in a string value in"]]);
+			record(path, jsonUses(module.json, listed));
 		}
 	}
+	for (const [path, text] of Object.entries(contract)) {
+		if (text.length > SCAN_LIMITS.moduleChars) throw new PolymorphUnavailableError(`${path}: polymorph: the file has ${text.length} characters, more than the ${SCAN_LIMITS.moduleChars} characters the renamer reads in one file`);
+		const json = path.endsWith(".json") ? parseJson(text) : null;
+		if (json !== null) {
+			record(path, jsonUses(json.value, listed));
+			continue;
+		}
+		const inText = new Set<string>();
+		addListedWords(text, listed, inText);
+		record(path, [[inText, "appears in"]]);
+	}
 	return uses;
+}
+
+/** The listed names among the keys and among the string values of a JSON value. */
+function jsonUses(value: unknown, listed: ReadonlySet<string>): [Set<string>, string][] {
+	const inKeys = new Set<string>();
+	const inValues = new Set<string>();
+	walkJson(value, (kind, text) => {
+		if (kind !== "other") addListedWords(text, listed, kind === "key" ? inKeys : inValues);
+		return true;
+	});
+	return [[inKeys, "appears in a key in"], [inValues, "appears in a string value in"]];
+}
+
+/** A contract file's JSON, or null when it does not parse: then its words are read as plain text, which skips at least as much. */
+function parseJson(text: string): { value: unknown } | null {
+	try {
+		return { value: JSON.parse(text) };
+	} catch {
+		return null;
+	}
 }
 
 /** Identifier-like words: the pieces of a text a property name could be read back from at run time. */

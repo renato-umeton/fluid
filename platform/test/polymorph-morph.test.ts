@@ -258,6 +258,52 @@ describe("usableNames reads the fork's text", () => {
 	});
 });
 
+describe("usableNames reads the fork's own contract", () => {
+	// A fork that reads a request field whose name upstream lists: its own tests send that field.
+	const reader = forkMap({ "app/read.ts": "export function weight(request: { context: { patient?: { secretName?: number } } }) { return request.context.patient?.secretName; }" });
+	const manifest = JSON.stringify({ probes: [{ id: "chart-weight", request: { question: "q", context: { patient: { secretName: 70 } } }, assert: [{ path: "body", contains: "otherName" }] }] });
+
+	it("skips the keys and string values of the fork's tier 3 tests", () => {
+		expect(usableNames(suffixed("secretName", "otherName", "thirdName"), reader, undefined, { "tests/user/manifest.json": manifest }).skipped).toEqual([
+			{ name: "secretName", reason: "appears in a key in tests/user/manifest.json" },
+			{ name: "otherName", reason: "appears in a string value in tests/user/manifest.json" },
+		]);
+	});
+
+	it("skips the words of end-to-end scenarios and of fluid.toml, after the modules' own uses", () => {
+		const map = forkMap({ "app/a.ts": 'export const note = "thirdName";' });
+		const contract = {
+			"tests/user/e2e.json": JSON.stringify({ suite: "e2e", scenarios: [{ id: "s1", steps: [{ op: "ask", request: { context: { thirdName: true } } }] }] }),
+			"fluid.toml": '[display]\nsecretName = "otherName" # shown in cards\n',
+		};
+		expect(usableNames(suffixed("secretName", "otherName", "thirdName"), map, undefined, contract).skipped).toEqual([
+			{ name: "secretName", reason: "appears in fluid.toml" },
+			{ name: "otherName", reason: "appears in fluid.toml" },
+			{ name: "thirdName", reason: "appears in a string or template text in app/a.js; appears in a key in tests/user/e2e.json" },
+		]);
+	});
+
+	it("reads a contract file that is not valid JSON as plain words", () => {
+		expect(usableNames(suffixed("secretName"), reader, undefined, { "tests/user/manifest.json": "{ secretName: " }).skipped).toEqual([
+			{ name: "secretName", reason: "appears in tests/user/manifest.json" },
+		]);
+	});
+
+	it("will not read a contract file larger than it can afford, and names it", () => {
+		const huge = JSON.stringify({ note: "x".repeat(SCAN_LIMITS.moduleChars) });
+		expectUnavailable(() => usableNames(suffixed("secretName"), reader, undefined, { "tests/user/manifest.json": huge }), /^tests\/user\/manifest\.json: .*more than the 262144 characters/);
+	});
+
+	it("leaves the field a fork's own tests send unrenamed in its copy, and renames the rest", () => {
+		const plain = morphFork(reader, suffixed("secretName", "otherName"));
+		expect(jsOf(plain.map, "app/read.js")).toContain("request.context.patient?.secretName$abcd1234");
+		const guarded = morphFork(reader, suffixed("secretName", "otherName"), { "tests/user/manifest.json": manifest });
+		expect(jsOf(guarded.map, "app/read.js")).toContain("request.context.patient?.secretName;");
+		expect([...guarded.usable.keys()]).toEqual([]);
+		expect(guarded.skipped.map((entry) => entry.name)).toEqual(["secretName", "otherName"]);
+	});
+});
+
 describe("usableNames", () => {
 	const variants = new Map([
 		["secretName", "secretName$abcd1234"],

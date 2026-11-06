@@ -3,7 +3,7 @@
 // they are, so the copy behaves exactly like the plain fork (the gate checks
 // that it does) while code written against the public names cannot find them.
 import { ENTRY_MODULE, type LoaderModule, type ModuleMap } from "../runtime/modules.ts";
-import { nameProblems, usableNames, type SkippedName } from "./list.ts";
+import { nameProblems, usableNames, type ContractTexts, type SkippedName } from "./list.ts";
 import { VARIANT_PATTERN } from "./names.ts";
 import { PolymorphUnavailableError, scanModuleMap, scanTokens, type IdentifierToken } from "./tokens.ts";
 
@@ -21,7 +21,8 @@ export interface MorphedFork {
 /**
  * One polymorphic copy of a fork: the loader's entry point. Reads each JS
  * module once, skips the names this runtime builds in and the names the fork's
- * own text uses, and renames the rest in every JS module except the generated
+ * own text uses (its modules, and the contract texts: its own tests and
+ * fluid.toml), and renames the rest in every JS module except the generated
  * entry, which must be the map's main module and calls the fork only through
  * its default export and ask. JSON modules and mainModule stay as they are,
  * and the input map is not modified. Scan requests for tripwires with the
@@ -31,13 +32,13 @@ export interface MorphedFork {
  * (callers run the plain fork and log the reason), and a plain Error for a
  * module map or names that no fork or list could produce.
  */
-export function morphFork(map: ModuleMap, variants: ReadonlyMap<string, string>): MorphedFork {
+export function morphFork(map: ModuleMap, variants: ReadonlyMap<string, string>, contract: ContractTexts = {}): MorphedFork {
 	if (map.mainModule !== ENTRY_MODULE) throw new Error(`morphFork: a fork module map's main module is ${ENTRY_MODULE}, got ${JSON.stringify(map.mainModule)}`);
 	const problems = nameProblems(variants.keys());
 	if (problems.length > 0) throw new Error(`morphFork: no list can hold these names: ${problems.join("; ")}`);
 	checkTargets(variants);
 	const scanned = scanModuleMap(map);
-	const { usable, skipped } = usableNames(variants, map, scanned);
+	const { usable, skipped } = usableNames(variants, map, scanned, contract);
 	const modules: Record<string, LoaderModule> = {};
 	for (const [path, module] of Object.entries(map.modules)) {
 		const tokens = scanned.get(path);
