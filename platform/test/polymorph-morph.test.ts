@@ -380,14 +380,22 @@ describe("morphSource", () => {
 		expect(morphSource(js, NAMES)).toBe(js);
 	});
 
-	it("refuses to rename into a name the source already uses", () => {
-		expect(() => morphSource("const secretName$abcd1234 = 1; secretName;", NAMES)).toThrow(/already uses "secretName\$abcd1234"/);
+	it("cannot rename into a name the source already uses, and does not echo that secret name", () => {
+		const error = expectUnavailable(() => morphSource("const secretName$abcd1234 = 1; secretName;", NAMES), /already uses this copy's renamed name for "secretName"/);
+		expect(error.message).not.toContain("abcd1234");
 	});
 
-	it("refuses a map that would merge names or produce something that is not an identifier", () => {
-		expect(() => morphSource("a;", new Map([["a", "x"], ["b", "x"]]))).toThrow(/both map to "x"/);
-		expect(() => morphSource("a;", new Map([["a", "not valid"]]))).toThrow(/different valid identifier/);
-		expect(() => morphSource("a;", new Map([["a", "a"]]))).toThrow(/different valid identifier/);
+	it.each([
+		["another name", "x"],
+		["the name itself", "a"],
+		["a keyword", "if"],
+		["another listed name with a suffix", "b$abcd1234"],
+		["a suffix in capitals", "a$ABCD1234"],
+		["a short suffix", "a$abc"],
+	])("refuses a target that is %s instead of the listed name with a per-copy suffix", (_label, target) => {
+		const error = thrown(() => morphSource("a;", new Map([["a", target]])));
+		expect(error.message).toMatch(/"a" must map to "a" followed by "\$" and eight base36 characters/);
+		expect(error.message).not.toContain(target === "a" ? "a$" : target);
 	});
 
 	it("cannot rename code sucrase does not parse", () => {
@@ -435,6 +443,7 @@ describe("morphModuleMap", () => {
 
 	it("names the module when a target name is already taken", () => {
 		const map = forkMap({ "app/a.ts": "export const secretName$abcd1234 = 1;\nexport const secretName = 2;" });
-		expect(() => morphModuleMap(map, variants)).toThrow(/app\/a\.js: .*already uses "secretName\$abcd1234"/);
+		const error = expectUnavailable(() => morphModuleMap(map, variants), /^app\/a\.js: .*already uses this copy's renamed name for "secretName"/);
+		expect(error.message).not.toContain("abcd1234");
 	});
 });

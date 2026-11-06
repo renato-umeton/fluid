@@ -4,23 +4,28 @@
 // that it does) while code written against the public names cannot find them.
 import { ENTRY_MODULE, type LoaderModule, type ModuleMap } from "../runtime/modules.ts";
 import { listProblems } from "./list.ts";
+import { VARIANT_PATTERN } from "./names.ts";
 import { PolymorphUnavailableError, scanTokens } from "./tokens.ts";
-
-const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
 /**
  * Replaces every identifier token whose name is a key of names with its
  * value: bindings, references, member names after "." and "?.", object keys
  * and shorthand, destructuring, class members, import and export names, and
- * identifiers inside template substitutions. Throws when a new name already
- * occurs in the source, since renaming into it would merge two names.
+ * identifiers inside template substitutions. Each value must be its key, "$",
+ * and eight base36 characters (as variantNames makes them). When the source
+ * already uses one of those names, renaming into it would merge two names, so
+ * this copy cannot be made.
  */
 export function morphSource(js: string, names: ReadonlyMap<string, string>): string {
 	checkTargets(names);
 	const { identifiers } = scanTokens(js);
 	const targets = new Set(names.values());
 	const taken = identifiers.find((token) => targets.has(token.text));
-	if (taken) throw new Error(`morphSource: the source already uses ${JSON.stringify(taken.text)}, a renamed name; renaming into it would merge two names`);
+	if (taken) {
+		// The renamed name is this copy's secret; the listed name it belongs to is public.
+		const listed = VARIANT_PATTERN.exec(taken.text)![1];
+		throw new PolymorphUnavailableError(`polymorph: the source already uses this copy's renamed name for ${JSON.stringify(listed)}; renaming into it would merge two names`);
+	}
 	let out = "";
 	let copied = 0;
 	for (const token of identifiers) {
@@ -32,15 +37,16 @@ export function morphSource(js: string, names: ReadonlyMap<string, string>): str
 	return out + js.slice(copied);
 }
 
+/**
+ * A target must be its own name plus a per-copy suffix, so no keyword or other
+ * name can become a target and no two names can share one. The message names
+ * only the listed name, never the target, which may be a secret.
+ */
 function checkTargets(names: ReadonlyMap<string, string>): void {
-	const owners = new Map<string, string>();
 	for (const [name, target] of names) {
-		if (typeof target !== "string" || !IDENTIFIER.test(target) || target === name) {
-			throw new Error(`morphSource: ${JSON.stringify(name)} must map to a different valid identifier, got ${JSON.stringify(target)}`);
+		if (typeof target !== "string" || VARIANT_PATTERN.exec(target)?.[1] !== name) {
+			throw new Error(`morphSource: ${JSON.stringify(name)} must map to ${JSON.stringify(name)} followed by "$" and eight base36 characters`);
 		}
-		const owner = owners.get(target);
-		if (owner !== undefined) throw new Error(`morphSource: ${JSON.stringify(owner)} and ${JSON.stringify(name)} both map to ${JSON.stringify(target)}`);
-		owners.set(target, name);
 	}
 }
 
