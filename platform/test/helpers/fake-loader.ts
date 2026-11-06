@@ -70,7 +70,7 @@ export function fakeLoader() {
 			if (!factories.has(id)) factories.set(id, factory);
 			return {
 				getEntrypoint(name: string, options: { props?: unknown } = {}): EntrypointStub {
-					const call = async (method: string, args: unknown[]): Promise<unknown> => {
+					const invoke = (method: string) => async (...args: unknown[]): Promise<unknown> => {
 						const { exports, env } = await isolate(id);
 						const Class = entrypointClass(exports, id, name);
 						const ctx = { props: options.props ?? {}, waitUntil: () => undefined };
@@ -78,9 +78,10 @@ export function fakeLoader() {
 						const instance = Object.assign(new Class(ctx, env), { ctx, env }) as Record<string, unknown>;
 						const fn = instance[method];
 						if (typeof fn !== "function") throw new Error(`${id}: entrypoint ${name} has no method ${method}`);
-						return crossCall((...a: unknown[]) => fn.apply(instance, a), args);
+						return fn.apply(instance, args);
 					};
-					return new Proxy({}, { get: (_target, method) => (typeof method === "string" && !NOT_METHODS.has(method) ? (...args: unknown[]) => call(method, args) : undefined) });
+					// The Error made at the call holds the caller's stack, which an error thrown back carries.
+					return new Proxy({}, { get: (_target, method) => (typeof method === "string" && !NOT_METHODS.has(method) ? (...args: unknown[]) => crossCall(invoke(method), args, new Error()) : undefined) });
 				},
 			};
 		},
@@ -99,26 +100,88 @@ function entrypointClass(exports: Record<string, unknown>, id: string, name: str
 	return Class as new (ctx: unknown, env: unknown) => object;
 }
 
-/** Calls fn with arguments, result, and any error crossing the RPC boundary. */
-async function crossCall(fn: (...args: unknown[]) => unknown, args: unknown[]): Promise<unknown> {
+type Callable = (...args: unknown[]) => unknown;
+
+/**
+ * One call across the boundary. The arguments are copied when the call is
+ * made (a value that cannot cross fails it there), then the result is
+ * copied back, or the error: a thrown string arrives as an Error, and an
+ * error carries the caller's stack from `site`, never the thrower's.
+ */
+async function crossCall(fn: Callable, args: unknown[], site: Error): Promise<unknown> {
+	const sent = overRpc(args) as unknown[];
 	try {
-		return overRpc(await fn(...args.map(overRpc)));
-	} catch (error) {
-		throw overRpc(error);
+		return overRpc(await fn(...sent));
+	} catch (thrown) {
+		const crossed = overRpc(typeof thrown === "string" ? new Error(thrown) : thrown);
+		if (crossed instanceof Error) setStack(crossed, site.stack!.split("\n").slice(1).join("\n"));
+		throw crossed;
 	}
 }
 
+/** Types structured clone copies faithfully; they cross as it copies them. */
+const CLONED_TYPES = [Date, Map, Set, RegExp, ArrayBuffer, Blob];
+
 /**
- * A value as the other side of a Workers RPC call receives it: data is
- * structured-cloned (so neither side sees the other mutate it), a function
- * becomes an async callback whose calls cross the same way, and an error
- * keeps only its message and a built-in error type, as structured clone keeps.
+ * A value as the other side of a Workers RPC call receives it. Arrays and
+ * plain objects (prototype Object.prototype) are copied with their own
+ * enumerable properties, shared references and cycles kept. Date, Map, Set,
+ * RegExp, ArrayBuffer and its views, and Blob go through structured clone.
+ * A function becomes an async callback whose calls cross the same way. An
+ * error keeps its type when built in, its name, message, cause, and own
+ * enumerable properties, but not the thrower's stack. Anything else, a
+ * class instance or a null-prototype object included, throws DataCloneError
+ * as workerd does. Not modeled: RpcTarget, streams, Request and Response,
+ * which Workers RPC can send.
  */
 function overRpc(value: unknown): unknown {
-	if (typeof value === "function") return (...args: unknown[]) => crossCall(value as (...a: unknown[]) => unknown, args);
-	if (Array.isArray(value)) return value.map(overRpc);
-	if (value !== null && typeof value === "object" && [Object.prototype, null].includes(Object.getPrototypeOf(value))) {
-		return Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, overRpc(inner)]));
+	return cross(value, new Map());
+}
+
+function cross(value: unknown, seen: Map<object, unknown>): unknown {
+	if (typeof value === "function") return (...args: unknown[]) => crossCall(value as Callable, args, new Error());
+	if (typeof value === "symbol") throw dataCloneError("Symbol");
+	if (value === null || typeof value !== "object") return value;
+	if (seen.has(value)) return seen.get(value);
+	if (value instanceof Error) return copyError(value, seen);
+	if (Array.isArray(value)) return copyOwn(value, new Array(value.length), seen);
+	if (Object.getPrototypeOf(value) === Object.prototype) return copyOwn(value, {}, seen);
+	if (ArrayBuffer.isView(value) || CLONED_TYPES.some((type) => value instanceof type)) {
+		const copy = structuredClone(value);
+		seen.set(value, copy);
+		return copy;
 	}
-	return structuredClone(value);
+	throw dataCloneError((value as { constructor?: { name?: string } }).constructor?.name || "Object");
+}
+
+function copyOwn<T extends object>(source: object, target: T, seen: Map<object, unknown>): T {
+	seen.set(source, target);
+	for (const key of Object.keys(source)) define(target, key, cross((source as Record<string, unknown>)[key], seen));
+	return target;
+}
+
+function copyError(error: Error, seen: Map<object, unknown>): Error {
+	// Structured clone keeps a built-in error type, the message, and the cause; in Node it turns a DOMException into a plain object.
+	const copy: Error = error instanceof DOMException ? new DOMException(error.message, error.name) : structuredClone(error);
+	seen.set(error, copy);
+	if (copy.name !== error.name) copy.name = error.name;
+	if (Object.hasOwn(error, "cause")) copy.cause = cross(error.cause, seen);
+	for (const key of Object.keys(error)) define(copy, key, cross((error as unknown as Record<string, unknown>)[key], seen));
+	setStack(copy, "");
+	return copy;
+}
+
+/** Sets the stack an error shows: its own header, then `frames` (stack lines without a header). */
+function setStack(error: Error, frames: string): void {
+	const header = error.message ? `${error.name}: ${error.message}` : error.name;
+	Object.defineProperty(error, "stack", { value: frames ? `${header}\n${frames}` : header, writable: true, configurable: true });
+}
+
+/** Defines a data property, so a key such as __proto__ stays an own key instead of invoking a setter. */
+function define(target: object, key: string, value: unknown): void {
+	Object.defineProperty(target, key, { value, writable: true, enumerable: true, configurable: true });
+}
+
+function dataCloneError(type: string): DOMException {
+	return new DOMException(`Could not serialize object of type "${type}". This type does not support serialization.`, "DataCloneError");
 }

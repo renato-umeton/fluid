@@ -121,28 +121,117 @@ describe("in-memory repositories", () => {
 });
 
 describe("the fake Worker Loader", () => {
-	const source = `import { WorkerEntrypoint } from "cloudflare:workers";
+	const probeSource = (who: string) => `import { WorkerEntrypoint } from "cloudflare:workers";
+class Point {
+  constructor() {
+    this.x = 1;
+  }
+}
 export class Probe extends WorkerEntrypoint {
+  async echo(value) {
+    return value;
+  }
   async poke(input, callback) {
     input.touched = true;
     return { label: this.env.label, answer: await callback({ asked: true }) };
   }
+  async point() {
+    return new Point();
+  }
   async fail() {
-    throw new RangeError("out of range");
+    const error = new Error("coded failure", { cause: new TypeError("root cause") });
+    error.name = "CodedError";
+    error.code = "E_CODED";
+    throw error;
+  }
+  async throwIt(value) {
+    throw value;
+  }
+  async whoami() {
+    return ${JSON.stringify(who)};
   }
 }
 `;
-	const code = () => ({ compatibilityDate: "2026-10-01", mainModule: "probe.js", modules: { "probe.js": { js: source } }, env: { label: "from the factory" }, globalOutbound: null });
+	const code = (who = "A", env: Record<string, unknown> = { label: "from the factory", nested: { n: 1 } }) => ({
+		compatibilityDate: "2026-10-01",
+		mainModule: "probe.js",
+		modules: { "probe.js": { js: probeSource(who) } },
+		env,
+		globalOutbound: null,
+	});
+	const probeOf = (id: string, factory = () => code()) => loader.get(id, factory).getEntrypoint("Probe");
 
-	it("gives the entrypoint the factory's env and copies what crosses a call, as Workers RPC does", async () => {
-		const probe = loader.get("probe:copies", code).getEntrypoint("Probe");
+	it("gives the entrypoint the factory's env and copies arguments, callbacks, and results", async () => {
+		const probe = probeOf("probe:copies");
 		const input = { touched: false };
 		const asked: unknown[] = [];
 		expect(await probe.poke!(input, (arg: unknown) => (asked.push(arg), "pong"))).toEqual({ label: "from the factory", answer: "pong" });
 		expect(input.touched).toBe(false);
 		expect(asked).toEqual([{ asked: true }]);
-		await expect(probe.fail!()).rejects.toThrow("out of range");
-		await expect(probe.fail!()).rejects.toBeInstanceOf(RangeError);
+	});
+
+	describe("crosses a call as Workers RPC does", () => {
+		it("copies plain data, keeping shared references and cycles", async () => {
+			const shared = { n: 1 };
+			const value: Record<string, unknown> = { a: shared, b: shared, list: [shared, undefined] };
+			value.self = value;
+			const copy = (await probeOf("probe:rpc").echo!(value)) as Record<string, unknown>;
+			expect(copy).not.toBe(value);
+			expect(copy.a).not.toBe(shared);
+			expect(copy.a).toEqual({ n: 1 });
+			expect(copy.b).toBe(copy.a);
+			expect(copy.list).toEqual([copy.a, undefined]);
+			expect((copy.list as unknown[])[0]).toBe(copy.a);
+			expect(copy.self).toBe(copy);
+		});
+
+		it("keeps an own __proto__ key a data property", async () => {
+			const copy = (await probeOf("probe:rpc").echo!(JSON.parse('{"__proto__": {"polluted": true}, "n": 1}'))) as Record<string, unknown>;
+			expect(Object.getPrototypeOf(copy)).toBe(Object.prototype);
+			expect(Object.hasOwn(copy, "__proto__")).toBe(true);
+			expect(copy.polluted).toBeUndefined();
+			expect(copy.n).toBe(1);
+		});
+
+		it("passes Date, Map, Set, RegExp, ArrayBuffer, views, and Blob through structured clone", async () => {
+			const value = { date: new Date(0), map: new Map([["k", 1]]), set: new Set([1]), regexp: /a+/g, buffer: new Uint8Array([1, 2]).buffer, bytes: new Uint8Array([3]), view: new DataView(new ArrayBuffer(2)), blob: new Blob(["hi"]) };
+			const copy = (await probeOf("probe:rpc").echo!(value)) as typeof value;
+			expect(copy.date).not.toBe(value.date);
+			expect([copy.date, copy.map, copy.set, copy.regexp]).toEqual([new Date(0), new Map([["k", 1]]), new Set([1]), /a+/g]);
+			expect([new Uint8Array(copy.buffer), copy.bytes]).toEqual([new Uint8Array([1, 2]), new Uint8Array([3])]);
+			expect(copy.view).toBeInstanceOf(DataView);
+			expect(await copy.blob.text()).toBe("hi");
+		});
+
+		it("refuses class instances and null-prototype objects with DataCloneError, in both directions", async () => {
+			const probe = probeOf("probe:rpc");
+			class Point {
+				x = 1;
+			}
+			await expect(probe.echo!(new Point())).rejects.toMatchObject({ name: "DataCloneError", message: expect.stringContaining('"Point"') });
+			await expect(probe.echo!(Object.create(null))).rejects.toMatchObject({ name: "DataCloneError" });
+			await expect(probe.point!()).rejects.toMatchObject({ name: "DataCloneError", message: expect.stringContaining('"Point"') });
+		});
+
+		it("delivers a thrown error with its name, own properties, and cause, and the caller's stack instead of the thrower's", async () => {
+			const failure = (await probeOf("probe:rpc").fail!().catch((error: unknown) => error)) as Error & { code?: string };
+			expect(failure).toBeInstanceOf(Error);
+			expect([failure.name, failure.message, failure.code]).toEqual(["CodedError", "coded failure", "E_CODED"]);
+			expect(failure.cause).toBeInstanceOf(TypeError);
+			expect((failure.cause as Error).message).toBe("root cause");
+			expect(failure.stack).toMatch(/^CodedError: coded failure\n/);
+			expect(failure.stack).toContain("runtime-load.test.ts");
+			expect(failure.stack).not.toContain(".tmp-loader-");
+		});
+
+		it("keeps a built-in error type, and delivers a thrown string as an Error", async () => {
+			const probe = probeOf("probe:rpc");
+			await expect(probe.throwIt!(new RangeError("out of range"))).rejects.toBeInstanceOf(RangeError);
+			await expect(probe.throwIt!(new RangeError("out of range"))).rejects.toThrow("out of range");
+			const failure = await probe.throwIt!("plain words").catch((error: unknown) => error);
+			expect(failure).toBeInstanceOf(Error);
+			expect((failure as Error).message).toBe("plain words");
+		});
 	});
 
 	it("runs the factory once per id", async () => {
