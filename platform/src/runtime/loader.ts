@@ -3,8 +3,12 @@
 // null). Only the model variant of an isolate (id suffix ":llm") gets the LLM
 // capability in its env; every other isolate has no route to the platform.
 // Isolates are keyed by repo:sha (plus a variant), and the transformed module
-// map is cached per key in this isolate.
+// map is cached per key in this isolate. A renamed copy of a fork (see
+// polymorph/) adds ":m<fingerprint>" to both, since its code differs.
 import synthetic from "../generated/synthetic.json";
+import { buildCopy, planCopy } from "../polymorph/install.ts";
+import type { SkippedName } from "../polymorph/list.ts";
+import { PolymorphUnavailableError } from "../polymorph/tokens.ts";
 import { buildE2ERunnerModuleMap, buildModuleMap, buildRunnerModuleMap, isRuntimePath, RUNTIME_DIRS, type ModuleMap } from "./modules.ts";
 import { resolveCommit, shortRef } from "./refs.ts";
 import { openRepo, readCommitFiles } from "./repo-files.ts";
@@ -101,6 +105,28 @@ export interface LoadOptions {
 	variant?: string;
 	/** Give the isolate the LLM capability (a separate ":llm" isolate). */
 	useModel?: boolean;
+	/**
+	 * Load a renamed copy for this epoch instead of the plain fork, when the
+	 * platform can make one: POLYMORPH_SECRET is set, the fork's pinned stock
+	 * release publishes a list, and there are no extraFiles. With onlyAt, only
+	 * when the ref resolves to that commit; with namesHash, only when the copy
+	 * renames exactly the names the gate verified. Otherwise the plain fork
+	 * loads (morph: null) and one log line says why: this never fails a load.
+	 */
+	morph?: { epoch: number; onlyAt?: string; namesHash?: string };
+}
+
+/** The renamed copy a fork loaded as. */
+export interface LoadedCopy {
+	epoch: number;
+	/** Eight hex characters naming the copy; safe to show. */
+	fingerprint: string;
+	/** namesHash of the names it renamed: with the fingerprint, what identifies a verified copy. */
+	namesHash: string;
+	/** The names it renamed, original to renamed: the copy's secret, for its tripwires and for mapping its text back. */
+	names: ReadonlyMap<string, string>;
+	/** Listed names it left as they are, and why. */
+	skipped: readonly SkippedName[];
 }
 
 export interface LoadedFork {
@@ -110,11 +136,15 @@ export interface LoadedFork {
 	isolateId: string;
 	fluidToml: string | undefined;
 	fork: ForkEntrypoint;
+	/** The renamed copy that loaded, or null for the plain fork. */
+	morph: LoadedCopy | null;
 }
 
 interface CachedBuild {
 	map: ModuleMap;
 	fluidToml: string | undefined;
+	/** Set on a renamed copy's build. */
+	copy?: LoadedCopy;
 }
 
 const builds = new Map<string, CachedBuild>();
@@ -124,9 +154,16 @@ function runtimeDir(path: string): boolean {
 	return RUNTIME_DIRS.some((dir) => `${path}/`.startsWith(dir) || dir.startsWith(`${path}/`));
 }
 
-export function isolateId(repo: string, sha: string, variant?: string, useModel = false): string {
-	const base = variant ? `${repo}:${sha}:${variant}` : `${repo}:${sha}`;
-	return useModel ? `${base}:llm` : base;
+/** repo:sha, then the variant, then "m" and the fingerprint of a renamed copy, then "llm" for the model isolate. */
+export function isolateId(repo: string, sha: string, variant?: string, useModel = false, copy?: string): string {
+	let id = variant ? `${repo}:${sha}:${variant}` : `${repo}:${sha}`;
+	if (copy) id = `${id}:m${copy}`;
+	return useModel ? `${id}:llm` : id;
+}
+
+function cacheBuild(key: string, build: CachedBuild): void {
+	if (builds.size >= MODULE_CACHE_LIMIT) builds.delete(builds.keys().next().value!);
+	builds.set(key, build);
 }
 
 async function buildFor(env: Env, repoName: string, sha: string, options: LoadOptions): Promise<CachedBuild> {
@@ -141,8 +178,31 @@ async function buildFor(env: Env, repoName: string, sha: string, options: LoadOp
 	});
 	const merged = { ...files, ...(options.extraFiles ?? {}) };
 	const build = { map: buildModuleMap(merged), fluidToml: merged["fluid.toml"] };
-	if (builds.size >= MODULE_CACHE_LIMIT) builds.delete(builds.keys().next().value!);
-	builds.set(key, build);
+	cacheBuild(key, build);
+	return build;
+}
+
+/**
+ * The renamed copy of a plain build for one epoch, built once per fingerprint
+ * (a variant shares it, so the gate checks the code production runs). Throws,
+ * saying why, when no copy may load.
+ */
+async function copyFor(env: Env, repoName: string, sha: string, plain: CachedBuild, morph: NonNullable<LoadOptions["morph"]>, options: LoadOptions): Promise<CachedBuild & { copy: LoadedCopy }> {
+	// A candidate's extra files are not the commit the seed names, and its check never needs a copy.
+	if (options.extraFiles) throw new PolymorphUnavailableError("a build with extra files (a candidate under validation) is never renamed");
+	if (morph.onlyAt !== undefined && morph.onlyAt !== sha) throw new PolymorphUnavailableError(`the copy is only for commit ${morph.onlyAt.slice(0, 7)}`);
+	const plan = await planCopy(env, { repo: repoName, sha, epoch: morph.epoch, fluidToml: plain.fluidToml });
+	const key = isolateId(repoName, sha, undefined, false, plan.fingerprint);
+	const cached = builds.get(key);
+	let build = cached?.copy ? { ...cached, copy: cached.copy } : null;
+	if (build === null) {
+		const built = await buildCopy(plan, plain.map);
+		build = { map: built.map, fluidToml: plain.fluidToml, copy: { epoch: plan.epoch, fingerprint: plan.fingerprint, namesHash: built.namesHash, names: built.names, skipped: built.skipped } };
+		cacheBuild(key, build);
+	}
+	if (morph.namesHash !== undefined && morph.namesHash !== build.copy.namesHash) {
+		throw new PolymorphUnavailableError(`this copy renames other names (${build.copy.namesHash}) than the verified copy (${morph.namesHash})`);
+	}
 	return build;
 }
 
@@ -155,8 +215,19 @@ export async function loadForkRuntime(deps: RuntimeDeps, repoName: string, ref =
 		using repo = await openRepo(deps.env.ARTIFACTS, repoName);
 		sha = await resolveCommit(repo, short);
 	}
-	const id = isolateId(repoName, sha, options.variant, options.useModel === true);
-	const build = await buildFor(deps.env, repoName, sha, options);
+	let build = await buildFor(deps.env, repoName, sha, options);
+	let copy: LoadedCopy | null = null;
+	if (options.morph) {
+		try {
+			const copied = await copyFor(deps.env, repoName, sha, build, options.morph, options);
+			build = copied;
+			copy = copied.copy;
+		} catch (error) {
+			// Whatever stops a copy (no secret, no list, code the renamer cannot read, Artifacts failing), the plain fork still serves.
+			console.warn(`polymorph: ${repoName}@${sha.slice(0, 7)} runs plain: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+	const id = isolateId(repoName, sha, options.variant, options.useModel === true, copy?.fingerprint);
 	const env: Record<string, unknown> = { fluidToml: build.fluidToml, forkCommit: sha, data: synthetic };
 	if (options.useModel) env.LLM = deps.exports.LlmHost({ props: { repo: repoName } });
 	const worker = deps.env.LOADER.get(id, async () => ({
@@ -167,7 +238,7 @@ export async function loadForkRuntime(deps: RuntimeDeps, repoName: string, ref =
 		globalOutbound: null,
 	}));
 	const fork = worker.getEntrypoint("Fork") as unknown as ForkEntrypoint;
-	return { repo: repoName, ref: short, sha, isolateId: id, fluidToml: build.fluidToml, fork };
+	return { repo: repoName, ref: short, sha, isolateId: id, fluidToml: build.fluidToml, fork, morph: copy };
 }
 
 export interface AskForkInput {
