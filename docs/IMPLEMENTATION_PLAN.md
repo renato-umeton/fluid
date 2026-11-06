@@ -20,7 +20,7 @@ Issue #1. Design: [plans/2026-11-06-polymorphic-installation-design.md](plans/20
 **Goal**: pure functions that rename listed identifiers in a module map with a seed, plus upstream's name list.
 **Success Criteria**: the stock module map renamed with 5 different seeds answers every invariant and functional probe exactly like the plain map (cards equal after dropping `answer_id` and `fork_commit`); the same seed always gives the same copy; different seeds give different names; strings, comments, regular expressions and JSON modules are untouched; a list entry that appears in a string literal or a JSON key is rejected with a clear message.
 **Tests**: `platform/test/polymorph-names.test.ts`, `polymorph-morph.test.ts`, `polymorph-tripwire.test.ts`, `polymorph-stock.test.ts`; `stock/tests/unit/polymorph-list.test.ts`.
-**Status**: Not Started
+**Status**: In Progress (implemented and spec reviewed; code quality review running)
 
 Tasks:
 1. `stock/polymorph.json`: `{ "version": 1, "description": "...", "names": [...] }`. Start from the internal names in `intent/decide.ts` (`answerModes`, `optionB`, `identifiedPatientContext`, `researchNeedsAttestation`, `currentPatientDosing`), `intent/signals.ts`, `intent/classifier.ts`, `policies/contracts.ts` (`facts`, `enforceContract`, `enforceResearch`, ...), `app/cards.ts` (`answerId`, `buildCard`, `draftFor`, ...), `app/body.ts`, `app/ledger.ts`, `policies/dose.ts`. Keep only names that pass task 2. Never list a request key, card or ledger field, env key (`fluidToml`, `forkCommit`, `data`, `llm`, `newId`), `ask`, or a name the platform or browser bundle imports by name (`readForkConfig`, `effectiveTau`, `scheduleContext`, `normalizeRequest`, `MODE_CONTRACTS`, `SYNTHETIC_NOTICE`, `STOCK_MIN_TAU`, `STOCK_TAG`).
@@ -37,11 +37,11 @@ Tasks:
 **Goal**: run `loadForkRuntime`, `serveAsk`, and `runGate` in Node tests with no Cloudflare account.
 **Success Criteria**: a stock fork stored in a fake Artifacts namespace loads through `loadForkRuntime` and answers through the fake loader; `runGate` in check mode passes on stock through the fakes; the existing suite still passes.
 **Tests**: `platform/test/runtime-load.test.ts`.
-**Status**: Not Started
+**Status**: Complete (spec and code quality reviews passed; merged)
 
 Tasks:
 1. `platform/test/helpers/fake-repos.ts`: in-memory repositories that implement exactly the read surface used by `src/runtime/repo-files.ts`, `src/runtime/refs.ts`, and `src/stock/suite.ts` (commits, trees, blobs, `log`, tags), seeded from a `Record<path, text>` per commit. Plug it into the existing `fakeArtifacts()` shape in `test/helpers/api-env.ts` without breaking current tests.
-2. `platform/test/helpers/fake-loader.ts`: `fakeLoader()` with `get(id, factory)` that runs the factory once per id, materializes the module map under `test/.tmp-loader/`, imports the main module (the `cloudflare:workers` alias applies), and returns `getEntrypoint(name)` instances built with the factory's `env`. Record the ids it built, for assertions. Clean up in `afterAll`.
+2. `platform/test/helpers/fake-loader.ts`: `fakeLoader()` with `get(id, factory)`. The first factory for an id boots the isolate: its module map is materialized under a per-loader `test/.tmp-loader-*` folder, one folder per boot, and imported (the `cloudflare:workers` alias applies). A later factory for the same id runs only to check that the code is the same, and a difference is an error. `getEntrypoint(name)` instances get the factory's `env`, and calls cross like workerd RPC. Record the ids it built, for assertions. Clean up in `afterAll`.
 3. `platform/test/runtime-load.test.ts`: provision `stock` at `v1.0.0` and `user-1` from it in the fakes; ask through `loadForkRuntime` + `askCard`; run `runGate` in check mode and expect a pass.
 
 ## Stage 3: Platform wiring
