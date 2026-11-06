@@ -10,8 +10,12 @@ import { headOf, openRepo } from "../runtime/repo-files.ts";
 import { fleetStub } from "../stubs.ts";
 import { polymorphSecret, PolymorphTransientError } from "./install.ts";
 
-/** Why a rotation runs: the schedule, a tripwire hit, a change landing on main, or an admin. */
-export type RotationReason = "schedule" | "tripwire" | "landed" | "admin";
+/**
+ * Why a rotation runs: the schedule, a tripwire hit, a change landing on
+ * main, an admin, a new fork installing, or a mismatch (the live path found
+ * that the copy Fleet stored for main no longer loads as verified).
+ */
+export type RotationReason = "schedule" | "tripwire" | "landed" | "admin" | "install" | "mismatch";
 
 export type RotationResult =
 	/** The fork now serves the verified copy of main for this epoch. */

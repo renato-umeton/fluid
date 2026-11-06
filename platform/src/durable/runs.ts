@@ -1,10 +1,10 @@
 // Run timelines for long agent work (customize, gate, upgrade, repair,
-// harvest). One instance per run id; the run record plus an ordered list of
-// steps. Workflows write here so the UI can poll GET /api/runs/:runId.
+// harvest, rotate). One instance per run id; the run record plus an ordered
+// list of steps. Workflows write here so the UI can poll GET /api/runs/:runId.
 import { DurableObject } from "cloudflare:workers";
 import type { Json } from "../lib/json.ts";
 
-export type RunKind = "customize" | "gate" | "upgrade" | "repair" | "harvest" | "onboarding" | "release" | "seed" | "yellow" | "import" | "contest";
+export type RunKind = "customize" | "gate" | "upgrade" | "repair" | "harvest" | "onboarding" | "release" | "seed" | "yellow" | "import" | "contest" | "rotate";
 /** Final statuses are passed, failed, and cancelled (the UI polls until it sees one). A yellow run is cancelled when a newer change supersedes it. */
 export type RunStatus = "queued" | "running" | "waiting" | "passed" | "failed" | "cancelled";
 export type StepStatus = "pending" | "running" | "waiting" | "done" | "failed" | "info";

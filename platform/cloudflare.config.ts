@@ -43,6 +43,9 @@ export default defineConfig({
 			YellowWorkflow: exports.workflow({ name: "fluid-yellow" }),
 			ImportWorkflow: exports.workflow({ name: "fluid-import" }),
 			InboxCleanupWorkflow: exports.workflow({ name: "fluid-inbox-cleanup" }),
+			// Moves every fork to its next renamed copy. POLYMORPH_SECRET is read by name, not declared here:
+			// a declared secret would stop a deploy that lacks it, and without one every fork runs plain.
+			RotateWorkflow: exports.workflow({ name: "fluid-rotate", schedules: "0 */6 * * *" }),
 		},
 		// Artifacts repo.pushed events (account-level subscription, see scripts/setup-events.mjs).
 		// Messages that still fail after maxRetries go to fluid-events-dlq instead of being dropped.

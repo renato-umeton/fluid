@@ -4,6 +4,7 @@
 // they never land in workflow state.
 import type { Remote } from "../git/ops.ts";
 import type { Json } from "../lib/json.ts";
+import type { RotationReason } from "../polymorph/rotate.ts";
 import type { PlatformExports } from "../runtime/loader.ts";
 import { openRepo } from "../runtime/repo-files.ts";
 import type { RunKind, RunStatus, StepStatus } from "../durable/runs.ts";
@@ -146,6 +147,16 @@ export interface HarvestParams {
 	runId: string;
 }
 
+/** Moves forks to their next renamed copy (workflows/rotate.ts). */
+export interface RotateParams {
+	/** The fork to rotate; without one, every fork in the fleet. */
+	repo?: string;
+	/** Why; absent on an instance the schedule starts, which has no params and rotates for "schedule". */
+	reason?: RotationReason;
+	/** The run that logs it; run_<instance id> by default. */
+	runId?: string;
+}
+
 export interface AppExports extends PlatformExports {
 	GateWorkflow: WorkflowBinding<GateParams>;
 	CustomizeWorkflow: WorkflowBinding<CustomizeParams>;
@@ -159,6 +170,7 @@ export interface AppExports extends PlatformExports {
 	ImportWorkflow: WorkflowBinding<ImportParams>;
 	InboxCleanupWorkflow: WorkflowBinding<InboxCleanupParams>;
 	YellowWorkflow: WorkflowBinding<YellowParams>;
+	RotateWorkflow: WorkflowBinding<RotateParams>;
 }
 
 export function appExports(ctx: unknown): AppExports {
