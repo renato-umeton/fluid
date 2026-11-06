@@ -20,7 +20,7 @@ Issue #1. Design: [plans/2026-11-06-polymorphic-installation-design.md](plans/20
 **Goal**: pure functions that rename listed identifiers in a module map with a seed, plus upstream's name list.
 **Success Criteria**: the stock module map renamed with 5 different seeds answers every invariant and functional probe exactly like the plain map (cards equal after dropping `answer_id` and `fork_commit`); the same seed always gives the same copy; different seeds give different names; strings, comments, regular expressions and JSON modules are untouched; a list entry that appears in a string literal or a JSON key is rejected with a clear message.
 **Tests**: `platform/test/polymorph-names.test.ts`, `polymorph-morph.test.ts`, `polymorph-tripwire.test.ts`, `polymorph-stock.test.ts`; `stock/tests/unit/polymorph-list.test.ts`.
-**Status**: In Progress (spec review passed; applying code quality fixes: runtime-independent reserved names, host API members and regex text skipped, one shared scan with a size cap, `PolymorphUnavailableError`)
+**Status**: Complete (spec and code quality reviews passed; merged). The loader entry point is `morphFork(map, variants)`; names the fork's text or the runtime uses are skipped per name; `PolymorphUnavailableError` means run plain.
 
 Tasks:
 1. `stock/polymorph.json`: `{ "version": 1, "description": "...", "names": [...] }`. Start from the internal names in `intent/decide.ts` (`answerModes`, `optionB`, `identifiedPatientContext`, `researchNeedsAttestation`, `currentPatientDosing`), `intent/signals.ts`, `intent/classifier.ts`, `policies/contracts.ts` (`facts`, `enforceContract`, `enforceResearch`, ...), `app/cards.ts` (`answerId`, `buildCard`, `draftFor`, ...), `app/body.ts`, `app/ledger.ts`, `policies/dose.ts`. Keep only names that pass task 2. Never list a request key, card or ledger field, env key (`fluidToml`, `forkCommit`, `data`, `llm`, `newId`), `ask`, or a name the platform or browser bundle imports by name (`readForkConfig`, `effectiveTau`, `scheduleContext`, `normalizeRequest`, `MODE_CONTRACTS`, `SYNTHETIC_NOTICE`, `STOCK_MIN_TAU`, `STOCK_TAG`).
@@ -48,7 +48,7 @@ Tasks:
 **Goal**: the platform installs, verifies, serves, guards, and rotates renamed copies.
 **Success Criteria**: a fork with a verified epoch is served from a renamed copy with its own isolate id; the gate reports any card difference between plain and renamed copies as a tier 1 `polymorph-equivalence` failure; a request naming a dead original name is refused, recorded, and starts one rotation per copy; errors from a renamed copy never show renamed names; `rotateFork` moves a fork to the next epoch only after the check passes; with no secret or no list, everything behaves exactly as today.
 **Tests**: `platform/test/polymorph-loader.test.ts`, `polymorph-gate.test.ts`, `polymorph-fleet.test.ts`, `polymorph-ask.test.ts`, `polymorph-rotate.test.ts`.
-**Status**: Not Started
+**Status**: In Progress (3a)
 
 Tasks (3a, then 3b):
 1. (3a) Loader: `LoadOptions.morph?: { epoch: number; onlyAt?: string }`. When the secret `POLYMORPH_SECRET` is set and the stock list exists at the fork's pinned tag (read from the `stock` repo and cached by stock commit), derive the seed, morph the map after `buildModuleMap`, and add `m<fingerprint>` to both the isolate id and the build cache key. `LoadedFork.morph` reports `{ epoch, fingerprint, names } | null`. With `onlyAt`, morph only when the resolved commit equals it.
