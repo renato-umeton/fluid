@@ -197,6 +197,16 @@ export function replaySteps(data, attackId, polymorphOn) {
   return [...hits, ...moves];
 }
 
+/** The scoreboard's columns after the attack: the key in a scoreRows row, and the column's name. */
+export const SCORE_COLUMNS = [
+  ["sent", "Sent"],
+  ["plain", "Plain fleet compromised"],
+  ["direct", "Renamed copies compromised, platform scan bypassed"],
+  ["compromised", "Compromised through the platform"],
+  ["refused", "Refused by the platform"],
+  ["rotated", "Moved to a new copy"],
+];
+
 /** One scoreboard row per attack: what was sent, then forks out of the fleet for each outcome. */
 export function scoreRows(data) {
   const of = (list) => `${list.length} of ${data.forks.length}`;

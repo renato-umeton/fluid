@@ -7,22 +7,12 @@
 // no valid recording the page says so and shows no numbers. Built with h()
 // only, and every tile state is written out, never shown by color alone.
 import { h, mount } from "../dom.js";
-import { afterRotationLine, equivalenceLine, introLines, latestOnly, noRecordingMessage, readRecording, replayer, scoreRows } from "../polymorph-replay.js";
+import { SCORE_COLUMNS, afterRotationLine, equivalenceLine, introLines, latestOnly, noRecordingMessage, readRecording, replayer, scoreRows } from "../polymorph-replay.js";
 
-export const title = "Polymorphic installation";
+export const title = "Polymorph";
 export const sub = "Every fork runs its own renamed copy of upstream's code.";
 /** The recording sits next to the page (platform/public/data), served the same way in mock and live mode. */
 export const DATA_URL = new URL("../../data/polymorph-demo.json", import.meta.url);
-
-/** Scoreboard columns after the attack: the key in a scoreRows row, and its name. */
-export const SCORE_COLUMNS = [
-  ["sent", "Sent"],
-  ["plain", "Plain fleet compromised"],
-  ["direct", "Renamed copies compromised, platform scan bypassed"],
-  ["compromised", "Compromised through the platform"],
-  ["refused", "Refused by the platform"],
-  ["rotated", "Moved to a new copy"],
-];
 
 let polymorphOn = true;
 /** The replay on the page, or null before a recording is shown. */

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // @ts-expect-error plain ES module from the static UI
-import { afterRotationLine, equivalenceLine, introLines, latestOnly, noRecordingMessage, outcomeLine, parseDemo, readRecording, replayer, replaySteps, scoreRows, tileStates, validateDemo } from "../public/js/polymorph-replay.js";
+import { SCORE_COLUMNS, afterRotationLine, equivalenceLine, introLines, latestOnly, noRecordingMessage, outcomeLine, parseDemo, readRecording, replayer, replaySteps, scoreRows, tileStates, validateDemo } from "../public/js/polymorph-replay.js";
 // @ts-expect-error plain ES module from the static UI
 import * as view from "../public/js/views/polymorph.js";
 
@@ -399,6 +399,12 @@ describe("scoreRows", () => {
 			{ id: "B", label: "Public field only", detail: "Sets display.preview to true, a public field that skips the attestation hold.", sent: "3 requests to 3 forks", plain: "3 of 3", direct: "3 of 3", compromised: "3 of 3", refused: "0 of 3", rotated: "0 of 3" },
 		]);
 	});
+
+	it("names a field of every row in each scoreboard column, Sent first", () => {
+		const row = scoreRows(demo())[0];
+		expect(SCORE_COLUMNS.map(([key]: [string, string]) => key)).toEqual(["sent", "plain", "direct", "compromised", "refused", "rotated"]);
+		for (const [key] of SCORE_COLUMNS as [string, string][]) expect(row).toHaveProperty(key);
+	});
 });
 
 describe("the lines around the fleet and the scoreboard", () => {
@@ -454,24 +460,18 @@ describe("the Polymorph view is wired in like the others", () => {
 		expect(html).toContain('<section class="view" id="view-polymorph" aria-labelledby="view-title" hidden></section>');
 	});
 
-	it("exports what route() calls", () => {
-		expect(view.title).toBe("Polymorphic installation");
+	it("exports what route() calls, titled like its rail label", () => {
+		expect(view.title).toBe("Polymorph");
 		expect(view.sub).toBe("Every fork runs its own renamed copy of upstream's code.");
 		expect(typeof view.render).toBe("function");
 		expect(typeof view.leave).toBe("function");
-	});
-
-	it("fills every scoreboard column from a field of scoreRows, Sent first", () => {
-		const row = scoreRows(demo())[0];
-		expect(view.SCORE_COLUMNS.map(([key]: [string, string]) => key)).toEqual(["sent", "plain", "direct", "compromised", "refused", "rotated"]);
-		for (const [key] of view.SCORE_COLUMNS as [string, string][]) expect(row).toHaveProperty(key);
 	});
 
 	it("reads the recording from public/data, next to the page", () => {
 		expect(fileURLToPath(view.DATA_URL)).toBe(fileURLToPath(new URL("../public/data/polymorph-demo.json", import.meta.url)));
 	});
 
-	it("builds text only through h(), never by assigning HTML", () => {
-		for (const path of ["../public/js/views/polymorph.js", "../public/js/polymorph-replay.js"]) expect(read(path)).not.toMatch(/innerHTML|outerHTML|insertAdjacentHTML/);
+	it.each(["../public/js/views/polymorph.js", "../public/js/polymorph-replay.js"])("%s builds text only through h(), never as HTML", (path) => {
+		expect(read(path)).not.toMatch(/innerHTML|outerHTML|insertAdjacentHTML|document\.write|createContextualFragment|DOMParser|srcdoc/);
 	});
 });
