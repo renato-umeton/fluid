@@ -8,7 +8,7 @@ import stockSource from "../src/generated/stock-source.json";
 import { StockTagError } from "../src/gate/pins.ts";
 import { setTomlValue } from "../src/lib/toml.ts";
 import { cardDifferences } from "../src/polymorph/equivalence.ts";
-import { loadPolymorphList } from "../src/polymorph/install.ts";
+import { loadPolymorphList, polymorphSecret } from "../src/polymorph/install.ts";
 import { POLYMORPH_LIST_PATH, parsePolymorphList } from "../src/polymorph/list.ts";
 import { deriveSeed, fingerprint, namesHash } from "../src/polymorph/names.ts";
 import { SCAN_LIMITS } from "../src/polymorph/tokens.ts";
@@ -354,4 +354,22 @@ describe("a fork whose own contract uses a listed name", () => {
 		const config = copyOf(await loadForkRuntime(deps, "user-config", "main", { morph: { epoch: 1 } }));
 		expect(config.skipped).toEqual([{ name: "evidence", reason: "appears in fluid.toml" }]);
 	});
+});
+
+describe("polymorphSecret", () => {
+	it(
+		"treats a secret shorter than 16 characters as not set, saying so once and never showing it",
+		async () => {
+			const warn = warnings();
+			const shortDeps: RuntimeDeps = { ...deps, env: { ...deps.env, POLYMORPH_SECRET: "too-short-01" } as unknown as Env };
+			expect([polymorphSecret(shortDeps.env), polymorphSecret(shortDeps.env)]).toEqual([null, null]);
+			const loaded = await loadForkRuntime(shortDeps, "user-1", "main", { morph: { epoch: 9 } });
+			expect([loaded.morph, loaded.isolateId]).toEqual([null, `user-1:${heads["user-1"]}`]);
+			const lines = warn.mock.calls.map(([line]) => String(line));
+			expect(lines.filter((line) => line.includes("shorter than 16 characters"))).toEqual(["polymorph: POLYMORPH_SECRET is shorter than 16 characters, so it counts as not set and every fork runs plain"]);
+			expect(lines.join("\n")).not.toContain("too-short-01");
+			expect(polymorphSecret(deps.env)).toBe(SECRET);
+		},
+		SLOW_MS,
+	);
 });

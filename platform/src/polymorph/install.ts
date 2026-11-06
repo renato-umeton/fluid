@@ -46,15 +46,26 @@ async function readList(env: Env, sha: string, tag: string): Promise<readonly st
 	}
 }
 
+/** Shorter secrets are too easy to guess; deriveSeed refuses them too. */
+const MIN_SECRET_CHARS = 16;
+let reportedShortSecret = false;
+
 /**
  * The platform secret that seeds every copy, or null when it is not set. It
  * is read by name rather than declared as a binding, because a declared
  * secret is required at deploy: a platform without one runs every fork plain,
- * exactly as before.
+ * exactly as before. A secret shorter than 16 characters counts as not set,
+ * and the first read says so once per isolate (never the secret itself).
  */
 export function polymorphSecret(env: Env): string | null {
 	const secret = (env as unknown as { POLYMORPH_SECRET?: unknown }).POLYMORPH_SECRET;
-	return typeof secret === "string" && secret !== "" ? secret : null;
+	if (typeof secret !== "string" || secret === "") return null;
+	if (secret.length >= MIN_SECRET_CHARS) return secret;
+	if (!reportedShortSecret) {
+		reportedShortSecret = true;
+		console.warn(`polymorph: POLYMORPH_SECRET is shorter than ${MIN_SECRET_CHARS} characters, so it counts as not set and every fork runs plain`);
+	}
+	return null;
 }
 
 /** What names one copy, worked out before the copy is built: enough for its isolate id and build cache key. */
