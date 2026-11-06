@@ -44,11 +44,21 @@ beforeAll(() => {
 	loader = fakeLoader();
 	Object.assign(t.env, { LOADER: loader });
 	vi.stubGlobal("fetch", t.artifacts.fetch);
-	deps = { env: t.env, exports: { LlmHost: () => Promise.reject(new Error("these tests never use the model")) } };
+	deps = {
+		env: t.env,
+		exports: {
+			LlmHost: () => ({
+				complete: async () => {
+					throw new Error("these tests never use the model");
+				},
+			}),
+		},
+	};
 });
 
 afterAll(() => {
-	loader.cleanup();
+	// beforeAll may have failed before the loader existed.
+	loader?.cleanup();
 	vi.unstubAllGlobals();
 });
 
