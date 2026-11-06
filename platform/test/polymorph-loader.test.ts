@@ -14,7 +14,7 @@ import { deriveSeed, fingerprint, namesHash } from "../src/polymorph/names.ts";
 import { SCAN_LIMITS } from "../src/polymorph/tokens.ts";
 import { scanRequest } from "../src/polymorph/tripwire.ts";
 import * as loaderModule from "../src/runtime/loader.ts";
-import { askLoaded, ForkRuntimeError, loadForkRuntime, type LoadedFork, type RuntimeDeps } from "../src/runtime/loader.ts";
+import { askLoaded, ForkRuntimeError, isolateId, loadForkRuntime, type LoadedFork, type RuntimeDeps } from "../src/runtime/loader.ts";
 import { releaseMetadata, releaseMetadataPath } from "../src/stock/releases.ts";
 import { apiEnv } from "./helpers/api-env.ts";
 import { fakeLoader } from "./helpers/fake-loader.ts";
@@ -138,10 +138,10 @@ function warnings() {
 	return vi.spyOn(console, "warn").mockImplementation(() => undefined);
 }
 
-/** The id under which the loader runs a fork's copy for an epoch: the plain id plus "m" and the copy's fingerprint. */
+/** The id under which the loader runs a copy of a fork that renames every listed name: the plain id plus the copy's epoch, fingerprint, and names hash. */
 async function copyId(repo: string, epoch: number, variant?: string): Promise<string> {
 	const print = await fingerprint(await deriveSeed(SECRET, repo, heads[repo]!, epoch));
-	return `${repo}:${heads[repo]}${variant ? `:${variant}` : ""}:m${print}`;
+	return `${repo}:${heads[repo]}${variant ? `:${variant}` : ""}:m${epoch}.${print}.${await namesHash(listed)}`;
 }
 
 /** The loaded fork's renamed copy, failing the test when the plain fork loaded. */
@@ -184,12 +184,12 @@ describe("loadPolymorphList", () => {
 
 describe("loadForkRuntime with a renamed copy", () => {
 	it(
-		"loads the copy under the fork's id plus the copy's fingerprint, and says which names it renamed",
+		"loads the copy under an id naming its code (epoch, fingerprint, names hash), and says which names it renamed",
 		async () => {
 			const loaded = await loadForkRuntime(deps, "user-1", "main", { morph: { epoch: 1 } });
 			const copy = copyOf(loaded);
 			const print = await fingerprint(await deriveSeed(SECRET, "user-1", heads["user-1"]!, 1));
-			expect(loaded.isolateId).toBe(`user-1:${heads["user-1"]}:m${print}`);
+			expect(loaded.isolateId).toBe(`user-1:${heads["user-1"]}:m1.${print}.${await namesHash(listed)}`);
 			expect([copy.epoch, copy.fingerprint, copy.namesHash, copy.skipped]).toEqual([1, print, await namesHash(listed), []]);
 			expect([...copy.names.keys()]).toEqual(listed);
 			expect([...copy.names.values()].every((renamed, i) => renamed.startsWith(`${listed[i]}$`))).toBe(true);
@@ -282,6 +282,15 @@ describe("loadForkRuntime with a renamed copy", () => {
 		expect(loaded.morph).toBeNull();
 		expect(loaded.isolateId).toBe(`user-1:${heads["user-1"]}:candidate-1`);
 		expect(String(warn.mock.calls[0]![0])).toMatch(/runs plain: .*extra files/);
+	});
+
+	it("builds ids from an options object, in a fixed order, and today's ids without one", () => {
+		const sha = heads["user-1"]!;
+		expect(isolateId("user-1", sha)).toBe(`user-1:${sha}`);
+		expect(isolateId("user-1", sha, { variant: "gate-1", useModel: true })).toBe(`user-1:${sha}:gate-1:llm`);
+		const copy = { epoch: 2, fingerprint: "a1b2c3d4", namesHash: "0badc0de" };
+		expect(isolateId("user-1", sha, { useModel: true, copy, variant: "gate-1" })).toBe(`user-1:${sha}:gate-1:m2.a1b2c3d4.0badc0de:llm`);
+		expect(isolateId("user-1", sha, { copy })).toBe(`user-1:${sha}:m2.a1b2c3d4.0badc0de`);
 	});
 
 	it("loads the plain fork as before when no copy is asked for, and logs nothing", async () => {

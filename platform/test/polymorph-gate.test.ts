@@ -54,7 +54,7 @@ describe("runGate with a renamed copy", () => {
 			expect(compared).toBeGreaterThan(0);
 			expect(gate.tiers.invariant!.probes).toContainEqual({ id: "polymorph-equivalence", passed: true, samples: compared, passedSamples: compared });
 			// The copy ran in the gate's own variant, next to the plain fork's.
-			expect(p.loader.built).toContainEqual(expect.stringMatching(new RegExp(`^user-1:${p.heads["user-1"]}:gate-[0-9a-f]{8}:m${print}$`)));
+			expect(p.loader.built).toContainEqual(expect.stringMatching(new RegExp(`^user-1:${p.heads["user-1"]}:gate-[0-9a-f]{8}:m1\\.${print}\\.${await namesHash(LISTED)}$`)));
 			expect(p.loader.built).toContainEqual(expect.stringMatching(new RegExp(`^user-1:${p.heads["user-1"]}:gate-[0-9a-f]{8}$`)));
 		},
 		SLOW_MS,

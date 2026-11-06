@@ -4,7 +4,8 @@
 // capability in its env; every other isolate has no route to the platform.
 // Isolates are keyed by repo:sha (plus a variant), and the transformed module
 // map is cached per key in this isolate. A renamed copy of a fork (see
-// polymorph/) adds ":m<fingerprint>" to both, since its code differs.
+// polymorph/) adds ":m<epoch>.<fingerprint>.<names hash>" to both, which
+// names exactly the code it runs.
 import synthetic from "../generated/synthetic.json";
 import { buildCopy, planCopy, readContract } from "../polymorph/install.ts";
 import type { SkippedName } from "../polymorph/list.ts";
@@ -166,11 +167,21 @@ function runtimeDir(path: string): boolean {
 	return RUNTIME_DIRS.some((dir) => `${path}/`.startsWith(dir) || dir.startsWith(`${path}/`));
 }
 
-/** repo:sha, then the variant, then "m" and the fingerprint of a renamed copy, then "llm" for the model isolate. */
-export function isolateId(repo: string, sha: string, variant?: string, useModel = false, copy?: string): string {
-	let id = variant ? `${repo}:${sha}:${variant}` : `${repo}:${sha}`;
-	if (copy) id = `${id}:m${copy}`;
-	return useModel ? `${id}:llm` : id;
+export interface IsolateIdOptions {
+	/** A separate isolate for the same code (a gate run, a candidate check). */
+	variant?: string;
+	/** The isolate that has the LLM capability. */
+	useModel?: boolean;
+	/** A renamed copy: its epoch, fingerprint, and names hash name its code exactly. */
+	copy?: { epoch: number; fingerprint: string; namesHash: string };
+}
+
+/** repo:sha, then the variant, then "m<epoch>.<fingerprint>.<names hash>" for a renamed copy, then "llm" for the model isolate. */
+export function isolateId(repo: string, sha: string, options: IsolateIdOptions = {}): string {
+	let id = `${repo}:${sha}`;
+	if (options.variant) id += `:${options.variant}`;
+	if (options.copy) id += `:m${options.copy.epoch}.${options.copy.fingerprint}.${options.copy.namesHash}`;
+	return options.useModel ? `${id}:llm` : id;
 }
 
 function cacheBuild(key: string, build: CachedBuild): void {
@@ -180,7 +191,7 @@ function cacheBuild(key: string, build: CachedBuild): void {
 
 async function buildFor(env: Env, repoName: string, sha: string, options: LoadOptions): Promise<CachedBuild> {
 	// The module map depends only on the files: a variant without extra files reuses the commit's build.
-	const key = options.extraFiles ? isolateId(repoName, sha, options.variant) : isolateId(repoName, sha);
+	const key = options.extraFiles ? isolateId(repoName, sha, { variant: options.variant }) : isolateId(repoName, sha);
 	const cached = builds.get(key);
 	if (cached) return cached;
 	using repo = await openRepo(env.ARTIFACTS, repoName);
@@ -195,22 +206,33 @@ async function buildFor(env: Env, repoName: string, sha: string, options: LoadOp
 }
 
 /**
- * The renamed copy of a plain build for one epoch, built once per fingerprint
- * (a variant shares it, so the gate checks the code production runs). Throws,
- * saying why, when no copy may load.
+ * The names hash of each copy built in this isolate, by repo:sha:m<epoch>.<fingerprint>:
+ * the hash only building tells, and the last part of the copy's build key.
+ */
+const copyHashes = new Map<string, string>();
+
+/**
+ * The renamed copy of a plain build for one epoch, built once (a variant
+ * shares it, so the gate checks the code production runs). Throws, saying
+ * why, when no copy may load.
  */
 async function copyFor(env: Env, repoName: string, sha: string, plain: CachedBuild, morph: NonNullable<LoadOptions["morph"]>, options: LoadOptions): Promise<CachedBuild & { copy: LoadedCopy }> {
 	// A candidate's extra files are not the commit the seed names, and its check never needs a copy.
 	if (options.extraFiles) throw new PolymorphUnavailableError("a build with extra files (a candidate under validation) is never renamed");
 	if (morph.onlyAt !== undefined && morph.onlyAt !== sha) throw new PolymorphUnavailableError(`the copy is only for commit ${morph.onlyAt.slice(0, 7)}`);
 	const plan = await planCopy(env, { repo: repoName, sha, epoch: morph.epoch, fluidToml: plain.fluidToml });
-	const key = isolateId(repoName, sha, undefined, false, plan.fingerprint);
-	const cached = builds.get(key);
+	const seeded = `${repoName}:${sha}:m${plan.epoch}.${plan.fingerprint}`;
+	// A hash this isolate learned by building comes first; the caller's expected hash may name a copy built from it.
+	const hash = copyHashes.get(seeded) ?? morph.namesHash;
+	const cached = hash === undefined ? undefined : builds.get(isolateId(repoName, sha, { copy: { epoch: plan.epoch, fingerprint: plan.fingerprint, namesHash: hash } }));
 	let build = cached?.copy ? { ...cached, copy: cached.copy } : null;
 	if (build === null) {
 		const built = await buildCopy(plan, plain.map, await readContract(env, repoName, sha, plain.fluidToml));
-		build = { map: built.map, fluidToml: plain.fluidToml, copy: { epoch: plan.epoch, fingerprint: plan.fingerprint, namesHash: built.namesHash, names: built.names, skipped: built.skipped } };
-		cacheBuild(key, build);
+		const copy: LoadedCopy = { epoch: plan.epoch, fingerprint: plan.fingerprint, namesHash: built.namesHash, names: built.names, skipped: built.skipped };
+		build = { map: built.map, fluidToml: plain.fluidToml, copy };
+		cacheBuild(isolateId(repoName, sha, { copy }), build);
+		if (copyHashes.size >= MODULE_CACHE_LIMIT) copyHashes.delete(copyHashes.keys().next().value!);
+		copyHashes.set(seeded, built.namesHash);
 	}
 	if (morph.namesHash !== undefined && morph.namesHash !== build.copy.namesHash) {
 		throw new PolymorphUnavailableError(`this copy renames other names (${build.copy.namesHash}) than the verified copy (${morph.namesHash})`);
@@ -239,7 +261,7 @@ export async function loadForkRuntime(deps: RuntimeDeps, repoName: string, ref =
 			console.warn(`polymorph: ${repoName}@${sha.slice(0, 7)} runs plain: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
-	const id = isolateId(repoName, sha, options.variant, options.useModel === true, copy?.fingerprint);
+	const id = isolateId(repoName, sha, { variant: options.variant, useModel: options.useModel === true, ...(copy ? { copy } : {}) });
 	const env: Record<string, unknown> = { fluidToml: build.fluidToml, forkCommit: sha, data: synthetic };
 	if (options.useModel) env.LLM = deps.exports.LlmHost({ props: { repo: repoName } });
 	const worker = deps.env.LOADER.get(id, async () => ({
