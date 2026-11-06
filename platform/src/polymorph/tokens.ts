@@ -5,6 +5,7 @@
 // sucrase upgrade silently change what gets renamed.
 import { parse } from "sucrase/dist/parser/index.js";
 import { TokenType } from "sucrase/dist/parser/tokenizer/types.js";
+import { ENTRY_MODULE, type ModuleMap } from "../runtime/modules.ts";
 
 export interface IdentifierToken {
 	/** Offsets of the token in the source (end exclusive). */
@@ -40,6 +41,40 @@ export class PolymorphUnavailableError extends Error {
 /** Reads the tokens of plain JavaScript (no TypeScript, no JSX). Throws PolymorphUnavailableError when it cannot. */
 export const scanTokens = tokenScanner(parse, TokenType);
 
+/**
+ * How much JavaScript the renamer reads, so a copy fits in a 128 MB Worker:
+ * sucrase holds about 48 bytes per source character while it parses one
+ * module, and the tokens kept for every module add about 7 more. Stock's
+ * runtime is about 60 KB of JavaScript.
+ */
+export const SCAN_LIMITS = { moduleChars: 256 * 1024, totalChars: 1024 * 1024 } as const;
+
+/**
+ * The tokens of every JS module a copy renames (all but the generated entry),
+ * read once each, keyed by module path. Throws PolymorphUnavailableError,
+ * naming the module where there is one, when the code is larger than
+ * SCAN_LIMITS (checked before anything is read) or cannot be read.
+ */
+export function scanModuleMap(map: ModuleMap): Map<string, SourceTokens> {
+	const modules = Object.entries(map.modules).flatMap(([path, module]) => (path !== ENTRY_MODULE && "js" in module ? [{ path, js: module.js }] : []));
+	let total = 0;
+	for (const { path, js } of modules) {
+		if (js.length > SCAN_LIMITS.moduleChars) throw new PolymorphUnavailableError(`${path}: polymorph: the module has ${js.length} characters, more than the ${SCAN_LIMITS.moduleChars} characters the renamer reads in one module`);
+		total += js.length;
+	}
+	if (total > SCAN_LIMITS.totalChars) throw new PolymorphUnavailableError(`polymorph: the fork has ${total} characters of JavaScript, more than the ${SCAN_LIMITS.totalChars} characters of JavaScript the renamer reads`);
+	const scanned = new Map<string, SourceTokens>();
+	for (const { path, js } of modules) {
+		try {
+			scanned.set(path, scanTokens(js));
+		} catch (error) {
+			if (error instanceof PolymorphUnavailableError) throw new PolymorphUnavailableError(`${path}: ${error.message}`, { cause: error });
+			throw error;
+		}
+	}
+	return scanned;
+}
+
 interface TokenKinds {
 	name: number;
 	string: number;
@@ -58,14 +93,21 @@ type Parse = (input: string, isJSXEnabled: boolean, isTypeScriptEnabled: boolean
  */
 export function tokenScanner(parseFn: unknown, tokenTypes: unknown): (js: string) => SourceTokens {
 	let kinds: TokenKinds | null = null;
+	const read = (js: string, checked: TokenKinds): SourceTokens => {
+		const tokens = readTokens(js, runParser(parseFn as Parse, js), checked);
+		// Sucrase keeps its last token array in module state until the next
+		// parse; parsing an empty module lets the large one be collected now.
+		runParser(parseFn as Parse, "");
+		return tokens;
+	};
 	return (js) => {
 		if (typeof js !== "string") throw new TypeError("scanTokens: source must be a string");
 		if (kinds === null) {
 			const checked = tokenKinds(parseFn, tokenTypes);
-			checkSample(readTokens(SAMPLE, runParser(parseFn as Parse, SAMPLE), checked));
+			checkSample(read(SAMPLE, checked));
 			kinds = checked;
 		}
-		return readTokens(js, runParser(parseFn as Parse, js), kinds);
+		return read(js, kinds);
 	};
 }
 

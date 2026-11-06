@@ -1,11 +1,13 @@
 // Upstream's list of internal names that a polymorphic copy renames, and the
 // checks that make renaming them safe for a given module map. Renaming
-// touches identifier tokens only, so a listed name must never be a name the
-// language, the runtime, or the platform reads, and never reach the code as
-// text: a string, template text, or JSON key or value could be read back as a
-// property name at run time, and that use would not be renamed.
-import { ENTRY_MODULE, type ModuleMap } from "../runtime/modules.ts";
-import { PolymorphUnavailableError, scanTokens } from "./tokens.ts";
+// touches identifier tokens only. So the list may never hold a name the
+// language or the runtime contract reads (that is upstream's mistake, and
+// fatal), and a copy skips, per name, what its runtime builds in and what
+// reaches the fork's code as text: a string, template text, regular
+// expression, or JSON key or value can be read back as a property name at run
+// time, and that use would not be renamed.
+import type { ModuleMap } from "../runtime/modules.ts";
+import { scanModuleMap, type SourceTokens } from "./tokens.ts";
 
 /** Where stock publishes the list. */
 export const POLYMORPH_LIST_PATH = "polymorph.json";
@@ -177,6 +179,11 @@ function prototypeOf(object: object): unknown {
 // suffix, so a tripwire can tell a renamed name from anything else.
 const LISTABLE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
+/** Why each of these names could never be listed (not a plain identifier, or reserved), one message per such name. */
+export function nameProblems(names: Iterable<string>): string[] {
+	return [...names].map(nameProblem).filter((problem): problem is string => problem !== null);
+}
+
 /** Why a name can never be renamed, whatever the module map, or null when it can be. */
 function nameProblem(name: unknown): string | null {
 	if (typeof name !== "string" || !LISTABLE.test(name)) {
@@ -187,26 +194,6 @@ function nameProblem(name: unknown): string | null {
 }
 
 const BUILT_IN_REASON = "a built-in name in this runtime";
-
-/**
- * Why renaming these names in this module map would not be safe, one plain
- * message per problem: a name that can never be renamed, one this runtime
- * builds in, or one the fork's text uses. morphModuleMap refuses on any of
- * them, while usableNames skips the last two kinds. A name that no module
- * uses is fine (forks differ): it is simply not renamed.
- */
-export function listProblems(names: readonly string[], map: ModuleMap): string[] {
-	const problems: string[] = [];
-	const renamed: string[] = [];
-	for (const name of names) {
-		const problem = nameProblem(name);
-		if (problem === null) renamed.push(name);
-		else problems.push(problem);
-	}
-	for (const name of renamed) if (runtimeBuiltInNames().has(name)) problems.push(`${JSON.stringify(name)} is ${BUILT_IN_REASON}`);
-	for (const { name, reason } of textUses(renamed, map)) problems.push(`${JSON.stringify(name)} ${reason}`);
-	return problems;
-}
 
 export interface SkippedName {
 	name: string;
@@ -221,12 +208,17 @@ export interface SkippedName {
  * where renaming the identifiers would leave the text pointing at the old
  * name. A skipped name is neither renamed nor treated as a tripwire, so it
  * costs the copy only that name. Whether a name may be listed at all is for
- * parsePolymorphList (and morphModuleMap) to judge.
+ * parsePolymorphList (and morphFork) to judge. Pass the tokens scanModuleMap
+ * read when you have them, so each module is read once.
  */
-export function usableNames(names: ReadonlyMap<string, string>, map: ModuleMap): { usable: Map<string, string>; skipped: SkippedName[] } {
+export function usableNames(
+	names: ReadonlyMap<string, string>,
+	map: ModuleMap,
+	scanned: ReadonlyMap<string, SourceTokens> = scanModuleMap(map),
+): { usable: Map<string, string>; skipped: SkippedName[] } {
 	const reasons = new Map<string, string[]>();
 	for (const name of names.keys()) if (runtimeBuiltInNames().has(name)) reasons.set(name, [BUILT_IN_REASON]);
-	for (const { name, reason } of textUses([...names.keys()], map)) {
+	for (const { name, reason } of textUses([...names.keys()], map, scanned)) {
 		const found = reasons.get(name) ?? [];
 		found.push(reason);
 		reasons.set(name, found);
@@ -244,16 +236,17 @@ export function usableNames(names: ReadonlyMap<string, string>, map: ModuleMap):
 /**
  * Every place one of the names reaches this module map as text, in module
  * order: as a whole word of a string, template text, or regular expression, or
- * of a JSON key or string value. The generated entry module is never renamed,
- * so it is not read.
+ * of a JSON key or string value. JS modules are read from their scanned
+ * tokens, so the generated entry module, which is never renamed, is not read.
  */
-function textUses(names: readonly string[], map: ModuleMap): SkippedName[] {
+function textUses(names: readonly string[], map: ModuleMap, scanned: ReadonlyMap<string, SourceTokens>): SkippedName[] {
 	const uses: SkippedName[] = [];
 	if (names.length === 0) return uses;
 	for (const [path, module] of Object.entries(map.modules)) {
-		if (path === ENTRY_MODULE) continue;
 		if ("js" in module) {
-			const { strings, regexes } = moduleTexts(path, module.js);
+			const tokens = scanned.get(path);
+			if (tokens === undefined) continue;
+			const { strings, regexes } = tokens;
 			const stringWords = wordsOf(strings);
 			const regexWords = wordsOf(regexes);
 			for (const name of names) {
@@ -271,16 +264,6 @@ function textUses(names: readonly string[], map: ModuleMap): SkippedName[] {
 		}
 	}
 	return uses;
-}
-
-/** The text a JS module holds outside identifiers; a module the renamer cannot read is named in the error. */
-function moduleTexts(path: string, js: string): { strings: string[]; regexes: string[] } {
-	try {
-		return scanTokens(js);
-	} catch (error) {
-		if (error instanceof PolymorphUnavailableError) throw new PolymorphUnavailableError(`${path}: ${error.message}`, { cause: error });
-		throw error;
-	}
 }
 
 /** Identifier-like words of the texts: the pieces a property name could be read back from at run time. */

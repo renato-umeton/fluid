@@ -1,6 +1,6 @@
 // Every polymorphic copy of stock must answer every probe exactly like plain
-// stock. Takes names the way the loader will (variantNames, then usableNames,
-// then morphModuleMap) under five seeds, runs the invariant and functional
+// stock. Takes names the way the loader will (variantNames, then morphFork)
+// under five seeds, runs the invariant and functional
 // suites through the stock runner with an ask that sends each request to both
 // the plain app and the copy, and compares every card. A fork that reads one
 // listed name by string key loses only that name and still answers the same.
@@ -12,8 +12,8 @@ import stockSource from "../src/generated/stock-source.json";
 import synthetic from "../src/generated/synthetic.json";
 import type { RunnerManifestResult } from "../src/gate/tiers.ts";
 import { cardDifferences, type CardDifference } from "../src/polymorph/equivalence.ts";
-import { POLYMORPH_LIST_PATH, parsePolymorphList, usableNames, type SkippedName } from "../src/polymorph/list.ts";
-import { morphModuleMap } from "../src/polymorph/morph.ts";
+import { POLYMORPH_LIST_PATH, parsePolymorphList, type SkippedName } from "../src/polymorph/list.ts";
+import { morphFork, morphModuleMap } from "../src/polymorph/morph.ts";
 import { deriveSeed, variantNames } from "../src/polymorph/names.ts";
 import { scanTokens } from "../src/polymorph/tokens.ts";
 import { APP_MODULE, ENTRY_MODULE, RUNNER_ENTRY_MODULE, buildModuleMap, buildRunnerModuleMap, type ModuleMap } from "../src/runtime/modules.ts";
@@ -60,10 +60,9 @@ async function loadApp(map: ModuleMap, name: string): Promise<App> {
 	return (await materialize<{ default: App }>(map, dir, APP_MODULE, [ENTRY_MODULE])).default;
 }
 
-/** The loader's order: names for this copy, the ones this module map can use, then the renamed map. */
+/** The loader's way: names for this copy, then one morphFork that renames what it can and says what it skipped. */
 async function makeCopy(map: ModuleMap, epoch: number, dir: string): Promise<Copy> {
-	const { usable, skipped } = usableNames(await variantNames(await deriveSeed(SECRET, "user-ada", SHA, epoch), listed), map);
-	const morphed = morphModuleMap(map, usable);
+	const { map: morphed, usable, skipped } = morphFork(map, await variantNames(await deriveSeed(SECRET, "user-ada", SHA, epoch), listed));
 	return { usable, skipped, map: morphed, app: await loadApp(morphed, dir) };
 }
 
@@ -189,6 +188,6 @@ describe("a polymorphic copy of a fork that reads a listed name by string key", 
 
 	it("is refused by morphModuleMap when handed every name, the skipped one included", async () => {
 		const every = await variantNames(await deriveSeed(SECRET, "user-ada", SHA, 0), listed);
-		expect(() => morphModuleMap(keyedMap, every)).toThrow(/"evidence" appears in a string or template text in intent\/classifier\.js/);
+		expect(() => morphModuleMap(keyedMap, every)).toThrow(/"evidence": appears in a string or template text in intent\/classifier\.js/);
 	});
 });

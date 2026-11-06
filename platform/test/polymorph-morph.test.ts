@@ -1,10 +1,11 @@
 import { parse } from "sucrase/dist/parser/index.js";
+import sucraseBase from "sucrase/dist/parser/traverser/base.js";
 import { TokenType } from "sucrase/dist/parser/tokenizer/types.js";
 import { describe, expect, it } from "vitest";
 import stockSource from "../src/generated/stock-source.json";
-import { POLYMORPH_LIST_PATH, listProblems, parsePolymorphList, usableNames } from "../src/polymorph/list.ts";
-import { morphModuleMap, morphSource } from "../src/polymorph/morph.ts";
-import { PolymorphUnavailableError, scanTokens, tokenScanner } from "../src/polymorph/tokens.ts";
+import { POLYMORPH_LIST_PATH, parsePolymorphList, usableNames } from "../src/polymorph/list.ts";
+import { morphFork, morphModuleMap, morphSource } from "../src/polymorph/morph.ts";
+import { PolymorphUnavailableError, SCAN_LIMITS, scanModuleMap, scanTokens, tokenScanner } from "../src/polymorph/tokens.ts";
 import { ENTRY_MODULE, buildModuleMap, type ModuleMap } from "../src/runtime/modules.ts";
 
 type SucraseToken = { type: number; start: number; end: number };
@@ -19,6 +20,11 @@ function thrown(fn: () => unknown): Error {
 		return error as Error;
 	}
 	throw new Error("expected a throw");
+}
+
+/** The source of a JS module of a module map. */
+function jsOf(map: ModuleMap, name: string): string {
+	return (map.modules[name] as { js: string }).js;
 }
 
 /** Runs main() of a self-contained module (one without imports). */
@@ -165,68 +171,69 @@ describe("tokenScanner fails loudly when sucrase changes shape", () => {
 	});
 });
 
-describe("listProblems", () => {
-	it("finds no problem with upstream's list on stock", () => {
-		expect(listProblems(stockNames, buildModuleMap(stockFiles))).toEqual([]);
+/** Names with this test's fixed per-copy suffix. */
+function suffixed(...listed: string[]): Map<string, string> {
+	return new Map(listed.map((name) => [name, `${name}$abcd1234`]));
+}
+
+describe("scanModuleMap", () => {
+	it("reads every JS module but the generated entry, and no JSON module", () => {
+		const map = forkMap({ "app/a.ts": "export const a = 1;", "policies/x.json": "{}" });
+		expect([...scanModuleMap(map).keys()]).toEqual(["app/index.js", "app/a.js"]);
+		expect(scanModuleMap(map).get("app/a.js")?.identifiers.map((token) => token.text)).toEqual(["a"]);
 	});
 
-	it("reports names that are not plain identifiers", () => {
-		expect(listProblems(["a-b", "1x", "a$b", ""], forkMap({}))).toEqual([
-			'"a-b" is not a valid identifier (letters, digits, and underscores, not starting with a digit; "$" marks renamed names)',
-			'"1x" is not a valid identifier (letters, digits, and underscores, not starting with a digit; "$" marks renamed names)',
-			'"a$b" is not a valid identifier (letters, digits, and underscores, not starting with a digit; "$" marks renamed names)',
-			'"" is not a valid identifier (letters, digits, and underscores, not starting with a digit; "$" marks renamed names)',
-		]);
+	it("will not read a module larger than it can afford, and names it", () => {
+		const map = forkMap({ "app/big.js": `export const s = "${"x".repeat(SCAN_LIMITS.moduleChars)}";` });
+		expectUnavailable(() => scanModuleMap(map), /^app\/big\.js: .*more than the 262144 characters/);
 	});
 
-	it("reports reserved names and built-in names of this runtime", () => {
-		expect(listProblems(["then", "floor", "fluidToml"], forkMap({}))).toEqual([
-			'"then" is reserved (a keyword, or a name the language or the runtime contract reads)',
-			'"fluidToml" is reserved (a keyword, or a name the language or the runtime contract reads)',
-			'"floor" is a built-in name in this runtime',
-		]);
+	it("will not read more JavaScript in all than it can afford", () => {
+		const part = `export const s = "${"x".repeat(SCAN_LIMITS.moduleChars - 100)}";`;
+		const files = Object.fromEntries(Array.from({ length: 5 }, (_, i) => [`app/part${i}.js`, part]));
+		expectUnavailable(() => scanModuleMap(forkMap(files)), /more than the 1048576 characters of JavaScript/);
 	});
 
-	it("reports a name used in a string, once per module", () => {
+	it("cannot read a module sucrase does not parse, and names it", () => {
+		expectUnavailable(() => scanModuleMap(forkMap({ "connectors/broken.js": "export const = ;" })), /^connectors\/broken\.js: .*cannot parse/);
+	});
+
+	it("leaves no token array behind in the parser once it has read a module", () => {
+		scanTokens(`export const s = [${"1, ".repeat(10_000)}];`);
+		expect((sucraseBase as { state: { tokens: unknown[] } }).state.tokens.length).toBeLessThan(5);
+	});
+});
+
+describe("usableNames reads the fork's text", () => {
+	it("skips a name used in a string, with one reason per module however often", () => {
 		const map = forkMap({ "app/x.ts": 'export const read = (o: Record<string, unknown>) => [o["secretName"], "secretName" in o];' });
-		expect(listProblems(["secretName"], map)).toEqual(['"secretName" appears in a string or template text in app/x.js']);
+		expect(usableNames(suffixed("secretName"), map).skipped).toEqual([{ name: "secretName", reason: "appears in a string or template text in app/x.js" }]);
 	});
 
-	it("reports a name inside template text or a longer string, and one spelled with escapes", () => {
+	it("skips a name inside template text or a longer string, and one spelled with escapes", () => {
 		const map = forkMap({
 			"app/a.ts": "export const path = (k: string) => `ledger.secretName.${k}`;",
 			"app/b.ts": 'export const label = "kind:otherName";',
-			"app/c.ts": 'export const key = "third\\u004eame";',
+			"app/c.ts": 'export const key = "third\\x4eame";',
 		});
-		expect(listProblems(["secretName", "otherName", "thirdName"], map)).toEqual([
-			'"secretName" appears in a string or template text in app/a.js',
-			'"otherName" appears in a string or template text in app/b.js',
-			'"thirdName" appears in a string or template text in app/c.js',
+		expect(usableNames(suffixed("secretName", "otherName", "thirdName"), map).skipped).toEqual([
+			{ name: "secretName", reason: "appears in a string or template text in app/a.js" },
+			{ name: "otherName", reason: "appears in a string or template text in app/b.js" },
+			{ name: "thirdName", reason: "appears in a string or template text in app/c.js" },
 		]);
 	});
 
-	it("reports a name used as a key or inside a string value of a JSON module", () => {
+	it("skips a name used as a key or inside a string value of a JSON module", () => {
 		const map = forkMap({ "policies/x.json": JSON.stringify({ rules: [{ secretName: 1 }, { path: "card.otherName" }] }) });
-		expect(listProblems(["secretName", "otherName"], map)).toEqual([
-			'"secretName" appears in a key in policies/x.json',
-			'"otherName" appears in a string value in policies/x.json',
+		expect(usableNames(suffixed("secretName", "otherName"), map).skipped).toEqual([
+			{ name: "secretName", reason: "appears in a key in policies/x.json" },
+			{ name: "otherName", reason: "appears in a string value in policies/x.json" },
 		]);
 	});
 
-	it("accepts identifiers, comments, longer words, and names no module uses", () => {
+	it("keeps a name used only as an identifier, in a comment, inside a longer word, or nowhere", () => {
 		const map = forkMap({ "app/x.ts": '// secretName is internal\nexport function secretName(secretNames: string[]) { return ["secretNamed", ...secretNames]; }' });
-		expect(listProblems(["secretName", "unusedName"], map)).toEqual([]);
-	});
-
-	it("leaves the generated entry module alone", () => {
-		const map = forkMap({});
-		map.modules[ENTRY_MODULE] = { js: 'export const note = "secretName";' };
-		expect(listProblems(["secretName"], map)).toEqual([]);
-	});
-
-	it("cannot check a module sucrase does not parse, and names it", () => {
-		const map = forkMap({ "connectors/broken.js": "export const = ;" });
-		expectUnavailable(() => listProblems(["secretName"], map), /^connectors\/broken\.js: .*cannot parse/);
+		expect(usableNames(suffixed("secretName", "unusedName"), map).skipped).toEqual([]);
 	});
 });
 
@@ -236,7 +243,6 @@ describe("usableNames", () => {
 		["otherName", "otherName$abcd1234"],
 		["thirdName", "thirdName$abcd1234"],
 	]);
-	const jsOf = (map: ModuleMap, name: string) => (map.modules[name] as { js: string }).js;
 
 	it("keeps every name of upstream's list usable on stock", () => {
 		const stockVariants = new Map(stockNames.map((name) => [name, `${name}$abcd1234`]));
@@ -277,7 +283,7 @@ describe("usableNames", () => {
 		]);
 		const morphed = morphModuleMap(map, usable);
 		expect(jsOf(morphed, "app/b.js")).toBe('import { secretName$abcd1234, otherName } from "./a.js";\nexport const thirdName$abcd1234 = () => [secretName$abcd1234(), otherName({})];');
-		expect(() => morphModuleMap(map, variants)).toThrow(/"otherName" appears in a string or template text in app\/a\.js/);
+		expect(() => morphModuleMap(map, variants)).toThrow(/"otherName": appears in a string or template text in app\/a\.js/);
 	});
 
 	it("skips a name a regular expression mentions, so a named group read back as a property keeps working", () => {
@@ -405,7 +411,6 @@ describe("morphSource", () => {
 
 describe("morphModuleMap", () => {
 	const variants = new Map([["secretName", "secretName$abcd1234"]]);
-	const jsOf = (map: ModuleMap, name: string) => (map.modules[name] as { js: string }).js;
 
 	it("renames every JS module but the generated entry, and keeps JSON modules and the main module", () => {
 		const map = forkMap({
@@ -430,10 +435,15 @@ describe("morphModuleMap", () => {
 		expect(map).toEqual(before);
 	});
 
-	it("refuses, listing every problem, when renaming would not be safe", () => {
+	it("refuses a name no list could hold before it reads any module", () => {
+		const map = forkMap({ "connectors/broken.js": "export const = ;" });
+		expect(() => morphModuleMap(map, new Map([...variants, ["fluidToml", "fluidToml$abcd1234"]]))).toThrow(/"fluidToml" is reserved/);
+	});
+
+	it("refuses, listing every reason, any name it would have to skip", () => {
 		const map = forkMap({ "app/a.ts": 'export const secretName = 1;\nexport const key = "secretName";' });
-		const names = new Map([...variants, ["then", "then$abcd1234"]]);
-		expect(() => morphModuleMap(map, names)).toThrow(/cannot rename[\s\S]*"then" is reserved[\s\S]*"secretName" appears in a string or template text in app\/a\.js/);
+		const names = new Map([...variants, ["json", "json$abcd1234"]]);
+		expect(() => morphModuleMap(map, names)).toThrow(/cannot rename[\s\S]*"secretName": appears in a string or template text in app\/a\.js[\s\S]*"json": a built-in name in this runtime/);
 	});
 
 	it("cannot rename a module sucrase does not parse, and names it", () => {
@@ -444,6 +454,50 @@ describe("morphModuleMap", () => {
 	it("names the module when a target name is already taken", () => {
 		const map = forkMap({ "app/a.ts": "export const secretName$abcd1234 = 1;\nexport const secretName = 2;" });
 		const error = expectUnavailable(() => morphModuleMap(map, variants), /^app\/a\.js: .*already uses this copy's renamed name for "secretName"/);
+		expect(error.message).not.toContain("abcd1234");
+	});
+});
+
+describe("morphFork", () => {
+	it("renames the usable names, skips the rest, and says which and why", () => {
+		const map = forkMap({
+			"app/a.ts": 'export function secretName() { return 1; }\nexport const otherName = (o: Record<string, unknown>) => o["otherName"];',
+			"app/b.ts": 'import { secretName, otherName } from "./a.js";\nexport const thirdName = () => [secretName(), otherName({}), new URL("https://x.test/").searchParams];',
+		});
+		const result = morphFork(map, suffixed("secretName", "otherName", "thirdName", "searchParams"));
+		expect(result.skipped).toEqual([
+			{ name: "otherName", reason: "appears in a string or template text in app/a.js" },
+			{ name: "searchParams", reason: "a built-in name in this runtime" },
+		]);
+		expect(result.usable).toEqual(suffixed("secretName", "thirdName"));
+		expect(jsOf(result.map, "app/b.js")).toBe(
+			'import { secretName$abcd1234, otherName } from "./a.js";\nexport const thirdName$abcd1234 = () => [secretName$abcd1234(), otherName({}), new URL("https://x.test/").searchParams];',
+		);
+	});
+
+	it("keeps JSON modules, the generated entry, and the main module, and leaves its input alone", () => {
+		const map = forkMap({ "app/a.ts": "export const secretName = 1;", "policies/c.json": '{ "limit": 3 }' });
+		const before = structuredClone(map);
+		const result = morphFork(map, suffixed("secretName"));
+		expect(result.map.mainModule).toBe(ENTRY_MODULE);
+		expect(result.map.modules[ENTRY_MODULE]).toEqual(map.modules[ENTRY_MODULE]);
+		expect(result.map.modules["policies/c.json"]).toEqual({ json: { limit: 3 } });
+		expect(jsOf(result.map, "app/a.js")).toContain("secretName$abcd1234");
+		expect(map).toEqual(before);
+	});
+
+	it("only takes a fork module map, whose main module is the generated entry", () => {
+		expect(() => morphFork({ ...forkMap({}), mainModule: "app/index.js" }, suffixed("secretName"))).toThrow(/main module/);
+	});
+
+	it("refuses a name no list could hold, and a target that is not a per-copy name", () => {
+		expect(() => morphFork(forkMap({}), suffixed("fluidToml"))).toThrow(/"fluidToml" is reserved/);
+		expect(() => morphFork(forkMap({}), new Map([["secretName", "other"]]))).toThrow(/"secretName" must map to "secretName" followed by/);
+	});
+
+	it("cannot make a copy when a module already uses a renamed name, and names the module", () => {
+		const map = forkMap({ "app/a.ts": "export const secretName$abcd1234 = 1;\nexport const secretName = 2;" });
+		const error = expectUnavailable(() => morphFork(map, suffixed("secretName")), /^app\/a\.js: .*already uses this copy's renamed name for "secretName"/);
 		expect(error.message).not.toContain("abcd1234");
 	});
 });
