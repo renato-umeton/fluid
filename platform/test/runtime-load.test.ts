@@ -1,8 +1,9 @@
 // What the fork runtime reads, through the platform's own code paths, on
-// in-memory Artifacts repos. Stock is published at its bundled release tag
-// and user-1 is a fresh fork of it, so its main holds the same files. Nothing
-// reaches the network: fetch is the fake git remote, which serves only the
-// ref listing the platform reads to resolve a stock tag.
+// in-memory Artifacts repos, and the fake Worker Loader it runs in. Stock is
+// published at its bundled release tag and user-1 is a fresh fork of it, so
+// its main holds the same files. Nothing reaches the network: fetch is the
+// fake git remote, which serves only the ref listing the platform reads to
+// resolve a stock tag.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import stockSource from "../src/generated/stock-source.json";
 import { listRemoteRefs } from "../src/git/ops.ts";
@@ -11,6 +12,7 @@ import { RefNotFoundError, resolveCommit } from "../src/runtime/refs.ts";
 import { listCommitFiles, openRepo, readCommitFiles } from "../src/runtime/repo-files.ts";
 import { releaseMetadata, releaseMetadataPath } from "../src/stock/releases.ts";
 import { apiEnv } from "./helpers/api-env.ts";
+import { fakeLoader } from "./helpers/fake-loader.ts";
 import { fakeGitRepo, type FakeGitRepo } from "./helpers/fake-repos.ts";
 
 const TAG = stockSource.stockTag;
@@ -21,6 +23,7 @@ const published: Record<string, string> = {
 };
 
 let t: ReturnType<typeof apiEnv>;
+let loader: ReturnType<typeof fakeLoader>;
 let stock: FakeGitRepo;
 let main: string;
 
@@ -28,10 +31,13 @@ beforeAll(() => {
 	t = apiEnv();
 	stock = t.artifacts.seed("stock", { commits: [published], tags: { [TAG]: 0 } });
 	main = t.artifacts.seed("user-1", { commits: [published] }).commits[0]!;
+	loader = fakeLoader();
+	Object.assign(t.env, { LOADER: loader });
 	vi.stubGlobal("fetch", t.artifacts.fetch);
 });
 
 afterAll(() => {
+	loader.cleanup();
 	vi.unstubAllGlobals();
 });
 
@@ -73,5 +79,39 @@ describe("in-memory repositories", () => {
 		const files = await readCommitFiles(repo, main, { file: isRuntimePath, dir: (path) => !path.startsWith("tests") });
 		expect(Object.keys(files).sort()).toEqual(Object.keys(published).filter(isRuntimePath).sort());
 		expect(files["app/index.ts"]).toBe(published["app/index.ts"]);
+	});
+});
+
+describe("the fake Worker Loader", () => {
+	const source = `import { WorkerEntrypoint } from "cloudflare:workers";
+export class Probe extends WorkerEntrypoint {
+  async poke(input, callback) {
+    input.touched = true;
+    return { label: this.env.label, answer: await callback({ asked: true }) };
+  }
+  async fail() {
+    throw new RangeError("out of range");
+  }
+}
+`;
+	const code = () => ({ compatibilityDate: "2026-10-01", mainModule: "probe.js", modules: { "probe.js": { js: source } }, env: { label: "from the factory" }, globalOutbound: null });
+
+	it("gives the entrypoint the factory's env and copies what crosses a call, as Workers RPC does", async () => {
+		const probe = loader.get("probe:copies", code).getEntrypoint("Probe");
+		const input = { touched: false };
+		const asked: unknown[] = [];
+		expect(await probe.poke!(input, (arg: unknown) => (asked.push(arg), "pong"))).toEqual({ label: "from the factory", answer: "pong" });
+		expect(input.touched).toBe(false);
+		expect(asked).toEqual([{ asked: true }]);
+		await expect(probe.fail!()).rejects.toThrow("out of range");
+		await expect(probe.fail!()).rejects.toBeInstanceOf(RangeError);
+	});
+
+	it("runs the factory once per id", async () => {
+		const factory = vi.fn(code);
+		await loader.get("probe:once", factory).getEntrypoint("Probe").poke!({}, () => null);
+		await loader.get("probe:once", factory).getEntrypoint("Probe").poke!({}, () => null);
+		expect(factory).toHaveBeenCalledTimes(1);
+		expect(loader.built.filter((id) => id === "probe:once")).toHaveLength(1);
 	});
 });
