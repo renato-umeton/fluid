@@ -9,7 +9,6 @@ export const RECORD_COMMAND = "cd platform && npm run polymorph:record";
 
 const RESULT_LISTS = { plain: ["compromised"], direct: ["compromised"], platform: ["compromised", "refused", "rotated"] };
 const FINGERPRINT = /^[0-9a-f]{8}$/;
-const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/;
 /** The animation: forks are hit one after another over HIT_MS, then refused forks move to their new copy. */
 const HIT_MS = 1500;
 const MOVE_AT_MS = 1800;
@@ -18,6 +17,9 @@ const MOVE_MS = 500;
 const isObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 const isText = (value) => typeof value === "string" && value.trim() !== "";
 const isCount = (value) => Number.isInteger(value) && value >= 0;
+const isRepoList = (value) => Array.isArray(value) && value.every((repo) => typeof repo === "string");
+/** Exactly what toISOString writes, so a date like February 30 or a missing millisecond part is caught. */
+const isIsoTime = (value) => typeof value === "string" && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 /** Problems with a recording's shape, in plain words; empty when the view can show it. */
@@ -29,34 +31,34 @@ export function validateDemo(data) {
     return ok;
   };
   need(data.version === 1, "version must be 1");
-  need(isText(data.recordedAt) && ISO_TIME.test(data.recordedAt) && Number.isFinite(Date.parse(data.recordedAt)), "recordedAt must be an ISO time");
+  need(isIsoTime(data.recordedAt), "recordedAt must be an ISO time such as 2026-11-06T18:30:00.000Z");
   need(isText(data.release), "release must be a non-empty string");
   for (const key of ["listSize", "probes"]) need(isCount(data[key]), `${key} must be a whole number of 0 or more`);
-  const repos = checkForks(data.forks, need);
-  const ids = checkAttacks(data.attacks, repos, need);
-  if (data.afterRotation !== undefined && data.afterRotation !== null) checkAfterRotation(data.afterRotation, ids, repos, need);
+  const forks = checkForks(data.forks, need);
+  const ids = checkAttacks(data.attacks, forks, need);
+  if (data.afterRotation !== undefined && data.afterRotation !== null) checkAfterRotation(data.afterRotation, ids, forks, need);
   return problems;
 }
 
-/** The repo names, or null when there is no list to check other lists against. */
+/** The forks by repo name, or null when there is no list to check other lists against. Epochs are not shown, so not checked. */
 function checkForks(forks, need) {
   if (!need(Array.isArray(forks) && forks.length > 0, "forks must be a non-empty list")) return null;
-  const repos = new Set();
+  const byRepo = new Map();
   forks.forEach((fork, i) => {
     const at = `forks[${i}]`;
     if (!need(isObject(fork), `${at} must be an object`)) return;
     if (need(isText(fork.repo), `${at}.repo must be a non-empty string`)) {
-      need(!repos.has(fork.repo), `${at}.repo ${JSON.stringify(fork.repo)} appears twice`);
-      repos.add(fork.repo);
+      need(!byRepo.has(fork.repo), `${at}.repo ${JSON.stringify(fork.repo)} appears twice`);
+      byRepo.set(fork.repo, fork);
     }
     for (const key of ["before", "after"]) need(typeof fork[key] === "string" && FINGERPRINT.test(fork[key]), `${at}.${key} must be 8 lowercase hex characters`);
-    for (const key of ["epochBefore", "epochAfter", "mismatches"]) need(isCount(fork[key]), `${at}.${key} must be a whole number of 0 or more`);
+    need(isCount(fork.mismatches), `${at}.mismatches must be a whole number of 0 or more`);
   });
-  return repos;
+  return byRepo;
 }
 
 /** The attack ids, or null when there is no list of attacks. */
-function checkAttacks(attacks, repos, need) {
+function checkAttacks(attacks, forks, need) {
   if (!need(Array.isArray(attacks) && attacks.length > 0, "attacks must be a non-empty list")) return null;
   const ids = new Set();
   attacks.forEach((attack, i) => {
@@ -69,24 +71,45 @@ function checkAttacks(attacks, repos, need) {
     need(isText(attack.label), `${at}.label must be a non-empty string`);
     need(isText(attack.detail), `${at}.detail must be a non-empty string`);
     need(isCount(attack.tries), `${at}.tries must be a whole number of 0 or more`);
-    checkRepos(attack.targets, `${at}.targets`, repos, need);
+    const targets = checkRepos(attack.targets, `${at}.targets`, need, { forks });
     for (const [part, lists] of Object.entries(RESULT_LISTS)) {
       if (!need(isObject(attack[part]), `${at}.${part} must be an object`)) continue;
-      for (const list of lists) checkRepos(attack[part][list], `${at}.${part}.${list}`, repos, need);
+      for (const list of lists) checkRepos(attack[part][list], `${at}.${part}.${list}`, need, { forks, targets, targetsAt: `${at}.targets` });
+    }
+    if (forks && isObject(attack.platform) && isRepoList(attack.platform.rotated)) {
+      for (const repo of new Set(attack.platform.rotated)) {
+        const fork = forks.get(repo);
+        if (fork) need(fork.after !== fork.before, `${at}.platform.rotated names ${JSON.stringify(repo)}, whose after fingerprint is the same as before`);
+      }
     }
   });
   return ids;
 }
 
-function checkAfterRotation(after, ids, repos, need) {
+function checkAfterRotation(after, ids, forks, need) {
   if (!need(isObject(after), "afterRotation must be an object")) return;
   if (need(after.attack === "A2", 'afterRotation.attack must be "A2"') && ids) need(ids.has("A2"), "afterRotation.attack names A2, which is not in attacks");
-  for (const list of ["compromised", "refused"]) checkRepos(after[list], `afterRotation.${list}`, repos, need);
+  for (const list of ["compromised", "refused"]) checkRepos(after[list], `afterRotation.${list}`, need, { forks });
 }
 
-function checkRepos(list, at, repos, need) {
-  if (!need(Array.isArray(list) && list.every((repo) => typeof repo === "string"), `${at} must be a list of repo names`) || !repos) return;
-  for (const repo of list) need(repos.has(repo), `${at} names ${JSON.stringify(repo)}, which is not in forks`);
+/**
+ * A list of repo names: none twice (it would be counted twice), each one a fork, and in an outcome list each one a
+ * fork the attack targeted. Returns the names, or null when the value is not a list of names.
+ */
+function checkRepos(list, at, need, { forks, targets = null, targetsAt = "" }) {
+  if (!need(isRepoList(list), `${at} must be a list of repo names`)) return null;
+  const names = new Set();
+  const repeated = new Set();
+  for (const repo of list) {
+    if (names.has(repo)) repeated.add(repo);
+    names.add(repo);
+  }
+  for (const repo of repeated) need(false, `${at} names ${JSON.stringify(repo)} more than once`);
+  for (const repo of names) {
+    if (forks && !need(forks.has(repo), `${at} names ${JSON.stringify(repo)}, which is not in forks`)) continue;
+    if (targets) need(targets.has(repo), `${at} names ${JSON.stringify(repo)}, which is not in ${targetsAt}`);
+  }
+  return names;
 }
 
 /** The recording from the file's text: `demo` is null when the text is not JSON or not in the shape above. */

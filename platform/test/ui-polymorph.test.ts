@@ -88,7 +88,6 @@ describe("validateDemo", () => {
 
 	it.each<[string, Edit, string[]]>([
 		["version 2", (d) => Object.assign(d, { version: 2 }), ["version must be 1"]],
-		["a recordedAt that is not a time", (d) => Object.assign(d, { recordedAt: "yesterday" }), ["recordedAt must be an ISO time"]],
 		["probes written as text", (d) => Object.assign(d, { probes: "71" }), ["probes must be a whole number of 0 or more"]],
 		["a listSize that is not whole", (d) => Object.assign(d, { listSize: 2.5 }), ["listSize must be a whole number of 0 or more"]],
 		["an uppercase fingerprint", (d) => Object.assign(d.forks[0], { before: "0A1B2C3D" }), ["forks[0].before must be 8 lowercase hex characters"]],
@@ -110,6 +109,48 @@ describe("validateDemo", () => {
 
 	it("rejects a fork listed twice", () => {
 		expect(validateDemo(changed((d) => Object.assign(d.forks[2], { repo: "user-01" })))).toContain('forks[2].repo "user-01" appears twice');
+	});
+
+	it.each<[string, Edit, string]>([
+		["targets", (d) => d.attacks[0].targets.push("user-01"), 'attacks[0].targets names "user-01" more than once'],
+		["plain.compromised", (d) => d.attacks[0].plain.compromised.push("user-02"), 'attacks[0].plain.compromised names "user-02" more than once'],
+		["direct.compromised", (d) => d.attacks[1].direct.compromised.push("user-02"), 'attacks[1].direct.compromised names "user-02" more than once'],
+		["platform.compromised", (d) => d.attacks[1].platform.compromised.push("user-02"), 'attacks[1].platform.compromised names "user-02" more than once'],
+		["platform.refused", (d) => d.attacks[0].platform.refused.push("user-03"), 'attacks[0].platform.refused names "user-03" more than once'],
+		["platform.rotated", (d) => d.attacks[0].platform.rotated.push("user-01"), 'attacks[0].platform.rotated names "user-01" more than once'],
+		["afterRotation.compromised", (d) => d.afterRotation.compromised.push("user-01", "user-01", "user-01"), 'afterRotation.compromised names "user-01" more than once'],
+		["afterRotation.refused", (d) => d.afterRotation.refused.push("user-02"), 'afterRotation.refused names "user-02" more than once'],
+	])("rejects a repo named twice in %s, which would count it twice", (_list, edit, problem) => {
+		expect(validateDemo(changed(edit))).toEqual([problem]);
+	});
+
+	it.each<[string, Edit, string]>([
+		["plain.compromised", (d) => d.attacks[2].plain.compromised.push("user-01"), 'attacks[2].plain.compromised names "user-01", which is not in attacks[2].targets'],
+		["direct.compromised", (d) => d.attacks[2].direct.compromised.push("user-01"), 'attacks[2].direct.compromised names "user-01", which is not in attacks[2].targets'],
+		["platform.compromised", (d) => d.attacks[2].platform.compromised.push("user-02"), 'attacks[2].platform.compromised names "user-02", which is not in attacks[2].targets'],
+		["platform.refused", (d) => d.attacks[2].platform.refused.push("user-02"), 'attacks[2].platform.refused names "user-02", which is not in attacks[2].targets'],
+		["platform.rotated", (d) => d.attacks[2].platform.rotated.push("user-01"), 'attacks[2].platform.rotated names "user-01", which is not in attacks[2].targets'],
+	])("rejects an outcome in %s for a fork the attack did not target", (_list, edit, problem) => {
+		expect(validateDemo(changed(edit))).toEqual([problem]);
+	});
+
+	it("rejects a fork moved to a new copy whose fingerprint did not change", () => {
+		expect(validateDemo(changed((d) => Object.assign(d.forks[0], { after: "0a1b2c3d" })))).toEqual([
+			'attacks[0].platform.rotated names "user-01", whose after fingerprint is the same as before',
+			'attacks[1].platform.rotated names "user-01", whose after fingerprint is the same as before',
+		]);
+	});
+
+	it("accepts the same fingerprint before and after for a fork no attack moves", () => {
+		expect(validateDemo(changed((d) => { d.attacks[0].platform.rotated = ["user-01"]; Object.assign(d.forks[1], { after: "8c9d0e1f" }); }))).toEqual([]);
+	});
+
+	it.each(["yesterday", "2026-11-06T18:30:00Z", "2026-02-30T10:00:00.000Z", "2026-11-06T18:30:00.000+05:30"])("rejects recordedAt %s, which toISOString would not write", (recordedAt) => {
+		expect(validateDemo(changed((d) => Object.assign(d, { recordedAt })))).toEqual(["recordedAt must be an ISO time such as 2026-11-06T18:30:00.000Z"]);
+	});
+
+	it("accepts forks without epochs, which the page does not show", () => {
+		expect(validateDemo(changed((d) => d.forks.forEach((f) => { Reflect.deleteProperty(f, "epochBefore"); Reflect.deleteProperty(f, "epochAfter"); })))).toEqual([]);
 	});
 });
 
