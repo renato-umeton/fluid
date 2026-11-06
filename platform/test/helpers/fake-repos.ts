@@ -32,7 +32,18 @@ const SHA = /^[0-9a-f]{40}$/;
 const PERSON = { name: "Fluid Test", email: "test@fluid.invalid" };
 /** Unix time of a repo's first commit; each later commit is a minute after the one before. */
 const FIRST_COMMIT_AT = 1_790_000_000;
+/** The binding returns at most this many commits from log. */
+const LOG_LIMIT = 1000;
 const FLUSH = "0000";
+
+/** An error shaped like the binding's ArtifactsError. */
+function artifactsError(code: "INVALID_INPUT" | "INTERNAL_ERROR", message: string): Error {
+	return Object.assign(new Error(message), { name: "ArtifactsError", code });
+}
+
+function assertHash(method: string, hash: string): void {
+	if (typeof hash !== "string" || !SHA.test(hash)) throw artifactsError("INVALID_INPUT", `${method}: ${JSON.stringify(hash)} is not a lowercase 40-character SHA-1`);
+}
 
 export type FakeGitRepo = ReturnType<typeof fakeGitRepo>;
 
@@ -48,8 +59,8 @@ export function fakeGitRepo(seed: RepoSeed = { commits: [] }) {
 		return object?.type === type ? (object as Extract<GitObject, { type: T }>) : null;
 	};
 
-	/** Stores the tree of `files` (paths relative to it) with every subtree and blob under it. */
-	const writeTree = (files: [string, string][]): string => {
+	/** Stores the tree of `files` (paths relative to `prefix`) with every subtree and blob under it. */
+	const writeTree = (files: [string, string][], prefix = ""): string => {
 		const entries: ArtifactsTreeEntry[] = [];
 		const dirs = new Map<string, [string, string][]>();
 		for (const [path, text] of files) {
@@ -62,7 +73,10 @@ export function fakeGitRepo(seed: RepoSeed = { commits: [] }) {
 			if (!dirs.has(dir)) dirs.set(dir, []);
 			dirs.get(dir)!.push([path.slice(slash + 1), text]);
 		}
-		for (const [name, inner] of dirs) entries.push({ name, mode: "40000", type: "tree", hash: writeTree(inner) });
+		for (const [name, inner] of dirs) {
+			if (entries.some((entry) => entry.name === name)) throw new Error(`fakeGitRepo: ${prefix}${name} is both a file and a directory`);
+			entries.push({ name, mode: "40000", type: "tree", hash: writeTree(inner, `${prefix}${name}/`) });
+		}
 		entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 		return put({ type: "tree", entries }, JSON.stringify(entries));
 	};
@@ -108,28 +122,43 @@ export function fakeGitRepo(seed: RepoSeed = { commits: [] }) {
 		commits,
 		resolve,
 
-		// The binding's read methods. Results are copies, as they would be over RPC.
+		// The binding's read methods. They throw where the binding documents an
+		// error, answer null where it documents null, and return copies, as
+		// they would over RPC.
 
-		/** The first-parent chain from ref, newest first; empty when the ref does not resolve. */
+		/** The first-parent chain from ref, newest first, at most 1000 commits; empty when the ref does not resolve. */
 		async log(options: { ref?: string; limit?: number; offset?: number } = {}): Promise<ArtifactsCommitMetadata[]> {
 			const { ref = "HEAD", limit = 50, offset = 0 } = options;
+			const end = offset + Math.min(limit, LOG_LIMIT);
 			const out: ArtifactsCommitMetadata[] = [];
-			for (let hash = resolve(ref); hash !== null && out.length < offset + limit; hash = metadata(hash).parents[0] ?? null) out.push(metadata(hash));
+			for (let hash = resolve(ref); hash !== null && out.length < end; hash = metadata(hash).parents[0] ?? null) out.push(metadata(hash));
 			return structuredClone(out.slice(offset));
 		},
+		/** null when the object is missing; an error when it is not a commit. */
 		async readCommit(hash: string): Promise<ArtifactsCommitMetadata | null> {
+			assertHash("readCommit", hash);
+			if (!objects.has(hash)) return null;
 			const found = find(hash, "commit");
-			return found ? structuredClone(found.commit) : null;
+			if (!found) throw artifactsError("INTERNAL_ERROR", `readCommit: ${hash} is a ${objects.get(hash)!.type}, not a commit`);
+			return structuredClone(found.commit);
 		},
+		/** null when the object is missing; an error when it is not a tree. */
 		async readTree(hash: string): Promise<ArtifactsTreeEntry[] | null> {
+			assertHash("readTree", hash);
+			if (!objects.has(hash)) return null;
 			const found = find(hash, "tree");
-			return found ? structuredClone(found.entries) : null;
+			if (!found) throw artifactsError("INTERNAL_ERROR", `readTree: ${hash} is a ${objects.get(hash)!.type}, not a tree`);
+			return structuredClone(found.entries);
 		},
+		/** null when the object is missing or is not a blob. */
 		async readBlob(hash: string): Promise<Blob | null> {
+			assertHash("readBlob", hash);
 			const found = find(hash, "blob");
 			return found ? new Blob([found.text]) : null;
 		},
+		/** null when the ref or the path does not resolve to a file. */
 		async readFile(args: { ref: string; path: string }): Promise<Blob | null> {
+			if (!args.ref || !args.path) throw artifactsError("INVALID_INPUT", `readFile: ref and path must be non-empty (got ${JSON.stringify(args)})`);
 			const head = resolve(args.ref);
 			let hash = head === null ? undefined : metadata(head).treeHash;
 			for (const name of args.path.split("/")) hash = hash === undefined ? undefined : find(hash, "tree")?.entries.find((entry) => entry.name === name)?.hash;

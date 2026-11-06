@@ -85,6 +85,33 @@ describe("in-memory repositories", () => {
 		expect((await listRemoteRefs(remote)).map((r) => r.ref)).toEqual(["HEAD", "refs/heads/main", `refs/tags/${TAG}`]);
 	});
 
+	it("throw where the binding throws: a malformed hash, an object of the wrong type, an empty ref or path", async () => {
+		const repo = await openRepo(t.env.ARTIFACTS, "stock");
+		const commit = stock.commits[0]!;
+		const tree = (await repo.readCommit(commit))!.treeHash;
+		for (const read of [repo.readCommit, repo.readTree, repo.readBlob]) {
+			await expect(read("not-a-hash")).rejects.toMatchObject({ name: "ArtifactsError", code: "INVALID_INPUT" });
+			expect(await read("0".repeat(40))).toBeNull();
+		}
+		await expect(repo.readCommit(tree)).rejects.toMatchObject({ name: "ArtifactsError", code: "INTERNAL_ERROR" });
+		await expect(repo.readTree(commit)).rejects.toMatchObject({ name: "ArtifactsError", code: "INTERNAL_ERROR" });
+		// The binding documents null, not an error, for an object that is not a blob.
+		expect(await repo.readBlob(commit)).toBeNull();
+		for (const args of [{ ref: "", path: "fluid.toml" }, { ref: "main", path: "" }]) {
+			await expect(repo.readFile(args)).rejects.toMatchObject({ name: "ArtifactsError", code: "INVALID_INPUT" });
+		}
+	});
+
+	it("cap log at 1000 commits, as the binding does", async () => {
+		const long = fakeGitRepo({ commits: Array.from({ length: 1001 }, (_, i) => ({ "n.txt": String(i) })) });
+		expect(await long.log({ limit: 5000 })).toHaveLength(1000);
+	});
+
+	it("refuse a seed with a file where a directory is", () => {
+		expect(() => fakeGitRepo({ commits: [{ "app/a": "file", "app/a/b": "inside" }] })).toThrow(/app\/a is both a file and a directory/);
+		expect(() => fakeGitRepo({ commits: [{ "a/b": "inside", a: "file" }] })).toThrow(/a is both a file and a directory/);
+	});
+
 	it("read a commit's runtime files through readCommitFiles", async () => {
 		const repo = await openRepo(t.env.ARTIFACTS, "user-1");
 		const files = await readCommitFiles(repo, main, { file: isRuntimePath, dir: (path) => !path.startsWith("tests") });
