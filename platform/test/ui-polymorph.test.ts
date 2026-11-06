@@ -1,6 +1,10 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 // @ts-expect-error plain ES module from the static UI
 import { afterRotationLine, equivalenceLine, introLines, outcomeLine, parseDemo, replaySteps, scoreRows, tileStates, validateDemo } from "../public/js/polymorph-replay.js";
+// @ts-expect-error plain ES module from the static UI
+import * as view from "../public/js/views/polymorph.js";
 
 type Tile = { state: string; fingerprint: string | null; note: string };
 type Step = { at: number; repo: string; tile: Tile };
@@ -220,5 +224,43 @@ describe("the lines around the fleet and the scoreboard", () => {
 		expect(equivalenceLine(demo())).toBe("Equivalence check: every copy answered all 71 probes like the plain fork (3 of 3 copies had 0 differences).");
 		const two = changed((d) => { Object.assign(d.forks[0], { mismatches: 2 }); Object.assign(d.forks[2], { mismatches: 1 }); });
 		expect(equivalenceLine(two)).toBe("Equivalence check: 1 of 3 copies answered all 71 probes like the plain fork with 0 differences. Copies with differences: user-01 (2), user-03 (1).");
+	});
+});
+
+describe("the Polymorph view is wired in like the others", () => {
+	const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
+	const app = read("../public/app.js");
+	const html = read("../public/index.html");
+	const views = (app.match(/const VIEWS = \{([^}]*)\}/)?.[1] ?? "").split(",").map((entry) => entry.split(":")[0].trim());
+
+	it("is imported and registered in app.js", () => {
+		expect(app).toContain('import * as polymorph from "./js/views/polymorph.js";');
+		expect(views).toContain("polymorph");
+	});
+
+	it("has a Polymorph button in the rail right after Fleet", () => {
+		const order = [...html.matchAll(/data-view="([^"]+)"/g)].map((m) => m[1]);
+		expect(order[order.indexOf("fleet") + 1]).toBe("polymorph");
+		expect(html).toMatch(/<button class="nav-btn" data-view="polymorph">.*Polymorph<\/button>/);
+	});
+
+	it("has a section for every registered view, so route() can show it", () => {
+		for (const name of views) expect(html).toMatch(new RegExp(`<section class="view" id="view-${name}" aria-labelledby="view-title"( hidden)?></section>`));
+		expect(html).toContain('<section class="view" id="view-polymorph" aria-labelledby="view-title" hidden></section>');
+	});
+
+	it("exports what route() calls", () => {
+		expect(view.title).toBe("Polymorphic installation");
+		expect(view.sub).toBe("Every fork runs its own renamed copy of upstream's code.");
+		expect(typeof view.render).toBe("function");
+		expect(typeof view.leave).toBe("function");
+	});
+
+	it("reads the recording from public/data, next to the page", () => {
+		expect(fileURLToPath(view.DATA_URL)).toBe(fileURLToPath(new URL("../public/data/polymorph-demo.json", import.meta.url)));
+	});
+
+	it("builds text only through h(), never by assigning HTML", () => {
+		for (const path of ["../public/js/views/polymorph.js", "../public/js/polymorph-replay.js"]) expect(read(path)).not.toMatch(/innerHTML|outerHTML|insertAdjacentHTML/);
 	});
 });

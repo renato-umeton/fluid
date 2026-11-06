@@ -6,6 +6,7 @@ import * as forkView from "./js/views/fork.js";
 import * as customize from "./js/views/customize.js";
 import * as contest from "./js/views/contest.js";
 import * as fleet from "./js/views/fleet.js";
+import * as polymorph from "./js/views/polymorph.js";
 import * as harvest from "./js/views/harvest.js";
 import * as about from "./js/views/about.js";
 import * as tab from "./js/views/tab.js";
@@ -13,7 +14,7 @@ import { applyUiPreferences, describePreferences } from "./js/ui-prefs.js";
 import { healthBadge } from "./js/health.js";
 import { explainStartFailure, mockDemoHref } from "./js/start-failure.js";
 
-const VIEWS = { workspace, fork: forkView, customize, contest, fleet, harvest, about, tab };
+const VIEWS = { workspace, fork: forkView, customize, contest, fleet, polymorph, harvest, about, tab };
 const STOCK_MIN_TAU = 0.85;
 const PERSONA_KEY = "fluid.persona";
 const HEALTH_POLL_MS = 3000;

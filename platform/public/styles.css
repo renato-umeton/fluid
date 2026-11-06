@@ -916,3 +916,22 @@ button.health-badge { cursor: pointer; }
 @media (prefers-reduced-motion: reduce) {
   .health-badge.h-yellow .health-dot, .soak-seg.run, .cell.s-yellow { animation: none; }
 }
+
+/* ---------- Polymorph (replay of a recorded run) ---------- */
+/* Tiles say their state in words; color only repeats it. The reduced-motion rule under Responsive stops the transitions. */
+.polymorph { display: grid; gap: 16px; }
+.polymorph-intro { display: grid; gap: 6px; max-width: 80ch; }
+.polymorph-fleet { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.polymorph-tile {
+  border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--panel-2); padding: 6px 10px;
+  display: grid; gap: 2px; font-size: var(--fs-xs); transition: background-color 0.3s, border-color 0.3s;
+}
+.polymorph-tile code { font-size: var(--fs-sm); color: var(--ink); overflow-wrap: anywhere; }
+.polymorph-fp { font-family: var(--mono); color: var(--ink-2); }
+.polymorph-note { min-height: 1.5em; font-weight: 600; }
+.polymorph-tile[data-state="compromised"] { border-color: var(--fail); background: var(--fail-bg); box-shadow: inset 3px 0 0 var(--fail); }
+.polymorph-tile[data-state="refused"] { border-color: var(--warn); background: var(--warn-bg); box-shadow: inset 3px 0 0 var(--warn); }
+.polymorph-tile[data-moved="yes"] .polymorph-fp { color: var(--ink); font-weight: 600; }
+table.polymorph-score th { white-space: normal; }
+table.polymorph-score th[scope="row"] { font-weight: 400; color: var(--ink); min-width: 220px; }
+table.polymorph-score td { white-space: nowrap; font-variant-numeric: tabular-nums; }
