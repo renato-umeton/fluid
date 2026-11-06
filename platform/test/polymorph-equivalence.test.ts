@@ -69,6 +69,28 @@ describe("cardDifferences", () => {
 		expect(cardDifferences([1], { 0: 1 })).toEqual([{ path: "", plain: [1], morphed: { 0: 1 } }]);
 	});
 
+	it("compares Dates, Maps, and other non-plain objects by the JSON the platform would receive", () => {
+		expect(cardDifferences({ at: new Date(0) }, { at: new Date(1) })).toEqual([{ path: "at", plain: new Date(0), morphed: new Date(1) }]);
+		expect(cardDifferences({ at: new Date(5) }, { at: new Date(5) })).toEqual([]);
+		expect(cardDifferences({ m: new Map([["a", 1]]) }, { m: new Map([["a", 2]]) })).toEqual([]);
+		expect(cardDifferences({ at: new Date(0) }, { at: "1970-01-01T00:00:00.000Z" })).toEqual([]);
+		class Labeled {
+			constructor(readonly label: string) {}
+			toJSON() {
+				return { label: this.label };
+			}
+		}
+		expect(cardDifferences({ x: new Labeled("a") }, { x: new Labeled("a") })).toEqual([]);
+		expect(cardDifferences({ x: new Labeled("a") }, { x: new Labeled("b") })).toHaveLength(1);
+	});
+
+	it("counts values that have no JSON form as different", () => {
+		class Big {
+			v = 1n;
+		}
+		expect(cardDifferences({ x: new Big() }, { x: new Big() })).toHaveLength(1);
+	});
+
 	it("stops at the limit, 20 by default", () => {
 		const many = (offset: number) => Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`k${i}`, i + offset]));
 		expect(cardDifferences(many(0), many(1))).toHaveLength(20);

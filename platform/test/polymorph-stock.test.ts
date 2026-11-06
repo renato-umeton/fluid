@@ -84,10 +84,15 @@ function run(manifest: unknown, ask: (request: unknown) => Promise<unknown>): Pr
 	return runner.runManifest({ app: { ask }, manifest, forkFiles: { "fluid.toml": files["fluid.toml"] }, env: {}, samples: 1 });
 }
 
+/** A card as the platform receives it: the generated entry module sends JSON.stringify(card). */
+async function askAsJson(app: App, request: unknown): Promise<unknown> {
+	return JSON.parse(JSON.stringify(await app.ask(request, env)));
+}
+
 /** Sends each request to the plain app and to its copy at once, records any difference, and answers with the copy's card. */
 function dualAsk(plain: App, copy: App, found: Found) {
 	return async (request: unknown) => {
-		const [plainCard, copyCard] = await Promise.all([plain.ask(request, env), copy.ask(request, env)]);
+		const [plainCard, copyCard] = await Promise.all([askAsJson(plain, request), askAsJson(copy, request)]);
 		const differences = cardDifferences(plainCard, copyCard);
 		if (differences.length > 0) found.push({ request, differences });
 		return copyCard;
@@ -96,10 +101,10 @@ function dualAsk(plain: App, copy: App, found: Found) {
 
 /** Runs a suite against the plain app, then through the dual ask; returns what differed and both results. */
 async function compareSuite(tier: (typeof TIERS)[number], plain: App, copy: App) {
-	const plainResult = await run(manifests[tier], (request) => plain.ask(request, env));
+	const plainResult = await run(manifests[tier], (request) => askAsJson(plain, request));
 	const found: Found = [];
 	const copyResult = await run(manifests[tier], dualAsk(plain, copy, found));
-	return { plainResult, found, resultDifferences: cardDifferences(plainResult, copyResult) };
+	return { plainResult, copyResult, found, resultDifferences: cardDifferences(plainResult, copyResult) };
 }
 
 /** Identifier names used across a module map's JS modules, the generated entry aside. */
@@ -122,9 +127,10 @@ describe("polymorphic copies of stock", () => {
 		"answer every %s probe exactly like plain stock, under five seeds",
 		async (tier) => {
 			for (const [index, copy] of copies.entries()) {
-				const { plainResult, found, resultDifferences } = await compareSuite(tier, plainApp, copy.app);
+				const { plainResult, copyResult, found, resultDifferences } = await compareSuite(tier, plainApp, copy.app);
 				expect(plainResult.passed).toBe(true);
 				expect(plainResult.total).toBe(manifests[tier].probes.length);
+				expect(copyResult.passed).toBe(true);
 				expect({ epoch: EPOCHS[index], found }).toEqual({ epoch: EPOCHS[index], found: [] });
 				expect(resultDifferences).toEqual([]);
 			}
@@ -178,8 +184,9 @@ describe("a polymorphic copy of a fork that reads a listed name by string key", 
 	it.each(TIERS)(
 		"answers every %s probe exactly like the plain fork",
 		async (tier) => {
-			const { plainResult, found, resultDifferences } = await compareSuite(tier, keyedApp, keyedCopy.app);
+			const { plainResult, copyResult, found, resultDifferences } = await compareSuite(tier, keyedApp, keyedCopy.app);
 			expect(plainResult.passed).toBe(true);
+			expect(copyResult.passed).toBe(true);
 			expect(found).toEqual([]);
 			expect(resultDifferences).toEqual([]);
 		},
