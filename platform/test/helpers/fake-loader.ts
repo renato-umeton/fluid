@@ -192,15 +192,17 @@ type Callable = (...args: unknown[]) => unknown;
 /**
  * One call across the boundary. The arguments are copied when the call is
  * made (a value that cannot cross fails it there), then the result is
- * copied back, or the error: a thrown string arrives as an Error, and an
- * error carries the caller's stack from `site`, never the thrower's.
+ * copied back, or the error: a thrown string, number, null, or undefined
+ * arrives as an Error of its text, and an error carries the caller's stack
+ * from `site`, never the thrower's.
  */
 async function crossCall(fn: Callable, args: unknown[], site: Error): Promise<unknown> {
 	const sent = overRpc(args) as unknown[];
 	try {
 		return overRpc(await fn(...sent));
 	} catch (thrown) {
-		const crossed = overRpc(typeof thrown === "string" ? new Error(thrown) : thrown);
+		const wrapped = typeof thrown === "string" || typeof thrown === "number" || thrown === null || thrown === undefined;
+		const crossed = overRpc(wrapped ? new Error(String(thrown)) : thrown);
 		if (crossed instanceof Error) setStack(crossed, site.stack!.split("\n").slice(1).join("\n"));
 		throw crossed;
 	}

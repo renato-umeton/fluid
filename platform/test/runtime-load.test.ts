@@ -254,13 +254,16 @@ export class Probe extends WorkerEntrypoint {
 			expect(failure.stack).not.toContain(".tmp-loader-");
 		});
 
-		it("keeps a built-in error type, and delivers a thrown string as an Error", async () => {
+		it("keeps a built-in error type, and delivers a thrown string, number, null, or undefined as an Error", async () => {
 			const probe = probeOf("probe:rpc");
 			await expect(probe.throwIt!(new RangeError("out of range"))).rejects.toBeInstanceOf(RangeError);
 			await expect(probe.throwIt!(new RangeError("out of range"))).rejects.toThrow("out of range");
-			const failure = await probe.throwIt!("plain words").catch((error: unknown) => error);
-			expect(failure).toBeInstanceOf(Error);
-			expect((failure as Error).message).toBe("plain words");
+			const thrown: [unknown, string][] = [["plain words", "plain words"], [42, "42"], [null, "null"], [undefined, "undefined"]];
+			for (const [value, message] of thrown) {
+				const failure = await probe.throwIt!(value).catch((error: unknown) => error);
+				expect(failure).toBeInstanceOf(Error);
+				expect((failure as Error).message).toBe(message);
+			}
 		});
 	});
 
