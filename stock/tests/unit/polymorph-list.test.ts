@@ -1,8 +1,8 @@
 // Upstream's own check of polymorph.json, the internal names that each running
 // copy of a fork renames with a secret suffix. Renaming touches identifiers
 // only, so a listed name must reach runtime code only as an identifier: never
-// as text (strings, data, the probe suites) and never as part of a contract
-// that something outside the fork's code reads by name.
+// as text (strings, regular expressions, data, the probe suites) and never as
+// part of a contract that something outside the fork's code reads by name.
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import ts from "typescript";
@@ -38,45 +38,6 @@ const PLATFORM_IMPORTS = [
   "STOCK_TAG",
 ];
 
-const STRING_TOKENS = new Set([
-  ts.SyntaxKind.StringLiteral,
-  ts.SyntaxKind.NoSubstitutionTemplateLiteral,
-  ts.SyntaxKind.TemplateHead,
-  ts.SyntaxKind.TemplateMiddle,
-  ts.SyntaxKind.TemplateTail,
-]);
-
-/** Tokens that can end a value: a "/" after one of them divides instead of starting a regular expression. */
-const VALUE_END = new Set([
-  ts.SyntaxKind.Identifier,
-  ts.SyntaxKind.PrivateIdentifier,
-  ts.SyntaxKind.NumericLiteral,
-  ts.SyntaxKind.BigIntLiteral,
-  ts.SyntaxKind.StringLiteral,
-  ts.SyntaxKind.NoSubstitutionTemplateLiteral,
-  ts.SyntaxKind.TemplateTail,
-  ts.SyntaxKind.RegularExpressionLiteral,
-  ts.SyntaxKind.CloseParenToken,
-  ts.SyntaxKind.CloseBracketToken,
-  ts.SyntaxKind.CloseBraceToken,
-  ts.SyntaxKind.PlusPlusToken,
-  ts.SyntaxKind.MinusMinusToken,
-  ts.SyntaxKind.ThisKeyword,
-  ts.SyntaxKind.SuperKeyword,
-  ts.SyntaxKind.NullKeyword,
-  ts.SyntaxKind.TrueKeyword,
-  ts.SyntaxKind.FalseKeyword,
-]);
-
-function isKeyword(kind: ts.SyntaxKind): boolean {
-  return kind >= ts.SyntaxKind.FirstKeyword && kind <= ts.SyntaxKind.LastKeyword;
-}
-
-/** Keywords that are not reserved words (as, from, of, type, let, static, ...): in code they are usually names. */
-function isNameLikeKeyword(kind: ts.SyntaxKind): boolean {
-  return kind > ts.SyntaxKind.LastReservedWord && kind <= ts.SyntaxKind.LastKeyword;
-}
-
 /** True when the TypeScript scanner reads the whole text as one identifier, so it is neither a keyword nor anything else. */
 function isPlainIdentifier(text: string): boolean {
   const scanner = ts.createScanner(ts.ScriptTarget.Latest, true, ts.LanguageVariant.Standard, text);
@@ -84,32 +45,32 @@ function isPlainIdentifier(text: string): boolean {
 }
 
 /**
- * Identifiers and decoded string contents (string literals and template text)
- * of a TypeScript source, read with the TypeScript scanner. On its own the
- * scanner cannot tell a regular expression from a division, or a template
- * continuation from a closing brace, so this tracks those two contexts the way
- * the parser would.
+ * Identifiers, decoded string contents (string literals, string module names,
+ * and template text), and regular expression literals of a TypeScript source,
+ * found by walking the TypeScript parser's syntax tree, which tells a regular
+ * expression from a division and a template from a block the way the
+ * language does.
  */
-function scanSource(text: string): { identifiers: Set<string>; strings: string[] } {
-  const scanner = ts.createScanner(ts.ScriptTarget.Latest, true, ts.LanguageVariant.Standard, text);
+function readSource(text: string): { identifiers: Set<string>; strings: string[]; regexes: string[] } {
   const identifiers = new Set<string>();
   const strings: string[] = [];
-  const openBraces: ("block" | "substitution")[] = [];
-  let afterValue = false;
-  let afterDot = false;
-  for (let kind = scanner.scan(); kind !== ts.SyntaxKind.EndOfFileToken; kind = scanner.scan()) {
-    if ((kind === ts.SyntaxKind.SlashToken || kind === ts.SyntaxKind.SlashEqualsToken) && !afterValue) kind = scanner.reScanSlashToken();
-    if (kind === ts.SyntaxKind.CloseBraceToken && openBraces.pop() === "substitution") kind = scanner.reScanTemplateToken(false);
-    if (kind === ts.SyntaxKind.OpenBraceToken) openBraces.push("block");
-    if (kind === ts.SyntaxKind.TemplateHead || kind === ts.SyntaxKind.TemplateMiddle) openBraces.push("substitution");
-    if (kind === ts.SyntaxKind.Identifier) identifiers.add(scanner.getTokenValue());
-    if (STRING_TOKENS.has(kind)) strings.push(scanner.getTokenValue());
-    // A keyword after "." is a property name, a keyword that is not a reserved
-    // word is usually a name, and a "!" after a value is a non-null assertion.
-    if (kind !== ts.SyntaxKind.ExclamationToken) afterValue = VALUE_END.has(kind) || isNameLikeKeyword(kind) || (afterDot && isKeyword(kind));
-    afterDot = kind === ts.SyntaxKind.DotToken || kind === ts.SyntaxKind.QuestionDotToken;
-  }
-  return { identifiers, strings };
+  const regexes: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isIdentifier(node)) identifiers.add(node.text);
+    else if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) || ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node)) strings.push(node.text);
+    else if (ts.isRegularExpressionLiteral(node)) regexes.push(regexText(node.text));
+    ts.forEachChild(node, visit);
+  };
+  visit(ts.createSourceFile("source.ts", text, ts.ScriptTarget.Latest, true));
+  return { identifiers, strings, regexes };
+}
+
+/** A regex literal as the platform reads it: character escapes decoded, any other escape (\d, \b, ...) read as a space. */
+function regexText(raw: string): string {
+  return raw.replace(/\\(?:u\{([0-9A-Fa-f]+)\}|u([0-9A-Fa-f]{4})|x([0-9A-Fa-f]{2})|[\s\S])/g, (_match, braced?: string, four?: string, two?: string) => {
+    const hex = braced ?? four ?? two;
+    return hex === undefined ? " " : String.fromCodePoint(parseInt(hex, 16));
+  });
 }
 
 /** Identifier-like words of a text: the pieces a name could be read back from at run time. */
@@ -194,21 +155,34 @@ function builtInNames(): Set<string> {
   return out;
 }
 
-describe("source scanner", () => {
+describe("source reader", () => {
   it("reads identifiers, decoded strings, and template text at any nesting", () => {
-    const { identifiers, strings } = scanSource("const r\\u0061w = { k: 'a\\u0062c' };\nconst t = `x${{ n: `in${raw.k}ner` }.n}y`;");
+    const { identifiers, strings } = readSource("const r\\u0061w = { k: 'a\\u0062c' };\nconst t = `x${{ n: `in${raw.k}ner` }.n}y`;");
     expect([...identifiers]).toEqual(["raw", "k", "t", "n"]);
     expect(strings).toEqual(["abc", "x", "in", "ner", "y"]);
   });
 
   it("tells regular expressions from divisions, including after a non-null assertion", () => {
-    const { identifiers, strings } = scanSource("const a = b! / c; const d = e.default / 2; const f = /[\"'`]${}/g.test(\"s\"); const g = !/x/.test(h);");
-    expect([...identifiers]).toEqual(["a", "b", "c", "d", "e", "f", "test", "g", "h"]);
+    const { identifiers, strings, regexes } = readSource("const a = b! / c; const d = e.default / 2; const f = /[\"'`]${}/g.test(\"s\"); const g = !/x/.test(h);");
+    expect([...identifiers]).toEqual(["a", "b", "c", "d", "e", "default", "f", "test", "g", "h"]);
     expect(strings).toEqual(["s"]);
+    expect(regexes).toEqual(["/[\"'`]${}/g", "/x/"]);
+  });
+
+  it("reads a regular expression after a parenthesized condition, quote and all, without losing the string after it", () => {
+    expect(readSource("if (a) /'/.test(b); const s = 'evidence';")).toEqual({ identifiers: new Set(["a", "test", "b", "s"]), strings: ["evidence"], regexes: ["/'/"] });
+  });
+
+  it("reads a regular expression's escapes as word breaks, so a named group stays a whole word", () => {
+    expect(readSource("const m = /(?<weightKg>\\d+) kg/.exec(t);").regexes).toEqual(["/(?<weightKg> +) kg/"]);
+  });
+
+  it("reads string module names as strings", () => {
+    expect(readSource('const a = 1; export { a as "some name" };').strings).toEqual(["some name"]);
   });
 
   it("ignores comments", () => {
-    expect(scanSource("// \"hidden\"\n/* `also` */ const x = 1;")).toEqual({ identifiers: new Set(["x"]), strings: [] });
+    expect(readSource("// \"hidden\"\n/* `also` */ const x = 1;")).toEqual({ identifiers: new Set(["x"]), strings: [], regexes: [] });
   });
 
   it("reads reserved and contextual keywords as keywords, not identifiers", () => {
@@ -243,7 +217,7 @@ describe("polymorph.json", () => {
 });
 
 describe("listed names are internal identifiers of the runtime", () => {
-  const scanned = sourceFiles.map((file) => ({ file, ...scanSource(readStockFile(file)) }));
+  const scanned = sourceFiles.map((file) => ({ file, ...readSource(readStockFile(file)) }));
 
   it("finds the runtime sources", () => {
     expect(sourceFiles).toContain("app/index.ts");
@@ -255,9 +229,9 @@ describe("listed names are internal identifiers of the runtime", () => {
     expect(names.filter((name) => !identifiers.has(name))).toEqual([]);
   });
 
-  it("never has a listed name in a string or template text of runtime code", () => {
-    const mentions = scanned.flatMap(({ file, strings }) =>
-      strings.flatMap((text) => wordsIn(text).filter((word) => names.includes(word)).map((name) => `${name}: ${file}: ${JSON.stringify(text)}`)),
+  it("never has a listed name in a string, template text, or regular expression of runtime code", () => {
+    const mentions = scanned.flatMap(({ file, strings, regexes }) =>
+      [...strings, ...regexes].flatMap((text) => wordsIn(text).filter((word) => names.includes(word)).map((name) => `${name}: ${file}: ${JSON.stringify(text)}`)),
     );
     expect(mentions).toEqual([]);
   });
