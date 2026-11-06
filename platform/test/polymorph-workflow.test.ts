@@ -5,12 +5,13 @@
 // room for a loaded machine.
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import config from "../cloudflare.config.ts";
+import worker from "../src/index.ts";
 import * as entry from "../src/index.ts";
 import { runsStub } from "../src/stubs.ts";
 import { GATE_STEP, type RotateParams } from "../src/workflows/common.ts";
 import { RotateWorkflow, rotationId, startRotation } from "../src/workflows/rotate.ts";
 import { FAN_OUT } from "../src/workflows/upgrade.ts";
-import { apiEnv } from "./helpers/api-env.ts";
+import { apiEnv, post } from "./helpers/api-env.ts";
 import { POLYMORPH_TEST_SECRET, PUBLISHED, REFLECTIVE, TAG, polymorphPlatform, type PolymorphPlatform } from "./helpers/polymorph-platform.ts";
 import { fakeSteps, fakeWorkflows } from "./helpers/workflows.ts";
 
@@ -174,6 +175,46 @@ describe("startRotation", () => {
 		expect(await startRotation(p.t.env, failing as never, { repo: "user-1", reason: "install", key: "install" })).toBeNull();
 		expect(await startRotation(p.t.env, undefined, { repo: "user-1", reason: "install", key: "install" })).toBeNull();
 		expect(error.mock.calls.map(([line]) => String(line))).toEqual([expect.stringMatching(/rotation rot-[0-9a-f]{8}-install of user-1 \(install\) did not start: workflows unavailable$/), expect.stringMatching(/did not start: .*RotateWorkflow/)]);
+	});
+});
+
+describe("POST /api/admin/fleet/rotate", () => {
+	const admin = { "x-fluid-admin": "admin-token" };
+	const rotate = async (headers: Record<string, string>, body: unknown) => {
+		const workflows = fakeWorkflows(NO_MODEL);
+		const response = await worker.fetch(post("/api/admin/fleet/rotate", headers, body), p.t.env, workflows.ctx);
+		return { response, workflows };
+	};
+
+	it("starts a rotation of one fork and answers with its run id, which already has a run", async () => {
+		const { response, workflows } = await rotate(admin, { repo: "user-1" });
+		expect(response.status).toBe(202);
+		const body = (await response.json()) as { runId: string };
+		expect(body).toEqual({ runId: expect.stringMatching(/^run_rotate_[0-9a-f]{12}$/), repo: "user-1" });
+		expect(workflows.of("RotateWorkflow")).toEqual([{ workflow: "RotateWorkflow", id: body.runId, params: { runId: body.runId, repo: "user-1", reason: "admin" } }]);
+		expect(await runsStub(p.t.env, body.runId).get()).toMatchObject({ id: body.runId, kind: "rotate", repo: "user-1", status: "running", reason: "admin" });
+	});
+
+	it("starts one rotation for the whole fleet when no repo is named", async () => {
+		const { response, workflows } = await rotate(admin, {});
+		expect(response.status).toBe(202);
+		const { runId } = (await response.json()) as { runId: string };
+		expect(workflows.of("RotateWorkflow")).toEqual([{ workflow: "RotateWorkflow", id: runId, params: { runId, reason: "admin" } }]);
+		expect(await runsStub(p.t.env, runId).get()).toMatchObject({ kind: "rotate", repo: null, reason: "admin" });
+	});
+
+	it("refuses without the admin token, and refuses a fork that is not in the fleet or a name that is not a repo", async () => {
+		const cases: [Record<string, string>, unknown, number][] = [
+			[{}, { repo: "user-1" }, 403],
+			[{ "x-fluid-admin": "not-the-token" }, {}, 403],
+			[admin, { repo: "user-unknown" }, 404],
+			[admin, { repo: "../stock" }, 400],
+			[admin, { repo: 7 }, 400],
+		];
+		for (const [headers, body, status] of cases) {
+			const { response, workflows } = await rotate(headers, body);
+			expect([response.status, workflows.created]).toEqual([status, []]);
+		}
 	});
 });
 

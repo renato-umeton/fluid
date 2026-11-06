@@ -491,6 +491,19 @@ async function baselineFork(rc: RouteContext, repo: string, record: boolean): Pr
 	}
 }
 
+// Moves one fork, or with no repo every fork in the fleet, to its next renamed copy (workflows/rotate.ts).
+// The run exists before this answers, so the caller can poll it at once.
+route("POST", "/api/admin/fleet/rotate", async (rc) => {
+	requireAdmin(rc);
+	const body = await readJson(rc.request);
+	const repo = body.repo === undefined || body.repo === null ? null : repoParam(requireString(body, "repo", 100));
+	if (repo !== null && !(await fleetStub(rc.env).get(repo))) throw new HttpError(404, "fork not found");
+	const runId = newRunId("rotate");
+	await runsStub(rc.env, runId).create({ id: runId, kind: "rotate", repo, status: "running", fields: { reason: "admin" } });
+	await appExports(rc.ctx).RotateWorkflow.create({ id: runId, params: { runId, reason: "admin", ...(repo !== null ? { repo } : {}) } });
+	return json({ runId, ...(repo !== null ? { repo } : {}) }, 202);
+});
+
 // Starts a yellow soak on a fork's current main (re-verifies a fork; with no earlier green commit a failure cannot roll back).
 route("POST", "/api/admin/yellow/:repo", async (rc, { repo }) => {
 	requireAdmin(rc);
