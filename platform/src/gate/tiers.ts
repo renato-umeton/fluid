@@ -9,7 +9,7 @@ import type { SkippedName } from "../polymorph/list.ts";
 
 export type TierName = "invariant" | "functional" | "user";
 export const TIER_NAMES: readonly TierName[] = ["invariant", "functional", "user"];
-export const USER_MANIFEST_PATH = "tests/user/manifest.json";
+export { USER_MANIFEST_PATH } from "../lib/names.ts";
 
 export interface RunnerFailure {
 	sample: number;

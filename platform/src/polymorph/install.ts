@@ -3,13 +3,11 @@
 // way the gate reads the probes, so a fork cannot shrink it. The seed comes
 // from the platform secret. Any reason a copy cannot be made is thrown, and
 // the loader then runs the plain fork.
-import { USER_MANIFEST_PATH } from "../gate/tiers.ts";
-import { STOCK_REPO } from "../lib/names.ts";
+import { STOCK_REPO, USER_E2E_PATH, USER_MANIFEST_PATH } from "../lib/names.ts";
 import type { ModuleMap } from "../runtime/modules.ts";
 import { openRepo, readTextFile } from "../runtime/repo-files.ts";
 import { pinnedTagOf } from "../stock/releases.ts";
 import { resolveStockTag } from "../stock/suite.ts";
-import { USER_E2E_PATH } from "../yellow/tiers.ts";
 import { POLYMORPH_LIST_PATH, parsePolymorphList, type ContractTexts, type SkippedName } from "./list.ts";
 import { morphFork, unmorphText } from "./morph.ts";
 import { deriveSeed, fingerprint, namesHash, variantNames } from "./names.ts";
