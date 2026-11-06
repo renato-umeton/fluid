@@ -7,7 +7,7 @@
 // polymorph/) adds ":m<epoch>.<fingerprint>.<names hash>" to both, which
 // names exactly the code it runs.
 import synthetic from "../generated/synthetic.json";
-import { buildCopy, clearCopyCaches, planCopy, readContract } from "../polymorph/install.ts";
+import { buildCopy, clearCopyCaches, planCopy, PolymorphOffError, PolymorphTransientError, readContract } from "../polymorph/install.ts";
 import type { SkippedName } from "../polymorph/list.ts";
 import { unmorphText } from "../polymorph/morph.ts";
 import { PolymorphUnavailableError } from "../polymorph/tokens.ts";
@@ -125,10 +125,30 @@ export interface LoadOptions {
 	 * when the ref resolves to that commit; with fingerprint, only when the
 	 * seed makes that copy (a changed secret does not); with namesHash, only
 	 * when the copy renames exactly the names the gate verified. Otherwise the
-	 * plain fork loads (morph: null) and one log line per reason (per fork
-	 * commit and epoch) says why: this never fails a load.
+	 * plain fork loads (morph: null, plain says why) and one log line per
+	 * reason (per fork commit and epoch) says why: this never fails a load.
 	 */
 	morph?: { epoch: number; onlyAt?: string; fingerprint?: string; namesHash?: string };
+}
+
+/**
+ * Why a fork loaded plain rather than as a renamed copy:
+ * - "none": no copy was asked for, or the platform makes none for this fork
+ *   (no secret, or its pinned release publishes no list);
+ * - "mismatch": the copy asked for is not the one this load makes (another
+ *   commit, fingerprint, or names hash), so it is not the copy a gate verified;
+ * - "transient": a read the copy needs failed (Artifacts), and the same load
+ *   may make it a moment later;
+ * - "unavailable": no copy can be made of this code (the renamer cannot read
+ *   it, a candidate's extra files), or the fork's pin or upstream's list is
+ *   broken.
+ */
+export type PlainKind = "none" | "mismatch" | "transient" | "unavailable";
+
+export interface PlainLoad {
+	kind: PlainKind;
+	/** What the log line says, with any renamed name mapped back. */
+	reason: string;
 }
 
 /** The renamed copy a fork loaded as. */
@@ -153,6 +173,8 @@ export interface LoadedFork {
 	fork: ForkEntrypoint;
 	/** The renamed copy that loaded, or null for the plain fork. */
 	morph: LoadedCopy | null;
+	/** Why the plain fork loaded, or null when the copy did. */
+	plain: PlainLoad | null;
 }
 
 interface CachedBuild {
@@ -213,6 +235,22 @@ async function buildFor(env: Env, repoName: string, sha: string, options: LoadOp
  */
 const copyHashes = new Map<string, string>();
 
+/** The copy asked for is not the one this load makes, so it is not the copy a gate verified. */
+class CopyMismatchError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "CopyMismatchError";
+	}
+}
+
+/** Which kind of reason (see PlainKind) an error that stopped a copy gives. Any other error came from the renamer, the pin, or the list: unavailable. */
+function plainKind(error: unknown): PlainKind {
+	if (error instanceof PolymorphTransientError) return "transient";
+	if (error instanceof CopyMismatchError) return "mismatch";
+	if (error instanceof PolymorphOffError) return "none";
+	return "unavailable";
+}
+
 /**
  * The renamed copy of a plain build for one epoch, built once (a variant
  * shares it, so the gate checks the code production runs). Throws, saying
@@ -221,11 +259,11 @@ const copyHashes = new Map<string, string>();
 async function copyFor(env: Env, repoName: string, sha: string, plain: CachedBuild, morph: NonNullable<LoadOptions["morph"]>, options: LoadOptions): Promise<CachedBuild & { copy: LoadedCopy }> {
 	// A candidate's extra files are not the commit the seed names, and its check never needs a copy.
 	if (options.extraFiles) throw new PolymorphUnavailableError("a build with extra files (a candidate under validation) is never renamed");
-	if (morph.onlyAt !== undefined && morph.onlyAt !== sha) throw new PolymorphUnavailableError(`the copy is only for commit ${morph.onlyAt.slice(0, 7)}`);
+	if (morph.onlyAt !== undefined && morph.onlyAt !== sha) throw new CopyMismatchError(`the copy is only for commit ${morph.onlyAt.slice(0, 7)}`);
 	const plan = await planCopy(env, { repo: repoName, sha, epoch: morph.epoch, fluidToml: plain.fluidToml });
 	// Another secret seeds another copy, one the gate never saw: refuse it before building anything.
 	if (morph.fingerprint !== undefined && morph.fingerprint !== plan.fingerprint) {
-		throw new PolymorphUnavailableError(`this copy's fingerprint ${plan.fingerprint} is not the verified copy's (${morph.fingerprint})`);
+		throw new CopyMismatchError(`this copy's fingerprint ${plan.fingerprint} is not the verified copy's (${morph.fingerprint})`);
 	}
 	const seeded = `${repoName}:${sha}:m${plan.epoch}.${plan.fingerprint}`;
 	// A hash this isolate learned by building comes first; the caller's expected hash may name a copy built from it.
@@ -241,7 +279,7 @@ async function copyFor(env: Env, repoName: string, sha: string, plain: CachedBui
 		copyHashes.set(seeded, built.namesHash);
 	}
 	if (morph.namesHash !== undefined && morph.namesHash !== build.copy.namesHash) {
-		throw new PolymorphUnavailableError(`this copy renames other names (${build.copy.namesHash}) than the verified copy (${morph.namesHash})`);
+		throw new CopyMismatchError(`this copy renames other names (${build.copy.namesHash}) than the verified copy (${morph.namesHash})`);
 	}
 	return build;
 }
@@ -269,14 +307,17 @@ export async function loadForkRuntime(deps: RuntimeDeps, repoName: string, ref =
 	}
 	let build = await buildFor(deps.env, repoName, sha, options);
 	let copy: LoadedCopy | null = null;
+	let plain: PlainLoad | null = { kind: "none", reason: "no copy was asked for" };
 	if (options.morph) {
 		try {
 			const copied = await copyFor(deps.env, repoName, sha, build, options.morph, options);
 			build = copied;
 			copy = copied.copy;
+			plain = null;
 		} catch (error) {
 			// Whatever stops a copy (no secret, no list, code the renamer cannot read, Artifacts failing), the plain fork still serves.
-			reportPlain(repoName, sha, options.morph.epoch, error instanceof Error ? error.message : String(error));
+			plain = { kind: plainKind(error), reason: error instanceof Error ? error.message : String(error) };
+			reportPlain(repoName, sha, options.morph.epoch, plain.reason);
 		}
 	}
 	const id = isolateId(repoName, sha, { variant: options.variant, useModel: options.useModel === true, ...(copy ? { copy } : {}) });
@@ -290,7 +331,7 @@ export async function loadForkRuntime(deps: RuntimeDeps, repoName: string, ref =
 		globalOutbound: null,
 	}));
 	const fork = worker.getEntrypoint("Fork") as unknown as ForkEntrypoint;
-	return { repo: repoName, ref: short, sha, isolateId: id, fluidToml: build.fluidToml, fork, morph: copy };
+	return { repo: repoName, ref: short, sha, isolateId: id, fluidToml: build.fluidToml, fork, morph: copy, plain };
 }
 
 export interface AskForkInput {

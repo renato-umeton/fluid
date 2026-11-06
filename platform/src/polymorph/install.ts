@@ -2,7 +2,11 @@
 // list of names comes from the stock repo at the fork's pinned tag, the same
 // way the gate reads the probes, so a fork cannot shrink it. The seed comes
 // from the platform secret. Any reason a copy cannot be made is thrown, and
-// the loader then runs the plain fork.
+// the loader then runs the plain fork. The error says which kind of reason it
+// is: PolymorphOffError (no copy is made for this fork at all),
+// PolymorphTransientError (a read failed and may work next time), or
+// anything else (no copy can be made of this code or this list).
+import { StockTagError } from "../gate/pins.ts";
 import { STOCK_REPO, USER_E2E_PATH, USER_MANIFEST_PATH } from "../lib/names.ts";
 import type { ModuleMap } from "../runtime/modules.ts";
 import { openRepo, readTextFile } from "../runtime/repo-files.ts";
@@ -13,6 +17,31 @@ import { morphFork, unmorphText } from "./morph.ts";
 import { deriveSeed, fingerprint, namesHash, variantNames } from "./names.ts";
 import { PolymorphUnavailableError } from "./tokens.ts";
 
+/**
+ * The platform makes no copy of this fork: it has no secret, or the release
+ * the fork pins names no list (fluid.toml names no tag, or that release
+ * publishes none). The fork runs plain, as every fork did before copies.
+ */
+export class PolymorphOffError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "PolymorphOffError";
+	}
+}
+
+/**
+ * A read that a copy needs failed: Artifacts erred while the platform read
+ * upstream's list or the fork's contract. Nothing is known to be wrong with
+ * the fork or the list, and the same load may make the copy a moment later.
+ * The message is the failed read's own.
+ */
+export class PolymorphTransientError extends Error {
+	constructor(message: string, options?: { cause?: unknown }) {
+		super(message, options);
+		this.name = "PolymorphTransientError";
+	}
+}
+
 /** Each stock commit's list, or null when it publishes none. A release tag never moves, so neither does its list. */
 const lists = new Map<string, readonly string[] | null>();
 const LIST_CACHE_LIMIT = 20;
@@ -21,11 +50,12 @@ const LIST_CACHE_LIMIT = 20;
  * Upstream's polymorph list at a stock release tag: the names a copy of a
  * fork pinned to that tag may rename. Read from stock at the tag's commit,
  * cached by commit, and null when that release publishes no list. Throws
- * StockTagError for a tag that is not a published release, and an Error
- * naming the release for a list that does not parse.
+ * StockTagError for a tag that is not a published release,
+ * PolymorphUnavailableError naming the release for a list that does not
+ * parse, and PolymorphTransientError when reading stock failed.
  */
 export async function loadPolymorphList(env: Env, tag: string): Promise<string[] | null> {
-	const sha = await resolveStockTag(env, tag);
+	const sha = await transient(() => resolveStockTag(env, tag), (error) => error instanceof StockTagError);
 	let list = lists.get(sha);
 	if (list === undefined) {
 		list = await readList(env, sha, tag);
@@ -36,13 +66,28 @@ export async function loadPolymorphList(env: Env, tag: string): Promise<string[]
 }
 
 async function readList(env: Env, sha: string, tag: string): Promise<readonly string[] | null> {
-	using repo = await openRepo(env.ARTIFACTS, STOCK_REPO);
-	const text = await readTextFile(repo, sha, POLYMORPH_LIST_PATH);
+	const text = await transient(async () => {
+		using repo = await openRepo(env.ARTIFACTS, STOCK_REPO);
+		return readTextFile(repo, sha, POLYMORPH_LIST_PATH);
+	});
 	if (text === null) return null;
 	try {
 		return parsePolymorphList(text);
 	} catch (error) {
-		throw new Error(`stock ${tag}: ${messageOf(error)}`);
+		throw new PolymorphUnavailableError(`stock ${tag}: ${messageOf(error)}`);
+	}
+}
+
+/**
+ * Runs a read, turning its failure into PolymorphTransientError, except a
+ * failure `keep` says is the answer itself (a tag that is not a release).
+ */
+async function transient<T>(read: () => Promise<T>, keep: (error: unknown) => boolean = () => false): Promise<T> {
+	try {
+		return await read();
+	} catch (error) {
+		if (keep(error)) throw error;
+		throw new PolymorphTransientError(messageOf(error), { cause: error });
 	}
 }
 
@@ -88,20 +133,21 @@ const PLAN_CACHE_LIMIT = 500;
 
 /**
  * Plans the copy of one fork commit for one epoch, once per secret. Throws,
- * saying why, when there is no secret, fluid.toml pins no stock tag, or the
- * pinned release publishes no list or a broken one.
+ * saying why: PolymorphOffError when there is no secret, fluid.toml pins no
+ * stock tag, or the pinned release publishes no list; what loadPolymorphList
+ * throws for a pin or list that is broken or could not be read.
  */
 export async function planCopy(env: Env, input: { repo: string; sha: string; epoch: number; fluidToml: string | undefined }): Promise<CopyPlan> {
 	const secret = polymorphSecret(env);
-	if (secret === null) throw new PolymorphUnavailableError("POLYMORPH_SECRET is not set");
+	if (secret === null) throw new PolymorphOffError("POLYMORPH_SECRET is not set");
 	const key = `${input.repo}:${input.sha}:${input.epoch}`;
 	const cached = plans.get(key);
 	// Another secret seeds another copy: a plan made with the old one must never stand in for it.
 	if (cached !== undefined && cached.secret === secret) return cached.plan;
 	const tag = pinnedTagOf(input.fluidToml);
-	if (tag === null) throw new PolymorphUnavailableError("fluid.toml names no stock_tag");
+	if (tag === null) throw new PolymorphOffError("fluid.toml names no stock_tag");
 	const list = await loadPolymorphList(env, tag);
-	if (list === null) throw new PolymorphUnavailableError(`stock ${tag} publishes no ${POLYMORPH_LIST_PATH}`);
+	if (list === null) throw new PolymorphOffError(`stock ${tag} publishes no ${POLYMORPH_LIST_PATH}`);
 	const seed = await deriveSeed(secret, input.repo, input.sha, input.epoch);
 	const plan: CopyPlan = { epoch: input.epoch, seed, fingerprint: await fingerprint(seed), list };
 	if (plans.size >= PLAN_CACHE_LIMIT) plans.delete(plans.keys().next().value!);
@@ -121,11 +167,14 @@ const CONTRACT_FILES = [USER_MANIFEST_PATH, USER_E2E_PATH] as const;
 /**
  * The fork's contract texts at a commit, by path: its tier 3 tests and its
  * end-to-end scenarios when it has them, and its fluid.toml. A copy skips the
- * listed names these use, since the fork's code reads them as data.
+ * listed names these use, since the fork's code reads them as data. Throws
+ * PolymorphTransientError when a read fails.
  */
 export async function readContract(env: Env, repo: string, sha: string, fluidToml: string | undefined): Promise<ContractTexts> {
-	using handle = await openRepo(env.ARTIFACTS, repo);
-	const texts = await Promise.all(CONTRACT_FILES.map((path) => readTextFile(handle, sha, path)));
+	const texts = await transient(async () => {
+		using handle = await openRepo(env.ARTIFACTS, repo);
+		return Promise.all(CONTRACT_FILES.map((path) => readTextFile(handle, sha, path)));
+	});
 	const contract: Record<string, string> = {};
 	CONTRACT_FILES.forEach((path, i) => {
 		const text = texts[i];

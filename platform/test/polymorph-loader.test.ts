@@ -14,7 +14,7 @@ import { deriveSeed, fingerprint, namesHash } from "../src/polymorph/names.ts";
 import { SCAN_LIMITS } from "../src/polymorph/tokens.ts";
 import { scanRequest } from "../src/polymorph/tripwire.ts";
 import * as loaderModule from "../src/runtime/loader.ts";
-import { askLoaded, clearRuntimeCache, ForkRuntimeError, isolateId, loadForkRuntime, type LoadedFork, type RuntimeDeps } from "../src/runtime/loader.ts";
+import { askLoaded, clearRuntimeCache, ForkRuntimeError, isolateId, loadForkRuntime, type LoadedFork, type PlainKind, type RuntimeDeps } from "../src/runtime/loader.ts";
 import { releaseMetadata, releaseMetadataPath } from "../src/stock/releases.ts";
 import { apiEnv } from "./helpers/api-env.ts";
 import { fakeLoader } from "./helpers/fake-loader.ts";
@@ -466,6 +466,79 @@ describe("clearRuntimeCache", () => {
 			expect(treeReads).toHaveBeenCalled();
 			await loadForkRuntime(deps, "user-1", "main", { morph: stale });
 			expect(warn).toHaveBeenCalledTimes(2);
+		},
+		SLOW_MS,
+	);
+});
+
+describe("LoadedFork.plain says why a fork loaded plain", () => {
+	const withoutSecret = (): RuntimeDeps => ({ ...deps, env: { ...deps.env, POLYMORPH_SECRET: undefined } as unknown as Env });
+
+	it("is null for a copy, and says so when no copy was asked for", async () => {
+		expect((await loadForkRuntime(deps, "user-1", "main", { morph: { epoch: 1 } })).plain).toBeNull();
+		expect((await loadForkRuntime(deps, "user-1", "main")).plain).toEqual({ kind: "none", reason: "no copy was asked for" });
+	});
+
+	const cases: [PlainKind, string, () => Promise<LoadedFork>, RegExp][] = [
+		["none", "the platform has no secret", () => loadForkRuntime(withoutSecret(), "user-1", "main", { morph: { epoch: 1 } }), /^POLYMORPH_SECRET is not set$/],
+		["none", "the pinned release publishes no list", () => loadForkRuntime(deps, "user-old", "main", { morph: { epoch: 1 } }), /^stock v0\.9\.0 publishes no polymorph\.json$/],
+		["mismatch", "the ref is not at the commit the copy is for", () => loadForkRuntime(deps, "user-1", "main", { morph: { epoch: 1, onlyAt: "f".repeat(40) } }), /only for commit fffffff/],
+		["mismatch", "the seed makes another fingerprint than the verified copy's", () => loadForkRuntime(deps, "user-1", "main", { morph: { epoch: 1, fingerprint: "00000000" } }), /is not the verified copy's \(00000000\)/],
+		["mismatch", "the copy renames other names than the verified one", () => loadForkRuntime(deps, "user-1", "main", { morph: { epoch: 1, namesHash: "00000000" } }), /than the verified copy \(00000000\)/],
+		["unavailable", "the renamer cannot read the fork", () => loadForkRuntime(deps, "user-big", "main", { morph: { epoch: 1 } }), /app\/big\.js: /],
+		["unavailable", "the pinned release's list does not parse", () => loadForkRuntime(deps, "user-broken", "main", { morph: { epoch: 1 } }), /^stock v0\.8\.0: polymorph\.json: version must be 1/],
+		["unavailable", "the build has extra files", () => loadForkRuntime(deps, "user-1", "main", { extraFiles: { "app/extra.ts": "export const extra = 2;\n" }, variant: "candidate-2", morph: { epoch: 1 } }), /extra files/],
+	];
+
+	it.each(cases)(
+		"is %s when %s",
+		async (kind, _case, load, reason) => {
+			warnings();
+			const loaded = await load();
+			expect(loaded.morph).toBeNull();
+			expect(loaded.plain?.kind).toBe(kind);
+			expect(loaded.plain?.reason).toMatch(reason);
+		},
+		SLOW_MS,
+	);
+
+	it("is unavailable when the fork pins a tag that is not a published release", async () => {
+		warnings();
+		t.artifacts.seed("user-unpinned", { commits: [pinnedTo("v7.7.7")] });
+		const loaded = await loadForkRuntime(deps, "user-unpinned", "main", { morph: { epoch: 1 } });
+		expect(loaded.plain).toEqual({ kind: "unavailable", reason: expect.stringMatching(/^stock_tag "v7\.7\.7": is not a tag in stock$/) });
+	});
+
+	it(
+		"is transient when Artifacts fails to read the fork's tests, and the same load makes the copy once it reads again",
+		async () => {
+			warnings();
+			const git = t.artifacts.repos.get("user-1")!.git;
+			const read = git.readFile.bind(git);
+			let failing = true;
+			vi.spyOn(git, "readFile").mockImplementation(async (args: { ref: string; path: string }) => {
+				if (failing && args.path === "tests/user/manifest.json") throw new Error("Artifacts: 500 internal error");
+				return read(args);
+			});
+			expect((await loadForkRuntime(deps, "user-1", "main", { morph: { epoch: 61 } })).plain).toEqual({ kind: "transient", reason: "Artifacts: 500 internal error" });
+			failing = false;
+			expect(copyOf(await loadForkRuntime(deps, "user-1", "main", { morph: { epoch: 61 } })).epoch).toBe(61);
+		},
+		SLOW_MS,
+	);
+
+	it(
+		"is transient when Artifacts fails to read upstream's list",
+		async () => {
+			warnings();
+			// The list is cached per stock commit; a fresh start reads it again.
+			clearRuntimeCache();
+			const read = stock.readFile.bind(stock);
+			vi.spyOn(stock, "readFile").mockImplementation(async (args: { ref: string; path: string }) => {
+				if (args.path === POLYMORPH_LIST_PATH) throw new Error("Artifacts: 503 service unavailable");
+				return read(args);
+			});
+			expect((await loadForkRuntime(deps, "user-1", "main", { morph: { epoch: 62 } })).plain).toEqual({ kind: "transient", reason: "Artifacts: 503 service unavailable" });
 		},
 		SLOW_MS,
 	);
