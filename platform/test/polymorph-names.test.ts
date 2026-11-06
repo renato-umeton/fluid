@@ -97,6 +97,11 @@ describe("deriveSeed", () => {
 		expect(await deriveSeed(SECRET, "user-ada", SHA, 3)).toBe(expected);
 	});
 
+	it("takes SHA-1 and SHA-256 commit ids", async () => {
+		expect(await deriveSeed(SECRET, "user-ada", "a".repeat(40), 0)).toMatch(/^[0-9a-f]{64}$/);
+		expect(await deriveSeed(SECRET, "user-ada", "a".repeat(64), 0)).toMatch(/^[0-9a-f]{64}$/);
+	});
+
 	it("changes with the secret, the fork, the commit, and the epoch", async () => {
 		const seeds = await Promise.all([
 			deriveSeed(SECRET, "user-ada", SHA, 0),
@@ -113,6 +118,10 @@ describe("deriveSeed", () => {
 		["an empty fork", SECRET, "", SHA, 0, /repo/],
 		["a colon in the fork, which would make two seeds collide", SECRET, "user:ada", SHA, 0, /repo/],
 		["an empty commit", SECRET, "user-ada", "", 0, /sha/],
+		["a short commit id", SECRET, "user-ada", SHA.slice(0, 39), 0, /sha must be a lowercase hex commit id of 40 or 64 characters/],
+		["a commit id in capitals", SECRET, "user-ada", SHA.toUpperCase(), 0, /sha/],
+		["a commit id that is not hex", SECRET, "user-ada", "g".repeat(40), 0, /sha/],
+		["a branch name instead of a commit", SECRET, "user-ada", "main", 0, /sha/],
 		["a negative epoch", SECRET, "user-ada", SHA, -1, /epoch/],
 		["a fractional epoch", SECRET, "user-ada", SHA, 1.5, /epoch/],
 	])("refuses %s", async (_label, secret, repo, sha, epoch, message) => {
