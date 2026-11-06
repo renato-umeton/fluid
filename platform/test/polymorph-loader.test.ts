@@ -12,6 +12,7 @@ import { loadPolymorphList } from "../src/polymorph/install.ts";
 import { POLYMORPH_LIST_PATH, parsePolymorphList } from "../src/polymorph/list.ts";
 import { deriveSeed, fingerprint, namesHash } from "../src/polymorph/names.ts";
 import { SCAN_LIMITS } from "../src/polymorph/tokens.ts";
+import { scanRequest } from "../src/polymorph/tripwire.ts";
 import { askCard, askLoaded, ForkRuntimeError, loadForkRuntime, type LoadedFork, type RuntimeDeps } from "../src/runtime/loader.ts";
 import { releaseMetadata, releaseMetadataPath } from "../src/stock/releases.ts";
 import { apiEnv } from "./helpers/api-env.ts";
@@ -50,6 +51,20 @@ const reflecting = patched(
 	].join("\n"),
 );
 
+// A fork that reads a request field upstream lists, context.patient.weightKg,
+// and shows it on the card. Its own tests send that field.
+const weighing = patched(
+	"app/index.ts",
+	BUILD_CARD,
+	[
+		"  const card = await buildCard({ request, env, decision, classification, signals, config, answerId: newAnswerId(env) });",
+		"  const patient = (request.context as { patient?: { weightKg?: unknown } }).patient;",
+		'  return typeof patient?.weightKg === "number" ? { ...card, framing: [...card.framing, `Chart weight: ${patient.weightKg} kg.`] } : card;',
+	].join("\n"),
+);
+const weighed = { question: "Is Morphinex on formulary?", context: { documentType: "budget", patient: { weightKg: 70 } } };
+const weightProbe = { id: "chart-weight", request: weighed, assert: [{ path: "framing", contains: "Chart weight: 70 kg." }] };
+
 /** The stock fork pinned to another stock release. */
 const pinnedTo = (tag: string): Record<string, string> => ({ ...published, "fluid.toml": setTomlValue(published["fluid.toml"]!, null, "stock_tag", tag) });
 
@@ -87,6 +102,10 @@ beforeAll(() => {
 		// More JavaScript in one module than the renamer reads: V8 runs it, the renamer will not.
 		"user-big": { ...published, "app/big.js": `// ${"x".repeat(SCAN_LIMITS.moduleChars)}\nexport const big = 1;\n` },
 		"user-reflect": reflecting,
+		"user-weight": { ...weighing, "tests/user/manifest.json": JSON.stringify({ probes: [weightProbe] }, null, 2) },
+		"user-weight-untested": weighing,
+		"user-weight-e2e": { ...weighing, "tests/user/e2e.json": JSON.stringify({ suite: "e2e", scenarios: [{ id: "weighed", steps: [{ op: "ask", request: weighed }] }] }) },
+		"user-config": { ...published, "fluid.toml": `${published["fluid.toml"]}\n[display]\nevidence_note = "shows the evidence line"\n` },
 	};
 	for (const [repo, files] of Object.entries(forks)) heads[repo] = t.artifacts.seed(repo, { commits: [files] }).commits[0]!;
 	loader = fakeLoader();
@@ -297,5 +316,42 @@ describe("asking a renamed copy", () => {
 		const plain = await loadForkRuntime(deps, "user-reflect", "main");
 		expect(cardDifferences(await askLoaded(plain, requests.research), await askCard(plain.fork, requests.research))).toEqual([]);
 		await expect(askLoaded(plain, which)).rejects.toThrow(/^decision fields: /);
+	});
+});
+
+describe("a fork whose own contract uses a listed name", () => {
+	it(
+		"skips that name, so its copy still reads the field its tests send, answers like the plain fork, and trips no wire on it",
+		async () => {
+			const plain = await loadForkRuntime(deps, "user-weight", "main");
+			const loaded = await loadForkRuntime(deps, "user-weight", "main", { morph: { epoch: 1 } });
+			const copy = copyOf(loaded);
+			expect(copy.skipped).toEqual([{ name: "weightKg", reason: "appears in a key in tests/user/manifest.json" }]);
+			expect([...copy.names.keys()]).toEqual(listed.filter((name) => name !== "weightKg"));
+			const card = await askLoaded(loaded, weighed);
+			expect(card.framing).toContain("Chart weight: 70 kg.");
+			expect(cardDifferences(await askLoaded(plain, weighed), card)).toEqual([]);
+			expect(scanRequest(weighed, copy.names)).toBeNull();
+		},
+		SLOW_MS,
+	);
+
+	it(
+		"would rename it without those tests, and then the copy would answer differently and treat the field as a decoy",
+		async () => {
+			const plain = await loadForkRuntime(deps, "user-weight-untested", "main");
+			const loaded = await loadForkRuntime(deps, "user-weight-untested", "main", { morph: { epoch: 1 } });
+			expect(copyOf(loaded).names.has("weightKg")).toBe(true);
+			expect(cardDifferences(await askLoaded(plain, weighed), await askLoaded(loaded, weighed)).map((difference) => difference.path)).toEqual(["framing"]);
+			expect(scanRequest(weighed, copyOf(loaded).names)).toEqual({ kind: "decoy", name: "weightKg", path: "context.patient.weightKg" });
+		},
+		SLOW_MS,
+	);
+
+	it("reads the fork's end-to-end scenarios and its fluid.toml too", async () => {
+		const scenarios = copyOf(await loadForkRuntime(deps, "user-weight-e2e", "main", { morph: { epoch: 1 } }));
+		expect(scenarios.skipped).toEqual([{ name: "weightKg", reason: "appears in a key in tests/user/e2e.json" }]);
+		const config = copyOf(await loadForkRuntime(deps, "user-config", "main", { morph: { epoch: 1 } }));
+		expect(config.skipped).toEqual([{ name: "evidence", reason: "appears in fluid.toml" }]);
 	});
 });

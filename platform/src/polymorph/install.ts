@@ -3,12 +3,14 @@
 // way the gate reads the probes, so a fork cannot shrink it. The seed comes
 // from the platform secret. Any reason a copy cannot be made is thrown, and
 // the loader then runs the plain fork.
+import { USER_MANIFEST_PATH } from "../gate/tiers.ts";
 import { STOCK_REPO } from "../lib/names.ts";
 import type { ModuleMap } from "../runtime/modules.ts";
 import { openRepo, readTextFile } from "../runtime/repo-files.ts";
 import { pinnedTagOf } from "../stock/releases.ts";
 import { resolveStockTag } from "../stock/suite.ts";
-import { POLYMORPH_LIST_PATH, parsePolymorphList, type SkippedName } from "./list.ts";
+import { USER_E2E_PATH } from "../yellow/tiers.ts";
+import { POLYMORPH_LIST_PATH, parsePolymorphList, type ContractTexts, type SkippedName } from "./list.ts";
 import { morphFork, unmorphText } from "./morph.ts";
 import { deriveSeed, fingerprint, namesHash, variantNames } from "./names.ts";
 import { PolymorphUnavailableError } from "./tokens.ts";
@@ -83,6 +85,26 @@ export async function planCopy(env: Env, input: { repo: string; sha: string; epo
 	return { epoch: input.epoch, seed, fingerprint: await fingerprint(seed), list };
 }
 
+/** The fork's own tests: the requests it sends itself. Read with fluid.toml as its contract. */
+const CONTRACT_FILES = [USER_MANIFEST_PATH, USER_E2E_PATH] as const;
+
+/**
+ * The fork's contract texts at a commit, by path: its tier 3 tests and its
+ * end-to-end scenarios when it has them, and its fluid.toml. A copy skips the
+ * listed names these use, since the fork's code reads them as data.
+ */
+export async function readContract(env: Env, repo: string, sha: string, fluidToml: string | undefined): Promise<ContractTexts> {
+	using handle = await openRepo(env.ARTIFACTS, repo);
+	const texts = await Promise.all(CONTRACT_FILES.map((path) => readTextFile(handle, sha, path)));
+	const contract: Record<string, string> = {};
+	CONTRACT_FILES.forEach((path, i) => {
+		const text = texts[i];
+		if (typeof text === "string") contract[path] = text;
+	});
+	if (fluidToml !== undefined) contract["fluid.toml"] = fluidToml;
+	return contract;
+}
+
 /** A built copy: its module map and what it renamed. */
 export interface BuiltCopy {
 	map: ModuleMap;
@@ -93,14 +115,15 @@ export interface BuiltCopy {
 }
 
 /**
- * Renames what the plan's list allows in the plain module map. Every error
- * comes out as PolymorphUnavailableError with this copy's names mapped back
- * to the originals, so a log line never shows one.
+ * Renames what the plan's list allows in the plain module map, skipping the
+ * names the fork's modules and contract use. Every error comes out as
+ * PolymorphUnavailableError with this copy's names mapped back to the
+ * originals, so a log line never shows one.
  */
-export async function buildCopy(plan: CopyPlan, map: ModuleMap): Promise<BuiltCopy> {
+export async function buildCopy(plan: CopyPlan, map: ModuleMap, contract: ContractTexts): Promise<BuiltCopy> {
 	const variants = await variantNames(plan.seed, plan.list);
 	try {
-		const { map: renamed, usable, skipped } = morphFork(map, variants);
+		const { map: renamed, usable, skipped } = morphFork(map, variants, contract);
 		return { map: renamed, names: usable, skipped, namesHash: await namesHash(usable.keys()) };
 	} catch (error) {
 		throw new PolymorphUnavailableError(unmorphText(messageOf(error), variants));

@@ -6,7 +6,7 @@
 // map is cached per key in this isolate. A renamed copy of a fork (see
 // polymorph/) adds ":m<fingerprint>" to both, since its code differs.
 import synthetic from "../generated/synthetic.json";
-import { buildCopy, planCopy } from "../polymorph/install.ts";
+import { buildCopy, planCopy, readContract } from "../polymorph/install.ts";
 import type { SkippedName } from "../polymorph/list.ts";
 import { unmorphText } from "../polymorph/morph.ts";
 import { PolymorphUnavailableError } from "../polymorph/tokens.ts";
@@ -214,7 +214,7 @@ async function copyFor(env: Env, repoName: string, sha: string, plain: CachedBui
 	const cached = builds.get(key);
 	let build = cached?.copy ? { ...cached, copy: cached.copy } : null;
 	if (build === null) {
-		const built = await buildCopy(plan, plain.map);
+		const built = await buildCopy(plan, plain.map, await readContract(env, repoName, sha, plain.fluidToml));
 		build = { map: built.map, fluidToml: plain.fluidToml, copy: { epoch: plan.epoch, fingerprint: plan.fingerprint, namesHash: built.namesHash, names: built.names, skipped: built.skipped } };
 		cacheBuild(key, build);
 	}
