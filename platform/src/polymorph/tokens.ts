@@ -21,7 +21,21 @@ export interface SourceTokens {
 	strings: string[];
 }
 
-/** Reads the tokens of plain JavaScript (no TypeScript, no JSX). Throws a SyntaxError when the source does not parse. */
+/**
+ * This fork cannot be renamed safely: the renamer cannot read its code (a
+ * module sucrase does not parse or that nests deeper than the parser's stack,
+ * more code than the renamer reads), or the parser no longer reads code the
+ * way the renamer relies on. Callers run the plain fork and log the reason, so
+ * a fork's owner only ever sees the errors that loading already reports.
+ */
+export class PolymorphUnavailableError extends Error {
+	constructor(message: string, options?: { cause?: unknown }) {
+		super(message, options);
+		this.name = "PolymorphUnavailableError";
+	}
+}
+
+/** Reads the tokens of plain JavaScript (no TypeScript, no JSX). Throws PolymorphUnavailableError when it cannot. */
 export const scanTokens = tokenScanner(parse, TokenType);
 
 interface TokenKinds {
@@ -52,8 +66,8 @@ export function tokenScanner(parseFn: unknown, tokenTypes: unknown): (js: string
 	};
 }
 
-function shapeError(detail: string): Error {
-	return new Error(`polymorph: sucrase's parser output is not what the token adapter expects (${detail}); renaming would not be safe`);
+function shapeError(detail: string): PolymorphUnavailableError {
+	return new PolymorphUnavailableError(`polymorph: sucrase's parser output is not what the token adapter expects (${detail}); renaming would not be safe`);
 }
 
 function tokenKinds(parseFn: unknown, tokenTypes: unknown): TokenKinds {
@@ -71,9 +85,10 @@ function runParser(parseFn: Parse, js: string): unknown {
 	try {
 		return parseFn(js, false, false, false);
 	} catch (error) {
-		// Sucrase reports source errors as SyntaxError; anything else is the parser's own failure and passes through.
-		if (error instanceof SyntaxError) throw new SyntaxError(`JavaScript does not parse: ${error.message}`);
-		throw error;
+		// A syntax sucrase does not support, nesting deeper than its recursion can
+		// go, or a bug of its own: V8 may still run this code, so it is never the
+		// fork's fault, only a reason this copy cannot be renamed.
+		throw new PolymorphUnavailableError(`polymorph: sucrase cannot parse this JavaScript: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
 	}
 }
 

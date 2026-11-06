@@ -4,12 +4,30 @@ import { describe, expect, it } from "vitest";
 import stockSource from "../src/generated/stock-source.json";
 import { POLYMORPH_LIST_PATH, listProblems, parsePolymorphList, usableNames } from "../src/polymorph/list.ts";
 import { morphModuleMap, morphSource } from "../src/polymorph/morph.ts";
-import { scanTokens, tokenScanner } from "../src/polymorph/tokens.ts";
-import { ENTRY_MODULE, ForkCodeError, buildModuleMap, type ModuleMap } from "../src/runtime/modules.ts";
+import { PolymorphUnavailableError, scanTokens, tokenScanner } from "../src/polymorph/tokens.ts";
+import { ENTRY_MODULE, buildModuleMap, type ModuleMap } from "../src/runtime/modules.ts";
 
 type SucraseToken = { type: number; start: number; end: number };
 const realParse = parse as (input: string, jsx: boolean, ts: boolean, flow: boolean) => { tokens: SucraseToken[] };
 const types = TokenType as unknown as Record<string, number>;
+
+/** The error fn throws; fails the test when it does not throw. */
+function thrown(fn: () => unknown): Error {
+	try {
+		fn();
+	} catch (error) {
+		return error as Error;
+	}
+	throw new Error("expected a throw");
+}
+
+/** fn reports that the fork cannot be renamed, with a message matching message. */
+function expectUnavailable(fn: () => unknown, message: RegExp): Error {
+	const error = thrown(fn);
+	expect(error).toBeInstanceOf(PolymorphUnavailableError);
+	expect(error.message).toMatch(message);
+	return error;
+}
 
 const stockFiles = stockSource.files as Record<string, string>;
 const stockNames = parsePolymorphList(stockFiles[POLYMORPH_LIST_PATH]!);
@@ -67,27 +85,33 @@ describe("scanTokens", () => {
 		});
 	});
 
-	it("throws a SyntaxError for code that does not parse, including TypeScript", () => {
-		expect(() => scanTokens("export const = ;")).toThrow(SyntaxError);
-		expect(() => scanTokens("export const = ;")).toThrow(/does not parse/);
-		expect(() => scanTokens("const a: number = 1;")).toThrow(SyntaxError);
+	it("cannot read code sucrase does not parse, TypeScript included, and keeps the parser's error as cause", () => {
+		const error = expectUnavailable(() => scanTokens("export const = ;"), /sucrase cannot parse this JavaScript: Unexpected token/);
+		expect(error.cause).toBeInstanceOf(SyntaxError);
+		expectUnavailable(() => scanTokens("const a: number = 1;"), /cannot parse/);
+	});
+
+	it("cannot read code nested deeper than the parser's stack allows", () => {
+		const deep = `export const x = ${"[".repeat(10_000)}${"]".repeat(10_000)};`;
+		const error = expectUnavailable(() => scanTokens(deep), /cannot parse/);
+		expect(error.cause).toBeInstanceOf(RangeError);
 	});
 });
 
 describe("tokenScanner fails loudly when sucrase changes shape", () => {
-	const sucraseError = /sucrase/;
+	const sucrase = /sucrase/;
 
 	it("refuses a parser module without parse()", () => {
-		expect(() => tokenScanner(undefined, TokenType)("a")).toThrow(sucraseError);
+		expectUnavailable(() => tokenScanner(undefined, TokenType)("a"), sucrase);
 	});
 
 	it("refuses token types it does not know", () => {
-		expect(() => tokenScanner(parse, { name: 1, string: 2 })("a")).toThrow(sucraseError);
-		expect(() => tokenScanner(parse, { ...types, template: types.name })("a")).toThrow(sucraseError);
+		expectUnavailable(() => tokenScanner(parse, { name: 1, string: 2 })("a"), sucrase);
+		expectUnavailable(() => tokenScanner(parse, { ...types, template: types.name })("a"), sucrase);
 	});
 
 	it("refuses output without a token array", () => {
-		expect(() => tokenScanner(() => ({ tokens: null }), TokenType)("a")).toThrow(sucraseError);
+		expectUnavailable(() => tokenScanner(() => ({ tokens: null }), TokenType)("a"), sucrase);
 	});
 
 	it("refuses tokens out of order or outside the source", () => {
@@ -95,28 +119,28 @@ describe("tokenScanner fails loudly when sucrase changes shape", () => {
 			const { tokens } = realParse(input, flags[0]!, flags[1]!, flags[2]!);
 			return { tokens: [...tokens.slice(0, -1).reverse(), tokens.at(-1)] };
 		};
-		expect(() => tokenScanner(reversed, TokenType)("a.b")).toThrow(sucraseError);
+		expectUnavailable(() => tokenScanner(reversed, TokenType)("a.b"), sucrase);
 		const stretched = (input: string) => ({ tokens: [{ type: types.name, start: 0, end: input.length + 5 }, { type: types.eof, start: input.length, end: input.length }] });
-		expect(() => tokenScanner(stretched, TokenType)("a")).toThrow(sucraseError);
+		expectUnavailable(() => tokenScanner(stretched, TokenType)("a"), sucrase);
 	});
 
 	it("refuses a parser that no longer reports template text", () => {
 		const noTemplates = (input: string, ...flags: boolean[]) => ({ tokens: realParse(input, flags[0]!, flags[1]!, flags[2]!).tokens.filter((t) => t.type !== types.template) });
-		expect(() => tokenScanner(noTemplates, TokenType)("a")).toThrow(sucraseError);
+		expectUnavailable(() => tokenScanner(noTemplates, TokenType)("a"), sucrase);
 	});
 
 	it("refuses identifier spans that are not identifiers", () => {
 		const shifted = (input: string, ...flags: boolean[]) => ({
 			tokens: realParse(input, flags[0]!, flags[1]!, flags[2]!).tokens.map((t) => (t.type === types.name ? { ...t, end: Math.min(t.end + 1, input.length) } : t)),
 		});
-		expect(() => tokenScanner(shifted, TokenType)("a")).toThrow(sucraseError);
+		expectUnavailable(() => tokenScanner(shifted, TokenType)("a"), sucrase);
 	});
 
-	it("never blames the source for a parser crash that is not a syntax error", () => {
+	it("reports a crash of the parser itself the same way, with the crash as cause", () => {
 		const crashing = () => {
 			throw new TypeError("internal parser bug");
 		};
-		expect(() => tokenScanner(crashing, TokenType)("a")).toThrow(TypeError);
+		expect(expectUnavailable(() => tokenScanner(crashing, TokenType)("a"), sucrase).cause).toBeInstanceOf(TypeError);
 	});
 });
 
@@ -179,10 +203,9 @@ describe("listProblems", () => {
 		expect(listProblems(["secretName"], map)).toEqual([]);
 	});
 
-	it("blames the fork, with the module path, for JavaScript that does not parse", () => {
+	it("cannot check a module sucrase does not parse, and names it", () => {
 		const map = forkMap({ "connectors/broken.js": "export const = ;" });
-		expect(() => listProblems(["secretName"], map)).toThrow(ForkCodeError);
-		expect(() => listProblems(["secretName"], map)).toThrow(/connectors\/broken\.js/);
+		expectUnavailable(() => listProblems(["secretName"], map), /^connectors\/broken\.js: .*cannot parse/);
 	});
 });
 
@@ -235,10 +258,9 @@ describe("usableNames", () => {
 		expect(() => morphModuleMap(map, usable)).toThrow(/"then" is reserved/);
 	});
 
-	it("blames the fork, with the module path, for JavaScript that does not parse", () => {
+	it("cannot check a module sucrase does not parse, and names it", () => {
 		const map = forkMap({ "connectors/broken.js": "export const = ;" });
-		expect(() => usableNames(variants, map)).toThrow(ForkCodeError);
-		expect(() => usableNames(variants, map)).toThrow(/connectors\/broken\.js/);
+		expectUnavailable(() => usableNames(variants, map), /^connectors\/broken\.js: .*cannot parse/);
 	});
 });
 
@@ -310,8 +332,8 @@ describe("morphSource", () => {
 		expect(() => morphSource("a;", new Map([["a", "a"]]))).toThrow(/different valid identifier/);
 	});
 
-	it("throws a SyntaxError for code that does not parse", () => {
-		expect(() => morphSource("export const = ;", NAMES)).toThrow(SyntaxError);
+	it("cannot rename code sucrase does not parse", () => {
+		expectUnavailable(() => morphSource("export const = ;", NAMES), /cannot parse/);
 	});
 });
 
@@ -348,10 +370,9 @@ describe("morphModuleMap", () => {
 		expect(() => morphModuleMap(map, names)).toThrow(/cannot rename[\s\S]*"then" is reserved[\s\S]*"secretName" appears in a string or template text in app\/a\.js/);
 	});
 
-	it("blames the fork, with the module path, for a module that does not parse", () => {
+	it("cannot rename a module sucrase does not parse, and names it", () => {
 		const map = forkMap({ "connectors/broken.js": "export const = ;" });
-		expect(() => morphModuleMap(map, variants)).toThrow(ForkCodeError);
-		expect(() => morphModuleMap(map, variants)).toThrow(/connectors\/broken\.js/);
+		expectUnavailable(() => morphModuleMap(map, variants), /^connectors\/broken\.js: .*cannot parse/);
 	});
 
 	it("names the module when a target name is already taken", () => {

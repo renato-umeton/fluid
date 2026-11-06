@@ -4,8 +4,8 @@
 // language, the runtime, or the platform reads, and never reach the code as
 // text: a string, template text, or JSON key or value could be read back as a
 // property name at run time, and that use would not be renamed.
-import { ENTRY_MODULE, ForkCodeError, type ModuleMap } from "../runtime/modules.ts";
-import { scanTokens } from "./tokens.ts";
+import { ENTRY_MODULE, type ModuleMap } from "../runtime/modules.ts";
+import { PolymorphUnavailableError, scanTokens } from "./tokens.ts";
 
 /** Where stock publishes the list. */
 export const POLYMORPH_LIST_PATH = "polymorph.json";
@@ -203,12 +203,12 @@ function textUses(names: readonly string[], map: ModuleMap): SkippedName[] {
 	return uses;
 }
 
-/** String literal and template text values of a JS module. Code that does not parse is the fork's to fix. */
+/** String literal and template text values of a JS module; a module the renamer cannot read is named in the error. */
 function moduleStrings(path: string, js: string): string[] {
 	try {
 		return scanTokens(js).strings;
 	} catch (error) {
-		if (error instanceof SyntaxError) throw new ForkCodeError(`${path}: ${error.message}`);
+		if (error instanceof PolymorphUnavailableError) throw new PolymorphUnavailableError(`${path}: ${error.message}`, { cause: error });
 		throw error;
 	}
 }

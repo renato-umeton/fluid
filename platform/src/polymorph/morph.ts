@@ -2,9 +2,9 @@
 // copy. Only identifier tokens change; strings, comments, and layout stay as
 // they are, so the copy behaves exactly like the plain fork (the gate checks
 // that it does) while code written against the public names cannot find them.
-import { ENTRY_MODULE, ForkCodeError, type LoaderModule, type ModuleMap } from "../runtime/modules.ts";
+import { ENTRY_MODULE, type LoaderModule, type ModuleMap } from "../runtime/modules.ts";
 import { listProblems } from "./list.ts";
-import { scanTokens } from "./tokens.ts";
+import { PolymorphUnavailableError, scanTokens } from "./tokens.ts";
 
 const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
@@ -66,8 +66,9 @@ function morphModule(path: string, js: string, names: ReadonlyMap<string, string
 	try {
 		return morphSource(js, names);
 	} catch (error) {
-		// Code that does not parse is the fork's to fix; anything else keeps its cause and gains the module path.
-		if (error instanceof SyntaxError) throw new ForkCodeError(`${path}: ${error.message}`);
-		throw new Error(`${path}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+		// Either way the error keeps its kind and its cause, and gains the module path.
+		const message = `${path}: ${error instanceof Error ? error.message : String(error)}`;
+		if (error instanceof PolymorphUnavailableError) throw new PolymorphUnavailableError(message, { cause: error });
+		throw new Error(message, { cause: error });
 	}
 }
