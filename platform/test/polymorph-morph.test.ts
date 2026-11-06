@@ -21,6 +21,11 @@ function thrown(fn: () => unknown): Error {
 	throw new Error("expected a throw");
 }
 
+/** Runs main() of a self-contained module (one without imports). */
+function runMain(js: string): unknown {
+	return new Function(`${js.replace(/^export /gm, "")}\nreturn main();`)();
+}
+
 /** fn reports that the fork cannot be renamed, with a message matching message. */
 function expectUnavailable(fn: () => unknown, message: RegExp): Error {
 	const error = thrown(fn);
@@ -84,11 +89,16 @@ describe("scanTokens", () => {
 		expect(scanTokens("const a\\u200cb = 1;").identifiers[0]!.text).toBe(`a${String.fromCharCode(0x200c)}b`);
 	});
 
-	it("reads neither regular expressions nor comments as strings or identifiers", () => {
+	it("reads regular expression literals as text of their own, and comments not at all", () => {
 		expect(scanTokens('/abc"d/.test(x); // "note" y\n/* `z` */')).toEqual({
 			identifiers: [{ start: 8, end: 12, text: "test" }, { start: 13, end: 14, text: "x" }],
 			strings: [],
+			regexes: ['/abc"d/'],
 		});
+	});
+
+	it("reads a regex escape as a word break, except a character escape, which it decodes", () => {
+		expect(scanTokens("/(?<weightKg>\\d+) kg/.exec(t); /\\bevidence\\b/; /\\x61b\\x63/u;").regexes).toEqual(["/(?<weightKg> +) kg/", "/ evidence /", "/abc/u"]);
 	});
 
 	it("cannot read code sucrase does not parse, TypeScript included, and keeps the parser's error as cause", () => {
@@ -133,6 +143,11 @@ describe("tokenScanner fails loudly when sucrase changes shape", () => {
 	it("refuses a parser that no longer reports template text", () => {
 		const noTemplates = (input: string, ...flags: boolean[]) => ({ tokens: realParse(input, flags[0]!, flags[1]!, flags[2]!).tokens.filter((t) => t.type !== types.template) });
 		expectUnavailable(() => tokenScanner(noTemplates, TokenType)("a"), sucrase);
+	});
+
+	it("refuses a parser that no longer reports regular expressions", () => {
+		const noRegexes = (input: string, ...flags: boolean[]) => ({ tokens: realParse(input, flags[0]!, flags[1]!, flags[2]!).tokens.filter((t) => t.type !== types.regexp) });
+		expectUnavailable(() => tokenScanner(noRegexes, TokenType)("a"), sucrase);
 	});
 
 	it("refuses identifier spans that are not identifiers", () => {
@@ -242,6 +257,14 @@ describe("usableNames", () => {
 		const morphed = morphModuleMap(map, usable);
 		expect(jsOf(morphed, "app/b.js")).toBe('import { secretName$abcd1234, otherName } from "./a.js";\nexport const thirdName$abcd1234 = () => [secretName$abcd1234(), otherName({})];');
 		expect(() => morphModuleMap(map, variants)).toThrow(/"otherName" appears in a string or template text in app\/a\.js/);
+	});
+
+	it("skips a name a regular expression mentions, so a named group read back as a property keeps working", () => {
+		const map = forkMap({ "app/a.ts": 'export function main() { const m = /(?<secretName>\\d+) kg/.exec("70 kg"); return Number(m?.groups?.secretName); }' });
+		const { usable, skipped } = usableNames(variants, map);
+		expect(skipped).toEqual([{ name: "secretName", reason: "appears in a regular expression in app/a.js" }]);
+		expect(runMain(jsOf(morphModuleMap(map, usable), "app/a.js"))).toBe(70);
+		expect(runMain(jsOf(map, "app/a.js"))).toBe(70);
 	});
 
 	it("skips a name another module imports by its string name", () => {

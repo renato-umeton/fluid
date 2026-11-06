@@ -17,8 +17,10 @@ export interface IdentifierToken {
 export interface SourceTokens {
 	/** Every identifier token in source order: bindings, references, property and member names, import and export names. */
 	identifiers: IdentifierToken[];
-	/** Decoded values of string literals and template text, in source order. */
+	/** Decoded values of string literals, string module names, and template text, in source order. */
 	strings: string[];
+	/** Regular expression literals as text: character escapes decoded, any other escape read as a space. */
+	regexes: string[];
 }
 
 /**
@@ -42,6 +44,7 @@ interface TokenKinds {
 	name: number;
 	string: number;
 	template: number;
+	regexp: number;
 	eof: number;
 }
 
@@ -73,11 +76,11 @@ function shapeError(detail: string): PolymorphUnavailableError {
 function tokenKinds(parseFn: unknown, tokenTypes: unknown): TokenKinds {
 	if (typeof parseFn !== "function") throw shapeError("parse is not a function");
 	const table = (tokenTypes ?? {}) as Record<string, unknown>;
-	const kinds = { name: table.name, string: table.string, template: table.template, eof: table.eof };
+	const kinds = { name: table.name, string: table.string, template: table.template, regexp: table.regexp, eof: table.eof };
 	for (const [key, value] of Object.entries(kinds)) {
 		if (typeof value !== "number") throw shapeError(`TokenType.${key} is not a number`);
 	}
-	if (new Set(Object.values(kinds)).size !== 4) throw shapeError("TokenType.name, string, template, and eof are not distinct");
+	if (new Set(Object.values(kinds)).size !== Object.keys(kinds).length) throw shapeError("TokenType.name, string, template, regexp, and eof are not distinct");
 	return kinds as TokenKinds;
 }
 
@@ -97,6 +100,7 @@ function readTokens(js: string, parsed: unknown, kinds: TokenKinds): SourceToken
 	if (!Array.isArray(tokens) || tokens.length === 0) throw shapeError("parse() returned no token array");
 	const identifiers: IdentifierToken[] = [];
 	const strings: string[] = [];
+	const regexes: string[] = [];
 	let previousEnd = 0;
 	for (const [index, token] of tokens.entries()) {
 		const { type, start, end } = (token ?? {}) as { type?: unknown; start?: unknown; end?: unknown };
@@ -111,9 +115,10 @@ function readTokens(js: string, parsed: unknown, kinds: TokenKinds): SourceToken
 		if (type === kinds.string || quotedName) strings.push(stringValue(raw, index));
 		else if (type === kinds.name) identifiers.push({ start, end, text: identifierText(raw, index) });
 		else if (type === kinds.template) strings.push(templateText(js, start, end, index));
+		else if (type === kinds.regexp) regexes.push(regexText(raw, index));
 	}
 	if ((tokens[tokens.length - 1] as { type?: unknown }).type !== kinds.eof) throw shapeError("the last token is not the end of the file");
-	return { identifiers, strings };
+	return { identifiers, strings, regexes };
 }
 
 // An ECMAScript identifier name: ID_Start, "$", or "_", then ID_Continue, "$",
@@ -140,6 +145,27 @@ function templateText(js: string, start: number, end: number, index: number): st
 	return decodeEscapes(js.slice(start, end));
 }
 
+const REGEX_ESCAPE = /\\(?:u\{([0-9A-Fa-f]+)\}|u([0-9A-Fa-f]{4})|x([0-9A-Fa-f]{2})|[\s\S])/g;
+
+/**
+ * A regex literal as text. Character escapes are decoded; every other escape
+ * (\d, \b, \k, ...) reads as a space, so the words around it, such as a named
+ * group read back later as a property, stay whole.
+ */
+function regexText(raw: string, index: number): string {
+	if (raw.length < 2 || raw[0] !== "/" || raw.lastIndexOf("/") === 0) throw shapeError(`regular expression token ${index} reads ${JSON.stringify(raw)}`);
+	return raw.replace(REGEX_ESCAPE, (_match, braced?: string, four?: string, two?: string) =>
+		braced === undefined && four === undefined && two === undefined ? " " : characterOf(braced, four ?? two),
+	);
+}
+
+/** The character a \u{...} (braced) or a \uXXXX or \xXX (hex) escape names. */
+function characterOf(braced: string | undefined, hex: string | undefined): string {
+	if (braced === undefined) return String.fromCharCode(parseInt(hex ?? "", 16));
+	const codePoint = parseInt(braced, 16);
+	return codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : REPLACEMENT_CHARACTER;
+}
+
 const ESCAPE = /\\(?:u\{([0-9A-Fa-f]+)\}|u([0-9A-Fa-f]{4})|x([0-9A-Fa-f]{2})|(\r\n|[\s\S]))/g;
 // A backslash before a line terminator continues the line and stands for nothing.
 const LINE_TERMINATORS = ["\n", "\r", "\r\n", String.fromCharCode(0x2028), String.fromCharCode(0x2029)];
@@ -158,12 +184,7 @@ const REPLACEMENT_CHARACTER = String.fromCharCode(0xfffd);
 /** Decodes JavaScript escapes, so a name spelled with escapes in a string still counts as that name. */
 function decodeEscapes(text: string): string {
 	return text.replace(ESCAPE, (_match, braced?: string, four?: string, two?: string, other?: string) => {
-		if (braced !== undefined) {
-			const codePoint = parseInt(braced, 16);
-			return codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : REPLACEMENT_CHARACTER;
-		}
-		if (four !== undefined) return String.fromCharCode(parseInt(four, 16));
-		if (two !== undefined) return String.fromCharCode(parseInt(two, 16));
+		if (braced !== undefined || four !== undefined || two !== undefined) return characterOf(braced, four ?? two);
 		return Object.hasOwn(SINGLE_ESCAPES, other!) ? SINGLE_ESCAPES[other!]! : other!;
 	});
 }
@@ -171,15 +192,16 @@ function decodeEscapes(text: string): string {
 // A fixed sample covering every token the renamer relies on: import and
 // export names (string names too), member names after "." and "?.", object
 // keys and shorthand, computed keys, template text and substitutions, private
-// class members, and an escaped identifier. If sucrase ever reads it
-// differently, renaming stops.
-const SAMPLE = 'import { a as b } from "./m.js";\nexport const c = { d: b?.e, f, [g]: `h${i.j}k`, "l": 1 };\nclass M { #n = 1; o() { return this.#n; } }\np\\u0071;\nexport { c as "v w" };\n';
-const SAMPLE_IDENTIFIERS = ["a", "as", "b", "from", "c", "d", "b", "e", "f", "g", "i", "j", "M", "n", "o", "n", "pq", "c", "as"];
+// class members, an escaped identifier, and a regular expression. If sucrase
+// ever reads it differently, renaming stops.
+const SAMPLE = 'import { a as b } from "./m.js";\nexport const c = { d: b?.e, f, [g]: `h${i.j}k`, "l": 1 };\nclass M { #n = 1; o() { return this.#n; } }\np\\u0071;\nexport { c as "v w" };\nconst r = /(?<q>s)\\d/g;\n';
+const SAMPLE_IDENTIFIERS = ["a", "as", "b", "from", "c", "d", "b", "e", "f", "g", "i", "j", "M", "n", "o", "n", "pq", "c", "as", "r"];
 const SAMPLE_STRINGS = ["./m.js", "h", "k", "l", "v w"];
+const SAMPLE_REGEXES = ["/(?<q>s) /g"];
 
-function checkSample({ identifiers, strings }: SourceTokens): void {
-	const names = identifiers.map((token) => token.text);
-	if (JSON.stringify(names) !== JSON.stringify(SAMPLE_IDENTIFIERS) || JSON.stringify(strings) !== JSON.stringify(SAMPLE_STRINGS)) {
-		throw shapeError(`a fixed sample read as identifiers ${JSON.stringify(names)} and strings ${JSON.stringify(strings)}`);
+function checkSample({ identifiers, strings, regexes }: SourceTokens): void {
+	const read = { identifiers: identifiers.map((token) => token.text), strings, regexes };
+	if (JSON.stringify(read) !== JSON.stringify({ identifiers: SAMPLE_IDENTIFIERS, strings: SAMPLE_STRINGS, regexes: SAMPLE_REGEXES })) {
+		throw shapeError(`a fixed sample read as ${JSON.stringify(read)}`);
 	}
 }

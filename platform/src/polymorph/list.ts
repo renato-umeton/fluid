@@ -179,8 +179,9 @@ export function usableNames(names: ReadonlyMap<string, string>, map: ModuleMap):
 
 /**
  * Every place one of the names reaches this module map as text, in module
- * order: as a whole word of a string or template text, or of a JSON key or
- * string value. The generated entry module is never renamed, so it is not read.
+ * order: as a whole word of a string, template text, or regular expression, or
+ * of a JSON key or string value. The generated entry module is never renamed,
+ * so it is not read.
  */
 function textUses(names: readonly string[], map: ModuleMap): SkippedName[] {
 	const uses: SkippedName[] = [];
@@ -188,8 +189,13 @@ function textUses(names: readonly string[], map: ModuleMap): SkippedName[] {
 	for (const [path, module] of Object.entries(map.modules)) {
 		if (path === ENTRY_MODULE) continue;
 		if ("js" in module) {
-			const words = wordsOf(moduleStrings(path, module.js));
-			for (const name of names) if (words.has(name)) uses.push({ name, reason: `appears in a string or template text in ${path}` });
+			const { strings, regexes } = moduleTexts(path, module.js);
+			const stringWords = wordsOf(strings);
+			const regexWords = wordsOf(regexes);
+			for (const name of names) {
+				if (stringWords.has(name)) uses.push({ name, reason: `appears in a string or template text in ${path}` });
+				if (regexWords.has(name)) uses.push({ name, reason: `appears in a regular expression in ${path}` });
+			}
 		} else {
 			const { keys, strings } = jsonText(module.json);
 			const keyWords = wordsOf(keys);
@@ -203,10 +209,10 @@ function textUses(names: readonly string[], map: ModuleMap): SkippedName[] {
 	return uses;
 }
 
-/** String literal and template text values of a JS module; a module the renamer cannot read is named in the error. */
-function moduleStrings(path: string, js: string): string[] {
+/** The text a JS module holds outside identifiers; a module the renamer cannot read is named in the error. */
+function moduleTexts(path: string, js: string): { strings: string[]; regexes: string[] } {
 	try {
-		return scanTokens(js).strings;
+		return scanTokens(js);
 	} catch (error) {
 		if (error instanceof PolymorphUnavailableError) throw new PolymorphUnavailableError(`${path}: ${error.message}`, { cause: error });
 		throw error;
