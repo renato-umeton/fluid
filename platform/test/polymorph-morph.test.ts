@@ -603,6 +603,18 @@ describe("unmorphText", () => {
 		expect(unmorphText(text, names)).toBe(text);
 	});
 
+	it("keeps each copy's names apart when several copies are mapped in turn", () => {
+		const other = new Map([
+			["secretName", "secretName$zzzz9999"],
+			["helper", "helper$11112222"],
+		]);
+		const text = "secretName$abcd1234 secretName$zzzz9999 helper$0000zzzz helper$11112222";
+		for (let round = 0; round < 3; round++) {
+			expect(unmorphText(text, names)).toBe("secretName secretName$zzzz9999 helper helper$11112222");
+			expect(unmorphText(text, other)).toBe("secretName$abcd1234 secretName helper$0000zzzz helper");
+		}
+	});
+
 	it("returns text with no renamed name as it is", () => {
 		expect(unmorphText("no names here", names)).toBe("no names here");
 		expect(unmorphText("secretName$abcd1234", new Map())).toBe("secretName$abcd1234");

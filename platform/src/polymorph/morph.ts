@@ -80,9 +80,26 @@ export function morphSource(js: string, names: ReadonlyMap<string, string>): str
 export function unmorphText(text: string, names: ReadonlyMap<string, string>): string {
 	// Every renamed name contains "$", so text without one has nothing to map.
 	if (names.size === 0 || !text.includes("$")) return text;
-	const originals = new Map([...names].map(([name, renamed]) => [renamed, name]));
-	const pattern = new RegExp([...originals.keys()].sort((a, b) => b.length - a.length).map(escapeRegExp).join("|"), "g");
+	const { pattern, originals } = reverseOf(names);
 	return text.replace(pattern, (renamed) => originals.get(renamed)!);
+}
+
+/**
+ * The pattern and lookup that map one copy's names back, built once per names
+ * map: every card and error of a copy passes through unmorphText, and a copy's
+ * names never change once made.
+ */
+const reversed = new WeakMap<ReadonlyMap<string, string>, { pattern: RegExp; originals: Map<string, string> }>();
+
+function reverseOf(names: ReadonlyMap<string, string>): { pattern: RegExp; originals: Map<string, string> } {
+	let found = reversed.get(names);
+	if (found === undefined) {
+		const originals = new Map([...names].map(([name, renamed]) => [renamed, name]));
+		const pattern = new RegExp([...originals.keys()].sort((a, b) => b.length - a.length).map(escapeRegExp).join("|"), "g");
+		found = { pattern, originals };
+		reversed.set(names, found);
+	}
+	return found;
 }
 
 function escapeRegExp(text: string): string {
