@@ -284,15 +284,25 @@ async function copyFor(env: Env, repoName: string, sha: string, plain: CachedBui
 	return build;
 }
 
-/** Plain-fallback lines already logged, by repo:sha:epoch and reason: the live path loads on every ask, and one line per reason says enough. */
-const reportedFallbacks = new Set<string>();
+/**
+ * When each plain-fallback line was last logged, by repo:sha:epoch and
+ * reason. The live path loads on every ask, so one line per reason in each
+ * REPORT_EVERY_MS says enough, and a reason that comes back later (Artifacts
+ * failing again) shows up again.
+ */
+const reportedFallbacks = new Map<string, number>();
 const REPORTED_FALLBACK_LIMIT = 1000;
+const REPORT_EVERY_MS = 10 * 60 * 1000;
 
 function reportPlain(repo: string, sha: string, epoch: number, reason: string): void {
 	const key = `${repo}:${sha}:${epoch}:${reason}`;
-	if (reportedFallbacks.has(key)) return;
-	if (reportedFallbacks.size >= REPORTED_FALLBACK_LIMIT) reportedFallbacks.delete(reportedFallbacks.values().next().value!);
-	reportedFallbacks.add(key);
+	const now = Date.now();
+	const last = reportedFallbacks.get(key);
+	if (last !== undefined && now - last < REPORT_EVERY_MS) return;
+	// Set again at the end, so a full map drops the line logged longest ago.
+	reportedFallbacks.delete(key);
+	if (reportedFallbacks.size >= REPORTED_FALLBACK_LIMIT) reportedFallbacks.delete(reportedFallbacks.keys().next().value!);
+	reportedFallbacks.set(key, now);
 	console.warn(`polymorph: ${repo}@${sha.slice(0, 7)} runs plain: ${reason}`);
 }
 

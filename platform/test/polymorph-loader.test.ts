@@ -543,3 +543,30 @@ describe("LoadedFork.plain says why a fork loaded plain", () => {
 		SLOW_MS,
 	);
 });
+
+describe("the line that says why a fork runs plain", () => {
+	it(
+		"is logged again when its reason comes back ten minutes later, such as Artifacts failing again",
+		async () => {
+			const warn = warnings();
+			const git = t.artifacts.repos.get("user-1")!.git;
+			const read = git.readFile.bind(git);
+			vi.spyOn(git, "readFile").mockImplementation(async (args: { ref: string; path: string }) => {
+				if (args.path === "tests/user/manifest.json") throw new Error("Artifacts: 500 internal error");
+				return read(args);
+			});
+			const start = Date.parse("2026-11-06T12:00:00Z");
+			const now = vi.spyOn(Date, "now").mockReturnValue(start);
+			const load = () => loadForkRuntime(deps, "user-1", "main", { morph: { epoch: 71 } });
+			await load();
+			now.mockReturnValue(start + 9 * 60_000);
+			await load();
+			expect(warn).toHaveBeenCalledTimes(1);
+			now.mockReturnValue(start + 10 * 60_000);
+			expect((await load()).plain?.kind).toBe("transient");
+			expect(warn).toHaveBeenCalledTimes(2);
+			expect(String(warn.mock.calls[1]![0])).toMatch(/runs plain: Artifacts: 500 internal error$/);
+		},
+		SLOW_MS,
+	);
+});
