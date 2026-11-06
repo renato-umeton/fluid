@@ -325,15 +325,19 @@ export class Fleet extends DurableObject<Env> {
 	}
 
 	/**
-	 * Stores the copy a gate verified for a fork, replacing the one before, or
-	 * clears it with null. Null when the fork is not in the fleet. Nothing is
-	 * broadcast: which copy a fork runs is the platform's own business.
+	 * Stores the copy a gate verified for a fork, or clears it with null, but
+	 * only while the fork's stored epoch is still `from` (null: no copy), the
+	 * one the caller read before its gate ran. A rotation that took longer
+	 * than another then stores nothing, rather than bring back a copy the
+	 * other one retired. False when nothing changed: the epoch moved, or the
+	 * fork is not in the fleet. Nothing is broadcast: which copy a fork runs is
+	 * the platform's own business.
 	 */
-	setMorph(repo: string, state: Omit<MorphState, "at"> | null, at = Date.now()): MorphState | null {
+	setMorph(repo: string, state: Omit<MorphState, "at"> | null, expected: { from: number | null }, at = Date.now()): boolean {
 		if (state !== null) checkMorphState(state);
 		const values = state === null ? [null, null, null, null, null] : [state.epoch, state.sha, state.fingerprint, state.namesHash, new Date(at).toISOString()];
-		const updated = this.ctx.storage.sql.exec("UPDATE forks SET morph_epoch = ?, morph_sha = ?, morph_fp = ?, morph_names_hash = ?, morph_at = ? WHERE repo = ? RETURNING repo", ...values, repo).toArray();
-		return updated.length > 0 ? this.morphState(repo) : null;
+		const sql = "UPDATE forks SET morph_epoch = ?, morph_sha = ?, morph_fp = ?, morph_names_hash = ?, morph_at = ? WHERE repo = ? AND morph_epoch IS ? RETURNING repo";
+		return this.ctx.storage.sql.exec(sql, ...values, repo, expected.from).toArray().length > 0;
 	}
 
 	/**

@@ -29,37 +29,48 @@ describe("Fleet morph state", () => {
 
 	it("stores the verified copy with the time it was stored, and a later one replaces it", () => {
 		const fleet = fleetWith("user-a");
-		expect(fleet.setMorph("user-a", copy, t0)).toEqual({ ...copy, at: iso(t0) });
+		expect(fleet.setMorph("user-a", copy, { from: null }, t0)).toBe(true);
 		expect(fleet.morphState("user-a")).toEqual({ ...copy, at: iso(t0) });
 		const next = { ...copy, epoch: 2, fingerprint: "0f0f0f0f", namesHash: "12345678" };
-		fleet.setMorph("user-a", next, t0 + 1000);
+		expect(fleet.setMorph("user-a", next, { from: 1 }, t0 + 1000)).toBe(true);
 		expect(fleet.morphState("user-a")).toEqual({ ...next, at: iso(t0 + 1000) });
 	});
 
-	it("clears it", () => {
+	it("stores a state only over the epoch the caller read, so a slower writer cannot undo a newer copy", () => {
 		const fleet = fleetWith("user-a");
-		fleet.setMorph("user-a", copy, t0);
-		expect(fleet.setMorph("user-a", null)).toBeNull();
+		expect(fleet.setMorph("user-a", copy, { from: null }, t0)).toBe(true);
+		// Read before epoch 1 was stored, or before epoch 2 was: nothing changes.
+		expect(fleet.setMorph("user-a", { ...copy, epoch: 2 }, { from: null }, t0 + 1)).toBe(false);
+		expect(fleet.setMorph("user-a", { ...copy, epoch: 2 }, { from: 1 }, t0 + 2)).toBe(true);
+		expect(fleet.setMorph("user-a", { ...copy, epoch: 2, fingerprint: "0f0f0f0f" }, { from: 1 }, t0 + 3)).toBe(false);
+		expect(fleet.morphState("user-a")).toEqual({ ...copy, epoch: 2, at: iso(t0 + 2) });
+	});
+
+	it("clears it, also only over the epoch the caller read", () => {
+		const fleet = fleetWith("user-a");
+		fleet.setMorph("user-a", copy, { from: null }, t0);
+		expect(fleet.setMorph("user-a", null, { from: 7 })).toBe(false);
+		expect(fleet.setMorph("user-a", null, { from: 1 })).toBe(true);
 		expect(fleet.morphState("user-a")).toBeNull();
 	});
 
 	it("stores nothing for a repo not in the fleet", () => {
 		const fleet = fleetWith("user-a");
-		expect(fleet.setMorph("user-zz", copy)).toBeNull();
+		expect(fleet.setMorph("user-zz", copy, { from: null })).toBe(false);
 		expect(fleet.morphState("user-zz")).toBeNull();
 	});
 
 	it("refuses a state that cannot name a copy", () => {
 		const fleet = fleetWith("user-a");
 		for (const bad of [{ epoch: -1 }, { epoch: 1.5 }, { sha: "main" }, { sha: SHA.toUpperCase() }, { fingerprint: "a1b2c3" }, { namesHash: "zzzzzzzz" }]) {
-			expect(() => fleet.setMorph("user-a", { ...copy, ...bad })).toThrow(/setMorph/);
+			expect(() => fleet.setMorph("user-a", { ...copy, ...bad }, { from: null })).toThrow(/setMorph/);
 		}
 		expect(fleet.morphState("user-a")).toBeNull();
 	});
 
 	it("survives the fork's other updates, and goes with the fork when it is removed", () => {
 		const fleet = fleetWith("user-a");
-		fleet.setMorph("user-a", copy, t0);
+		fleet.setMorph("user-a", copy, { from: null }, t0);
 		fleet.update("user-a", { status: "gating" });
 		fleet.register({ ...fork("user-a"), status: "pinned" });
 		expect(fleet.morphState("user-a")).toEqual({ ...copy, at: iso(t0) });
@@ -70,7 +81,7 @@ describe("Fleet morph state", () => {
 
 	it("stays out of the fork records and the snapshot the public fleet view shows", () => {
 		const fleet = fleetWith("user-a");
-		fleet.setMorph("user-a", copy, t0);
+		fleet.setMorph("user-a", copy, { from: null }, t0);
 		const shown = JSON.stringify([fleet.get("user-a"), fleet.list(), fleet.snapshot()]);
 		for (const secret of [copy.fingerprint, copy.namesHash]) expect(shown).not.toContain(secret);
 	});
@@ -83,7 +94,8 @@ describe("Fleet morph state", () => {
 		state.storage.sql.exec("INSERT INTO forks (repo, user_id, persona, pinned_tag, status, created_at, updated_at) VALUES ('user-old', 'old', 'p', 'v1.0.0', 'pinned', ?, ?)", iso(t0), iso(t0));
 		const fleet = new Fleet(state as never, {} as never);
 		expect(fleet.morphState("user-old")).toBeNull();
-		expect(fleet.setMorph("user-old", copy, t0)).toEqual({ ...copy, at: iso(t0) });
+		expect(fleet.setMorph("user-old", copy, { from: null }, t0)).toBe(true);
+		expect(fleet.morphState("user-old")).toEqual({ ...copy, at: iso(t0) });
 		expect(fleet.get("user-old")).toMatchObject({ repo: "user-old", status: "pinned" });
 	});
 });
@@ -141,7 +153,7 @@ describe("Fleet.askState", () => {
 	it("answers the ask path's questions about a fork in one call: its safety fallback and its verified copy", () => {
 		const fleet = fleetWith("user-a");
 		expect(fleet.askState("user-a")).toEqual({ fallback: null, morph: null });
-		fleet.setMorph("user-a", copy, t0);
+		fleet.setMorph("user-a", copy, { from: null }, t0);
 		fleet.addRelease({ tag: "v1.2.0", notes: "", safety: true, date: iso(t0), graceDays: 14, graceUntil: iso(t0 + 1000), commit: null });
 		expect(fleet.askState("user-a", t0 + 2000)).toEqual({ fallback: fleet.safetyFallback("user-a", t0 + 2000), morph: { ...copy, at: iso(t0) } });
 		expect(fleet.askState("user-a", t0 + 2000).fallback).toMatchObject({ tag: "v1.2.0", from: "v1.1.0" });

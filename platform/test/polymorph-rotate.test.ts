@@ -20,6 +20,7 @@ beforeAll(() => {
 	p = polymorphPlatform({
 		"user-1": PUBLISHED,
 		"user-resecret": { ...PUBLISHED, "app/resecret.ts": "export const resecret = 1;\n" },
+		"user-race": { ...PUBLISHED, "app/race.ts": "export const race = 1;\n" },
 		"user-reflective": REFLECTIVE,
 		"user-busy": { ...PUBLISHED, "app/busy.ts": "export const busy = 1;\n" },
 		// More JavaScript in one module than the renamer reads: the plain fork runs, no copy can be made.
@@ -60,6 +61,31 @@ describe("rotateFork", () => {
 	);
 
 	it(
+		"stores nothing when another rotation moved the fork first, so a retired copy never comes back",
+		async () => {
+			const fleet = p.t.fleet;
+			const setMorph = fleet.setMorph.bind(fleet);
+			let release!: () => void;
+			const held = new Promise<void>((resolve) => (release = resolve));
+			let calls = 0;
+			// The first rotation to finish its gate is held just before it stores, while two more rotate the fork.
+			vi.spyOn(fleet, "setMorph").mockImplementation((async (...args: Parameters<typeof setMorph>) => {
+				if (++calls === 1) await held;
+				return setMorph(...args);
+			}) as never);
+			const slow = rotateFork(p.deps, "user-race", "schedule");
+			await vi.waitFor(() => expect(calls).toBe(1), { timeout: SLOW_MS, interval: 20 });
+			expect(await rotateFork(p.deps, "user-race", "landed")).toMatchObject({ outcome: "rotated", epoch: 1 });
+			expect(await rotateFork(p.deps, "user-race", "tripwire")).toMatchObject({ outcome: "rotated", epoch: 2 });
+			release();
+			expect(await slow).toEqual({ outcome: "skipped", repo: "user-race", reason: "schedule", why: "another rotation moved the fork first" });
+			expect(fleet.morphState("user-race")).toMatchObject({ epoch: 2, fingerprint: await printOf("user-race", 2) });
+			expect(fleet.securityEvents("user-race").map((event) => event.detail?.epoch)).toEqual([2, 1]);
+		},
+		SLOW_MS,
+	);
+
+	it(
 		"leaves a fork plain, not on an unverified copy, when the platform secret changed after the rotation",
 		async () => {
 			const result = await rotateFork(p.deps, "user-resecret", "schedule");
@@ -79,7 +105,7 @@ describe("rotateFork", () => {
 		async () => {
 			const fleet = p.t.fleet;
 			const current = { epoch: 1, sha: p.heads["user-reflective"]!, fingerprint: "a1b2c3d4", namesHash: "0badc0de" };
-			fleet.setMorph("user-reflective", current, t0);
+			fleet.setMorph("user-reflective", current, { from: null }, t0);
 			const result = await rotateFork(p.deps, "user-reflective", "tripwire");
 			if (result.outcome !== "refused") throw new Error(`expected a refusal, got ${result.outcome}`);
 			expect([result.repo, result.reason, result.epoch, result.sha]).toEqual(["user-reflective", "tripwire", 2, p.heads["user-reflective"]]);

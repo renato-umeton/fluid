@@ -29,8 +29,8 @@ const MAX_REFUSAL_FAILURES = 10;
  * copy for that epoch (one sample per probe, since answers without the model
  * do not vary), stores the copy in Fleet when the gate passes, and records a
  * security event for a rotation or a refusal. Skips, changing nothing, when
- * the platform has no secret, the fork is not in the fleet or is busy, or the
- * gate could make no copy.
+ * the platform has no secret, the fork is not in the fleet or is busy, the
+ * gate could make no copy, or another rotation stored a copy first.
  */
 export async function rotateFork(deps: RuntimeDeps, repo: string, reason: RotationReason): Promise<RotationResult> {
 	const skipped = (why: string): RotationResult => ({ outcome: "skipped", repo, reason, why });
@@ -39,7 +39,8 @@ export async function rotateFork(deps: RuntimeDeps, repo: string, reason: Rotati
 	const fork = await fleet.get(repo);
 	if (!fork) return skipped("the fork is not in the fleet");
 	if (BUSY.has(fork.status)) return skipped(`the fork is ${fork.status}`);
-	const epoch = ((await fleet.morphState(repo))?.epoch ?? 0) + 1;
+	const current = await fleet.morphState(repo);
+	const epoch = (current?.epoch ?? 0) + 1;
 	const gate = await runGate(deps, { repo, ref: "main", mode: "check", samples: 1, morph: { epoch } });
 	if (!gate.polymorph) return skipped(`the gate made no renamed copy of main${gate.error ? `: ${gate.error}` : "; the platform log says why"}`);
 	if (!gate.passed) {
@@ -47,7 +48,10 @@ export async function rotateFork(deps: RuntimeDeps, repo: string, reason: Rotati
 		return { outcome: "refused", repo, reason, epoch, sha: gate.commit, failures: gate.failures.slice(0, MAX_REFUSAL_FAILURES), more: Math.max(0, gate.failures.length - MAX_REFUSAL_FAILURES) };
 	}
 	const { fingerprint, namesHash } = gate.polymorph;
-	if (!(await fleet.setMorph(repo, { epoch, sha: gate.commit, fingerprint, namesHash }))) return skipped("the fork left the fleet during the rotation");
+	// Stored only over the epoch read before the gate: a rotation that finished first wins, and a retired copy stays retired.
+	if (!(await fleet.setMorph(repo, { epoch, sha: gate.commit, fingerprint, namesHash }, { from: current?.epoch ?? null }))) {
+		return skipped((await fleet.get(repo)) ? "another rotation moved the fork first" : "the fork left the fleet during the rotation");
+	}
 	await fleet.recordSecurityEvent(repo, { kind: "rotated", detail: { reason, epoch, fingerprint } });
 	return { outcome: "rotated", repo, reason, epoch, sha: gate.commit, fingerprint, namesHash };
 }
