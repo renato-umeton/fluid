@@ -173,6 +173,11 @@ export class Probe extends WorkerEntrypoint {
   async throwIt(value) {
     throw value;
   }
+  async failWithPoint() {
+    const error = new Error("pointed failure");
+    error.where = new Point();
+    throw error;
+  }
   async whoami() {
     return ${JSON.stringify(who)};
   }
@@ -268,6 +273,13 @@ export class Probe extends WorkerEntrypoint {
 			expect(failure.stack).toMatch(/^CodedError: coded failure\n/);
 			expect(failure.stack).toContain("runtime-load.test.ts");
 			expect(failure.stack).not.toContain(".tmp-loader-");
+		});
+
+		it("delivers a class instance held by a thrown error as a plain object of its own properties", async () => {
+			const failure = (await probeOf("probe:rpc").failWithPoint!().catch((error: unknown) => error)) as Error & { where?: unknown };
+			expect(failure.message).toBe("pointed failure");
+			expect(failure.where).toEqual({ x: 1 });
+			expect(Object.getPrototypeOf(failure.where)).toBe(Object.prototype);
 		});
 
 		it("keeps a built-in error type, and delivers a thrown string, number, null, or undefined as an Error", async () => {

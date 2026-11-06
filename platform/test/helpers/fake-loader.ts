@@ -221,14 +221,18 @@ const CLONED_TYPES = [Date, RegExp, ArrayBuffer, Blob];
  * error keeps its type when built in, its name, message, cause, and own
  * enumerable properties, but not the thrower's stack. Anything else, a
  * class instance or a null-prototype object included, throws DataCloneError
- * as workerd does. Not modeled: RpcTarget, streams, Request and Response,
- * which Workers RPC can send.
+ * as workerd does, except that a class instance held in an error's property
+ * arrives as a plain object of its own enumerable properties. Not modeled:
+ * RpcTarget, streams, Request and Response, which Workers RPC can send.
  */
 function overRpc(value: unknown): unknown {
 	return cross(value, new Map());
 }
 
-function cross(value: unknown, seen: Map<object, unknown>): unknown {
+/** What crosses for a class instance: workerd refuses one, except as an error's property, which it flattens. */
+type InstanceRule = "refuse" | "flatten";
+
+function cross(value: unknown, seen: Map<object, unknown>, instances: InstanceRule = "refuse"): unknown {
 	if (typeof value === "function") return (...args: unknown[]) => crossCall(value as Callable, args, new Error());
 	if (typeof value === "symbol") throw dataCloneError("Symbol");
 	if (value === null || typeof value !== "object") return value;
@@ -253,6 +257,7 @@ function cross(value: unknown, seen: Map<object, unknown>): unknown {
 		seen.set(value, copy);
 		return copy;
 	}
+	if (instances === "flatten" && Object.getPrototypeOf(value) !== null) return copyOwn(value, {}, seen);
 	throw dataCloneError((value as { constructor?: { name?: string } }).constructor?.name || "Object");
 }
 
@@ -267,8 +272,11 @@ function copyError(error: Error, seen: Map<object, unknown>): Error {
 	const copy: Error = error instanceof DOMException ? new DOMException(error.message, error.name) : structuredClone(error);
 	seen.set(error, copy);
 	if (copy.name !== error.name) copy.name = error.name;
-	if (Object.hasOwn(error, "cause")) copy.cause = cross(error.cause, seen);
-	for (const key of Object.keys(error)) define(copy, key, cross((error as unknown as Record<string, unknown>)[key], seen));
+	// The cause given to the constructor is not enumerable; one assigned later is a property like any other.
+	const properties = Object.keys(error);
+	if (Object.hasOwn(error, "cause") && !properties.includes("cause")) copy.cause = cross(error.cause, seen);
+	// A class instance held in a property arrives as a plain object of its own enumerable properties.
+	for (const key of properties) define(copy, key, cross((error as unknown as Record<string, unknown>)[key], seen, "flatten"));
 	setStack(copy, "");
 	return copy;
 }
