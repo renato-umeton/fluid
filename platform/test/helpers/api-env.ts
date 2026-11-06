@@ -60,6 +60,7 @@ export function fakeArtifacts() {
 			token.revoked = true;
 			return true;
 		},
+		// Unlike Artifacts, the fork starts empty: it does not copy this repo's main. Tests seed() forks they read.
 		fork: async (name: string, _opts?: unknown) => {
 			if (repos.has(name)) throw new Error(`repo ${name} already exists`);
 			repos.set(name, { name, tokens: [], forkedFrom: repo.name, revokeResult: true, git: fakeGitRepo() });
@@ -70,7 +71,13 @@ export function fakeArtifacts() {
 	return {
 		repos,
 		add,
-		/** Creates the repo if needed and replaces its content with the seeded history; returns that content (commit ids in seed order). */
+		/**
+		 * Creates the repo if needed and replaces its content with the seeded
+		 * history; returns that content (commit ids in seed order). Seed a new
+		 * tag name rather than moving a tag: src/stock/suite.ts caches a release
+		 * tag's commit (and its suite) by tag name for the life of the module,
+		 * so a moved tag keeps resolving to its first commit within a test file.
+		 */
 		seed(name: string, seed: RepoSeed): FakeGitRepo {
 			if (!repos.has(name)) add(name);
 			const git = fakeGitRepo(seed);
@@ -82,6 +89,7 @@ export function fakeArtifacts() {
 		 * listing of a repo's git remote, which the platform reads without
 		 * cloning (listRemoteRefs: stock/suite.ts resolves a release tag with
 		 * it). Any other request fails, so a test never reaches the network.
+		 * It answers in git protocol v1 only and never asks for credentials.
 		 */
 		fetch: async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
 			const url = input instanceof Request ? input.url : String(input);
