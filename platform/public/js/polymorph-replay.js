@@ -116,6 +116,7 @@ function tileFor(fork, attack, polymorphOn, moved) {
   if (!attack) return { state: "neutral", fingerprint: polymorphOn ? fork.before : null, note: "" };
   const has = (list) => list.includes(fork.repo);
   const result = polymorphOn ? attack.platform : attack.plain;
+  // Compromised wins over refused: a fork in both lists was harmed, whatever else the platform did.
   const state = has(result.compromised) ? "compromised" : polymorphOn && has(attack.platform.refused) ? "refused" : "neutral";
   const word = state !== "neutral" ? state : has(attack.targets) ? "not compromised" : "not attacked";
   const newCopy = moved && polymorphOn && has(attack.platform.rotated);

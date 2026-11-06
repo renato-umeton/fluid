@@ -11,7 +11,11 @@ type Step = { at: number; repo: string; tile: Tile };
 
 const ALL = ["user-01", "user-02", "user-03"];
 
-/** A small recording in the shape the end-to-end test writes: 3 forks, the four attacks, and the leaked copy after its fork moved. */
+/**
+ * A small recording in the shape the end-to-end test writes: 3 forks, the four attacks, and the leaked copy after its fork moved.
+ * Attack A refuses user-03 without moving it to a new copy, and attack A2 moves user-03 without refusing it, so the tests tell
+ * the refused and rotated lists apart.
+ */
 function demo() {
 	return {
 		version: 1,
@@ -27,11 +31,11 @@ function demo() {
 		attacks: [
 			{
 				id: "A", label: "Built from upstream's source", detail: "Sets display.researchNeedsAttestation to false, the name in upstream's source.", tries: 3, targets: [...ALL],
-				plain: { compromised: [...ALL] }, direct: { compromised: [] as string[] }, platform: { compromised: [] as string[], refused: [...ALL], rotated: [...ALL] },
+				plain: { compromised: [...ALL] }, direct: { compromised: [] as string[] }, platform: { compromised: [] as string[], refused: [...ALL], rotated: ["user-01", "user-02"] },
 			},
 			{
 				id: "A2", label: "Built from a leaked copy", detail: "Sends the same key with the renamed name from user-02's copy.", tries: 3, targets: [...ALL],
-				plain: { compromised: [] as string[] }, direct: { compromised: ["user-02"] }, platform: { compromised: ["user-02"], refused: ["user-01", "user-03"], rotated: ["user-01", "user-03"] },
+				plain: { compromised: [] as string[] }, direct: { compromised: ["user-02"] }, platform: { compromised: ["user-02"], refused: ["user-01"], rotated: ["user-01", "user-03"] },
 			},
 			{
 				id: "A3", label: "Blind guessing", detail: "Sends 1000 random suffixes for the renamed name to one fork.", tries: 1000, targets: ["user-03"],
@@ -131,14 +135,24 @@ describe("tileStates", () => {
 		expect(tileStates(demo(), null, false)).toEqual({ "user-01": tile("neutral", null, ""), "user-02": tile("neutral", null, ""), "user-03": tile("neutral", null, "") });
 	});
 
-	it("attack A: compromises the plain fleet; with the switch on every fork refuses it and moves to a new copy", () => {
+	it("attack A: compromises the plain fleet; with the switch on every fork refuses it, and the forks that moved show their new copy", () => {
 		expect(tileStates(demo(), "A", false)).toEqual({ "user-01": tile("compromised", null, "compromised"), "user-02": tile("compromised", null, "compromised"), "user-03": tile("compromised", null, "compromised") });
-		expect(tileStates(demo(), "A", true)).toEqual({ "user-01": tile("refused", "4e5f6a7b", "refused, new copy"), "user-02": tile("refused", "2a3b4c5d", "refused, new copy"), "user-03": tile("refused", "a2b3c4d5", "refused, new copy") });
+		expect(tileStates(demo(), "A", true)).toEqual({ "user-01": tile("refused", "4e5f6a7b", "refused, new copy"), "user-02": tile("refused", "2a3b4c5d", "refused, new copy"), "user-03": tile("refused", "6e7f8091", "refused") });
 	});
 
 	it("attack A2: does nothing on the plain fleet; with the switch on only the leaked copy's fork is compromised", () => {
 		expect(tileStates(demo(), "A2", false)).toEqual({ "user-01": tile("neutral", null, "not compromised"), "user-02": tile("neutral", null, "not compromised"), "user-03": tile("neutral", null, "not compromised") });
-		expect(tileStates(demo(), "A2", true)).toEqual({ "user-01": tile("refused", "4e5f6a7b", "refused, new copy"), "user-02": tile("compromised", "8c9d0e1f", "compromised"), "user-03": tile("refused", "a2b3c4d5", "refused, new copy") });
+		expect(tileStates(demo(), "A2", true)).toEqual({ "user-01": tile("refused", "4e5f6a7b", "refused, new copy"), "user-02": tile("compromised", "8c9d0e1f", "compromised"), "user-03": tile("neutral", "a2b3c4d5", "not compromised, new copy") });
+	});
+
+	it("tells a refused fork from a moved one: refused on its old copy, or moved without a refusal", () => {
+		expect(tileStates(demo(), "A", true)["user-03"]).toEqual(tile("refused", "6e7f8091", "refused"));
+		expect(tileStates(demo(), "A2", true)["user-03"]).toEqual(tile("neutral", "a2b3c4d5", "not compromised, new copy"));
+	});
+
+	it("shows a fork that is both compromised and refused as compromised, since the harm happened", () => {
+		const both = changed((d) => d.attacks[1].platform.refused.push("user-02"));
+		expect(tileStates(both, "A2", true)["user-02"]).toEqual(tile("compromised", "8c9d0e1f", "compromised"));
 	});
 
 	it("attack A3: leaves forks it did not attack neutral", () => {
@@ -178,6 +192,12 @@ describe("replaySteps", () => {
 		expect(steps.map((s) => s.tile)).toEqual([tile("refused", "6e7f8091", "refused"), tile("refused", "a2b3c4d5", "refused, new copy")]);
 	});
 
+	it("moves only the forks the platform rotated to a new copy", () => {
+		const moved = (id: string) => (replaySteps(demo(), id, true) as Step[]).filter((s) => s.tile.note.endsWith("new copy")).map((s) => s.repo);
+		expect(moved("A")).toEqual(["user-01", "user-02"]);
+		expect(moved("A2")).toEqual(["user-01", "user-03"]);
+	});
+
 	it("moves no fork to a new copy with the switch off", () => {
 		const steps = replaySteps(demo(), "A", false) as Step[];
 		expect(steps.map((s) => s.repo)).toEqual(ALL);
@@ -188,8 +208,8 @@ describe("replaySteps", () => {
 describe("scoreRows", () => {
 	it("counts each attack's forks out of the fleet, in the recording's order", () => {
 		expect(scoreRows(demo())).toEqual([
-			{ id: "A", label: "Built from upstream's source", detail: "Sets display.researchNeedsAttestation to false, the name in upstream's source.", sent: "3 requests to 3 forks", plain: "3 of 3", direct: "0 of 3", compromised: "0 of 3", refused: "3 of 3", rotated: "3 of 3" },
-			{ id: "A2", label: "Built from a leaked copy", detail: "Sends the same key with the renamed name from user-02's copy.", sent: "3 requests to 3 forks", plain: "0 of 3", direct: "1 of 3", compromised: "1 of 3", refused: "2 of 3", rotated: "2 of 3" },
+			{ id: "A", label: "Built from upstream's source", detail: "Sets display.researchNeedsAttestation to false, the name in upstream's source.", sent: "3 requests to 3 forks", plain: "3 of 3", direct: "0 of 3", compromised: "0 of 3", refused: "3 of 3", rotated: "2 of 3" },
+			{ id: "A2", label: "Built from a leaked copy", detail: "Sends the same key with the renamed name from user-02's copy.", sent: "3 requests to 3 forks", plain: "0 of 3", direct: "1 of 3", compromised: "1 of 3", refused: "1 of 3", rotated: "2 of 3" },
 			{ id: "A3", label: "Blind guessing", detail: "Sends 1000 random suffixes for the renamed name to one fork.", sent: "1000 requests to 1 fork", plain: "0 of 3", direct: "0 of 3", compromised: "0 of 3", refused: "1 of 3", rotated: "1 of 3" },
 			{ id: "B", label: "Public field only", detail: "Sets display.preview to true, a public field that skips the attestation hold.", sent: "3 requests to 3 forks", plain: "3 of 3", direct: "3 of 3", compromised: "3 of 3", refused: "0 of 3", rotated: "0 of 3" },
 		]);
@@ -212,7 +232,7 @@ describe("the lines around the fleet and the scoreboard", () => {
 
 	it("sums up an attack after it plays, with the switch on or off", () => {
 		expect(outcomeLine(demo(), "A", false)).toBe("Attack A (Built from upstream's source) with polymorphic installation off: 3 of 3 forks compromised.");
-		expect(outcomeLine(demo(), "A2", true)).toBe("Attack A2 (Built from a leaked copy) with polymorphic installation on: 1 of 3 forks compromised, 2 refused, 2 moved to a new copy.");
+		expect(outcomeLine(demo(), "A2", true)).toBe("Attack A2 (Built from a leaked copy) with polymorphic installation on: 1 of 3 forks compromised, 1 refused, 2 moved to a new copy.");
 	});
 
 	it("says what the leaked names did after their fork moved to a new copy", () => {
