@@ -321,8 +321,10 @@ export class Probe extends WorkerEntrypoint {
 
 	it("collects what an entrypoint hands to ctx.waitUntil, a rejection included, without leaving it unhandled", async () => {
 		const probe = probeOf("probe:later");
+		// The loader is shared by the file: only what these calls hand over is this test's.
+		const before = loader.background.length;
 		expect([await probe.later!(true), await probe.later!(false)]).toEqual(["answered", "answered"]);
-		expect(await Promise.allSettled(loader.background)).toEqual([
+		expect(await Promise.allSettled(loader.background.slice(before))).toEqual([
 			{ status: "rejected", reason: expect.objectContaining({ message: "background failure" }) },
 			{ status: "fulfilled", value: "done" },
 		]);
