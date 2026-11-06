@@ -4,7 +4,7 @@ import { TokenType } from "sucrase/dist/esm/parser/tokenizer/types.js";
 import { describe, expect, it } from "vitest";
 import stockSource from "../src/generated/stock-source.json";
 import { POLYMORPH_LIST_PATH, parsePolymorphList, usableNames } from "../src/polymorph/list.ts";
-import { morphFork, morphModuleMap, morphSource } from "../src/polymorph/morph.ts";
+import { morphFork, morphModuleMap, morphSource, unmorphText } from "../src/polymorph/morph.ts";
 import { PolymorphUnavailableError, SCAN_LIMITS, scanModuleMap, scanTokens, tokenScanner } from "../src/polymorph/tokens.ts";
 import { ENTRY_MODULE, buildModuleMap, type ModuleMap } from "../src/runtime/modules.ts";
 
@@ -536,5 +536,36 @@ describe("morphFork", () => {
 		const map = forkMap({ "app/a.ts": "export const secretName$abcd1234 = 1;\nexport const secretName = 2;" });
 		const error = expectUnavailable(() => morphFork(map, suffixed("secretName")), /^app\/a\.js: .*already uses this copy's renamed name for "secretName"/);
 		expect(error.message).not.toContain("abcd1234");
+	});
+});
+
+describe("unmorphText", () => {
+	const names = new Map([
+		["secretName", "secretName$abcd1234"],
+		["helper", "helper$0000zzzz"],
+	]);
+
+	it("maps every renamed name back to its original, wherever it appears", () => {
+		expect(unmorphText("Cannot read properties of undefined (reading 'secretName$abcd1234')", names)).toBe("Cannot read properties of undefined (reading 'secretName')");
+		expect(unmorphText('{"secretName$abcd1234":1,"list":["helper$0000zzzz","xhelper$0000zzzzy"]}', names)).toBe('{"secretName":1,"list":["helper","xhelpery"]}');
+	});
+
+	it("maps this copy's exact renamed names only: originals, other suffixes, and lookalikes stay", () => {
+		const text = "secretName secretName$abcd1235 secretName$ABCD1234 helper$0000zzz other$abcd1234 helper$$0000zzzz";
+		expect(unmorphText(text, names)).toBe(text);
+	});
+
+	it("returns text with no renamed name as it is", () => {
+		expect(unmorphText("no names here", names)).toBe("no names here");
+		expect(unmorphText("secretName$abcd1234", new Map())).toBe("secretName$abcd1234");
+	});
+
+	it("turns what renamed code writes into text back into what the plain code writes", () => {
+		const js = 'export function main() { const o = { secretName: 1, helper: 2 }; return Object.keys(o).join(",") + "; " + new Error("missing " + Object.keys(o)[1]).message; }';
+		const plain = runMain(js) as string;
+		const copy = runMain(morphSource(js, names)) as string;
+		expect(plain).toBe("secretName,helper; missing helper");
+		expect(copy).not.toBe(plain);
+		expect(unmorphText(copy, names)).toBe(plain);
 	});
 });

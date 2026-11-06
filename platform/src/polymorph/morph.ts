@@ -69,6 +69,26 @@ export function morphSource(js: string, names: ReadonlyMap<string, string>): str
 }
 
 /**
+ * Maps every renamed name in text back to its original name, so what a
+ * renamed copy sends out (its cards and its error messages) reads as the
+ * plain fork's would and never shows a renamed name. Only this copy's exact
+ * renamed names change, wherever they appear, even inside a longer word:
+ * code that builds text from a renamed name builds it from the original in
+ * the plain fork.
+ */
+export function unmorphText(text: string, names: ReadonlyMap<string, string>): string {
+	// Every renamed name contains "$", so text without one has nothing to map.
+	if (names.size === 0 || !text.includes("$")) return text;
+	const originals = new Map([...names].map(([name, renamed]) => [renamed, name]));
+	const pattern = new RegExp([...originals.keys()].sort((a, b) => b.length - a.length).map(escapeRegExp).join("|"), "g");
+	return text.replace(pattern, (renamed) => originals.get(renamed)!);
+}
+
+function escapeRegExp(text: string): string {
+	return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
  * A target must be its own name plus a per-copy suffix, as variantNames makes
  * them, so no keyword or other name can become a target and no two names can
  * share one. The message names only the listed name, never the target, which
