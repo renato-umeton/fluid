@@ -14,7 +14,7 @@ import { deriveSeed, fingerprint, namesHash } from "../src/polymorph/names.ts";
 import { SCAN_LIMITS } from "../src/polymorph/tokens.ts";
 import { scanRequest } from "../src/polymorph/tripwire.ts";
 import * as loaderModule from "../src/runtime/loader.ts";
-import { askLoaded, clearRuntimeCache, ForkRuntimeError, isolateId, loadForkRuntime, type LoadedFork, type PlainKind, type RuntimeDeps } from "../src/runtime/loader.ts";
+import { askLoaded, clearRuntimeCache, ForkRuntimeError, isolateId, loadForkRuntime, storedCopy, type LoadedFork, type PlainKind, type RuntimeDeps } from "../src/runtime/loader.ts";
 import { releaseMetadata, releaseMetadataPath } from "../src/stock/releases.ts";
 import { apiEnv } from "./helpers/api-env.ts";
 import { fakeLoader } from "./helpers/fake-loader.ts";
@@ -566,6 +566,30 @@ describe("the line that says why a fork runs plain", () => {
 			expect((await load()).plain?.kind).toBe("transient");
 			expect(warn).toHaveBeenCalledTimes(2);
 			expect(String(warn.mock.calls[1]![0])).toMatch(/runs plain: Artifacts: 500 internal error$/);
+		},
+		SLOW_MS,
+	);
+});
+
+describe("storedCopy", () => {
+	it("turns the copy Fleet stored into load options with every guard on", () => {
+		const state = { epoch: 3, sha: "a".repeat(40), fingerprint: "a1b2c3d4", namesHash: "0badc0de", at: "2026-11-06T10:00:00.000Z" };
+		expect(storedCopy(state)).toEqual({ epoch: 3, onlyAt: state.sha, fingerprint: "a1b2c3d4", namesHash: "0badc0de" });
+	});
+
+	it(
+		"loads exactly the stored copy, and plain, as a mismatch, when the stored copy is of another commit or seed",
+		async () => {
+			const warn = warnings();
+			const print = await fingerprint(await deriveSeed(SECRET, "user-1", heads["user-1"]!, 81));
+			const state = { epoch: 81, sha: heads["user-1"]!, fingerprint: print, namesHash: await namesHash(listed), at: "2026-11-06T10:00:00.000Z" };
+			const loaded = await loadForkRuntime(deps, "user-1", "main", { morph: storedCopy(state) });
+			expect([copyOf(loaded).epoch, copyOf(loaded).fingerprint, loaded.isolateId]).toEqual([81, print, await copyId("user-1", 81)]);
+			for (const other of [{ sha: "e".repeat(40) }, { fingerprint: "00000000" }, { namesHash: "00000000" }]) {
+				const plain = await loadForkRuntime(deps, "user-1", "main", { morph: storedCopy({ ...state, ...other }) });
+				expect([plain.morph, plain.plain?.kind]).toEqual([null, "mismatch"]);
+			}
+			expect(warn).toHaveBeenCalledTimes(3);
 		},
 		SLOW_MS,
 	);

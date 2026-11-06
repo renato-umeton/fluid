@@ -6,6 +6,7 @@
 // map is cached per key in this isolate. A renamed copy of a fork (see
 // polymorph/) adds ":m<epoch>.<fingerprint>.<names hash>" to both, which
 // names exactly the code it runs.
+import type { MorphState } from "../durable/fleet.ts";
 import synthetic from "../generated/synthetic.json";
 import { buildCopy, clearCopyCaches, planCopy, PolymorphOffError, PolymorphTransientError, readContract } from "../polymorph/install.ts";
 import type { SkippedName } from "../polymorph/list.ts";
@@ -129,6 +130,17 @@ export interface LoadOptions {
 	 * reason (per fork commit and epoch) says why: this never fails a load.
 	 */
 	morph?: { epoch: number; onlyAt?: string; fingerprint?: string; namesHash?: string };
+}
+
+/**
+ * The morph option that loads exactly the copy a gate verified and Fleet
+ * stored: its epoch, only at its commit, only while the platform secret still
+ * makes its fingerprint, and only when it renames the names the gate checked.
+ * Every caller that loads a stored copy goes through this, so none can leave
+ * a guard out.
+ */
+export function storedCopy(state: Pick<MorphState, "epoch" | "sha" | "fingerprint" | "namesHash">): NonNullable<LoadOptions["morph"]> {
+	return { epoch: state.epoch, onlyAt: state.sha, fingerprint: state.fingerprint, namesHash: state.namesHash };
 }
 
 /**
