@@ -30,7 +30,9 @@ export async function serveAsk(deps: RuntimeDeps, input: ServeAskInput): Promise
 	const fleet = fleetStub(env);
 	// Safety fallback (spec 7): after a safety release's grace period, a fork still pinned below it is
 	// answered by stock at that release (production only: main). The card carries a visible signal.
-	const fallback = input.fallback && repo !== STOCK_REPO ? await fleet.safetyFallback(repo) : null;
+	// askState also returns the fork's verified renamed copy, so serving it later costs no extra call.
+	const state = input.fallback && repo !== STOCK_REPO ? await fleet.askState(repo) : null;
+	const fallback = state?.fallback ?? null;
 	let result = await askFork(deps, fallback ? { repo: STOCK_REPO, ref: fallback.tag, request, useModel } : { repo, ref, request, useModel });
 	let card = fallback
 		? markSafety(result.card, SAFETY_SIGNALS.stockFallback, `Safety fallback: the grace period of stock ${fallback.tag} ended ${fallback.graceUntil.slice(0, 10)} and this fork is still pinned to ${fallback.from}, so stock ${fallback.tag} answered. Apply the open repair or upgrade to use your customizations again.`)

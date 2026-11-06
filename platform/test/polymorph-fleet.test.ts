@@ -1,20 +1,92 @@
-// Security events Fleet keeps for polymorphic copies. The fleet stream is
-// public, so it learns that something happened to a fork, never a name, path,
-// or fingerprint.
-import { describe, expect, it } from "vitest";
+// What Fleet keeps for polymorphic copies: the verified copy per fork (read on
+// every ask), and security events. The fleet stream is public, so it learns
+// that something happened to a fork, never a name, path, or fingerprint.
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { serveAsk } from "../src/api/ask.ts";
 import { Fleet, SECURITY_EVENTS_PER_REPO } from "../src/durable/fleet.ts";
-import { construct } from "./helpers/durable.ts";
+import { construct, fakeState } from "./helpers/durable.ts";
+import { PUBLISHED, TAG, polymorphPlatform, type PolymorphPlatform } from "./helpers/polymorph-platform.ts";
 
 const fork = (repo: string) => ({ repo, userId: repo.replace(/^user-/, ""), persona: "p", pinnedTag: "v1.1.0" });
+const SHA = "0123456789abcdef0123456789abcdef01234567";
+const copy = { epoch: 1, sha: SHA, fingerprint: "a1b2c3d4", namesHash: "87806eb6" };
 const t0 = Date.parse("2026-11-06T10:00:00Z");
 const iso = (at: number) => new Date(at).toISOString();
-const hit = { hit: "decoy", name: "researchNeedsAttestation", path: "context.display.researchNeedsAttestation", fingerprint: "a1b2c3d4", epoch: 1 };
+const hit = { hit: "decoy", name: "researchNeedsAttestation", path: "context.display.researchNeedsAttestation", fingerprint: copy.fingerprint, epoch: 1 };
 
 function fleetWith(...repos: string[]): Fleet {
 	const { instance: fleet } = construct(Fleet);
 	for (const repo of repos) fleet.register({ ...fork(repo), status: "pinned" });
 	return fleet;
 }
+
+describe("Fleet morph state", () => {
+	it("is null for a fork without a verified copy and for a repo not in the fleet", () => {
+		const fleet = fleetWith("user-a");
+		expect(fleet.morphState("user-a")).toBeNull();
+		expect(fleet.morphState("user-zz")).toBeNull();
+	});
+
+	it("stores the verified copy with the time it was stored, and a later one replaces it", () => {
+		const fleet = fleetWith("user-a");
+		expect(fleet.setMorph("user-a", copy, t0)).toEqual({ ...copy, at: iso(t0) });
+		expect(fleet.morphState("user-a")).toEqual({ ...copy, at: iso(t0) });
+		const next = { ...copy, epoch: 2, fingerprint: "0f0f0f0f", namesHash: "12345678" };
+		fleet.setMorph("user-a", next, t0 + 1000);
+		expect(fleet.morphState("user-a")).toEqual({ ...next, at: iso(t0 + 1000) });
+	});
+
+	it("clears it", () => {
+		const fleet = fleetWith("user-a");
+		fleet.setMorph("user-a", copy, t0);
+		expect(fleet.setMorph("user-a", null)).toBeNull();
+		expect(fleet.morphState("user-a")).toBeNull();
+	});
+
+	it("stores nothing for a repo not in the fleet", () => {
+		const fleet = fleetWith("user-a");
+		expect(fleet.setMorph("user-zz", copy)).toBeNull();
+		expect(fleet.morphState("user-zz")).toBeNull();
+	});
+
+	it("refuses a state that cannot name a copy", () => {
+		const fleet = fleetWith("user-a");
+		for (const bad of [{ epoch: -1 }, { epoch: 1.5 }, { sha: "main" }, { sha: SHA.toUpperCase() }, { fingerprint: "a1b2c3" }, { namesHash: "zzzzzzzz" }]) {
+			expect(() => fleet.setMorph("user-a", { ...copy, ...bad })).toThrow(/setMorph/);
+		}
+		expect(fleet.morphState("user-a")).toBeNull();
+	});
+
+	it("survives the fork's other updates, and goes with the fork when it is removed", () => {
+		const fleet = fleetWith("user-a");
+		fleet.setMorph("user-a", copy, t0);
+		fleet.update("user-a", { status: "gating" });
+		fleet.register({ ...fork("user-a"), status: "pinned" });
+		expect(fleet.morphState("user-a")).toEqual({ ...copy, at: iso(t0) });
+		fleet.remove("user-a");
+		fleet.register({ ...fork("user-a"), status: "pinned" });
+		expect(fleet.morphState("user-a")).toBeNull();
+	});
+
+	it("stays out of the fork records and the snapshot the public fleet view shows", () => {
+		const fleet = fleetWith("user-a");
+		fleet.setMorph("user-a", copy, t0);
+		const shown = JSON.stringify([fleet.get("user-a"), fleet.list(), fleet.snapshot()]);
+		for (const secret of [copy.fingerprint, copy.namesHash]) expect(shown).not.toContain(secret);
+	});
+
+	it("adds its columns to a forks table made before them", () => {
+		const state = fakeState();
+		state.storage.sql.exec(
+			"CREATE TABLE forks (repo TEXT PRIMARY KEY, user_id TEXT NOT NULL, persona TEXT NOT NULL, pinned_tag TEXT NOT NULL, status TEXT NOT NULL, last_run TEXT, seeded INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+		);
+		state.storage.sql.exec("INSERT INTO forks (repo, user_id, persona, pinned_tag, status, created_at, updated_at) VALUES ('user-old', 'old', 'p', 'v1.0.0', 'pinned', ?, ?)", iso(t0), iso(t0));
+		const fleet = new Fleet(state as never, {} as never);
+		expect(fleet.morphState("user-old")).toBeNull();
+		expect(fleet.setMorph("user-old", copy, t0)).toEqual({ ...copy, at: iso(t0) });
+		expect(fleet.get("user-old")).toMatchObject({ repo: "user-old", status: "pinned" });
+	});
+});
 
 describe("Fleet security events", () => {
 	it("records events with their time and lists them newest first, up to a limit", () => {
@@ -62,6 +134,37 @@ describe("Fleet security events", () => {
 		await reader.cancel();
 		expect(data).toEqual({ type: "security", repo: "user-a", kind: "tripwire", at: iso(t0) });
 		for (const secret of [hit.name, hit.path, hit.fingerprint, "decoy"]) expect(raw).not.toContain(secret);
+	});
+});
+
+describe("Fleet.askState", () => {
+	it("answers the ask path's questions about a fork in one call: its safety fallback and its verified copy", () => {
+		const fleet = fleetWith("user-a");
+		expect(fleet.askState("user-a")).toEqual({ fallback: null, morph: null });
+		fleet.setMorph("user-a", copy, t0);
+		fleet.addRelease({ tag: "v1.2.0", notes: "", safety: true, date: iso(t0), graceDays: 14, graceUntil: iso(t0 + 1000), commit: null });
+		expect(fleet.askState("user-a", t0 + 2000)).toEqual({ fallback: fleet.safetyFallback("user-a", t0 + 2000), morph: { ...copy, at: iso(t0) } });
+		expect(fleet.askState("user-a", t0 + 2000).fallback).toMatchObject({ tag: "v1.2.0", from: "v1.1.0" });
+		expect(fleet.askState("user-zz")).toEqual({ fallback: null, morph: null });
+	});
+});
+
+describe("serveAsk", () => {
+	let p: PolymorphPlatform;
+	beforeAll(() => {
+		p = polymorphPlatform({ "user-a": PUBLISHED });
+	});
+	afterAll(() => p?.cleanup());
+
+	it("still serves stock once a safety grace period is over, asking Fleet once through askState", async () => {
+		const fleet = p.t.fleet;
+		fleet.register({ ...fork("user-a"), pinnedTag: "v0.9.0", status: "pinned" });
+		fleet.addRelease({ tag: TAG, notes: "", safety: true, date: iso(t0), graceDays: 14, graceUntil: iso(t0), commit: null });
+		const askState = vi.spyOn(fleet, "askState");
+		const request = { question: "Is Morphinex on formulary?", context: { documentType: "budget" } };
+		const card = await serveAsk(p.deps, { repo: "user-a", ref: "main", request, useModel: false, userId: "a", fallback: true });
+		expect(card.fork).toMatchObject({ repo: "user-a", servedBy: { repo: "stock", ref: TAG }, safetyFallback: { tag: TAG, from: "v0.9.0" } });
+		expect(askState).toHaveBeenCalledTimes(1);
 	});
 });
 

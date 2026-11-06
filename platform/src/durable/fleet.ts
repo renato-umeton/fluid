@@ -77,6 +77,25 @@ export interface FleetFork {
 	baseline: BaselineRecord | null;
 }
 
+/** The renamed copy a fork serves, as a check mode gate verified it (polymorph/). Never part of FleetFork, which the public stream carries. */
+export interface MorphState {
+	epoch: number;
+	/** The commit the copy was verified at: only that commit runs renamed. */
+	sha: string;
+	/** Eight hex characters naming the copy. */
+	fingerprint: string;
+	/** namesHash of the names the verified copy renamed. */
+	namesHash: string;
+	/** When it was stored. */
+	at: string;
+}
+
+/** What the ask path needs to know about a fork, in one call. */
+export interface AskState {
+	fallback: SafetyFallback | null;
+	morph: MorphState | null;
+}
+
 export const SECURITY_EVENT_KINDS = ["tripwire", "rotated", "rotation_refused"] as const;
 /** A request tripped a wire of a renamed copy, or a rotation moved a fork to a new copy or was refused. */
 export type SecurityEventKind = (typeof SECURITY_EVENT_KINDS)[number];
@@ -144,6 +163,11 @@ export class Fleet extends DurableObject<Env> {
 		if (!columns.includes("pending_upgrade")) sql.exec("ALTER TABLE forks ADD COLUMN pending_upgrade TEXT");
 		if (!columns.includes("health")) sql.exec("ALTER TABLE forks ADD COLUMN health TEXT");
 		if (!columns.includes("baseline")) sql.exec("ALTER TABLE forks ADD COLUMN baseline TEXT");
+		if (!columns.includes("morph_epoch")) sql.exec("ALTER TABLE forks ADD COLUMN morph_epoch INTEGER");
+		if (!columns.includes("morph_sha")) sql.exec("ALTER TABLE forks ADD COLUMN morph_sha TEXT");
+		if (!columns.includes("morph_fp")) sql.exec("ALTER TABLE forks ADD COLUMN morph_fp TEXT");
+		if (!columns.includes("morph_names_hash")) sql.exec("ALTER TABLE forks ADD COLUMN morph_names_hash TEXT");
+		if (!columns.includes("morph_at")) sql.exec("ALTER TABLE forks ADD COLUMN morph_at TEXT");
 		sql.exec("CREATE TABLE IF NOT EXISTS health_history (seq INTEGER PRIMARY KEY AUTOINCREMENT, repo TEXT NOT NULL, event TEXT NOT NULL)");
 		sql.exec("CREATE INDEX IF NOT EXISTS health_history_repo ON health_history (repo, seq)");
 		sql.exec("CREATE TABLE IF NOT EXISTS security_events (seq INTEGER PRIMARY KEY AUTOINCREMENT, repo TEXT NOT NULL, event TEXT NOT NULL)");
@@ -293,6 +317,25 @@ export class Fleet extends DurableObject<Env> {
 
 	// ---------- polymorphic copies ----------
 
+	/** The verified renamed copy a fork serves, or null: then it runs plain. */
+	morphState(repo: string): MorphState | null {
+		const row = this.ctx.storage.sql.exec("SELECT morph_epoch, morph_sha, morph_fp, morph_names_hash, morph_at FROM forks WHERE repo = ?", repo).toArray()[0];
+		if (!row || row.morph_epoch === null || row.morph_epoch === undefined) return null;
+		return { epoch: row.morph_epoch as number, sha: row.morph_sha as string, fingerprint: row.morph_fp as string, namesHash: row.morph_names_hash as string, at: row.morph_at as string };
+	}
+
+	/**
+	 * Stores the copy a gate verified for a fork, replacing the one before, or
+	 * clears it with null. Null when the fork is not in the fleet. Nothing is
+	 * broadcast: which copy a fork runs is the platform's own business.
+	 */
+	setMorph(repo: string, state: Omit<MorphState, "at"> | null, at = Date.now()): MorphState | null {
+		if (state !== null) checkMorphState(state);
+		const values = state === null ? [null, null, null, null, null] : [state.epoch, state.sha, state.fingerprint, state.namesHash, new Date(at).toISOString()];
+		const updated = this.ctx.storage.sql.exec("UPDATE forks SET morph_epoch = ?, morph_sha = ?, morph_fp = ?, morph_names_hash = ?, morph_at = ? WHERE repo = ? RETURNING repo", ...values, repo).toArray();
+		return updated.length > 0 ? this.morphState(repo) : null;
+	}
+
 	/**
 	 * Records a security event for a fork, keeping the latest
 	 * SECURITY_EVENTS_PER_REPO, and tells stream subscribers only that one
@@ -369,6 +412,15 @@ export class Fleet extends DurableObject<Env> {
 		if (!latest || compareTagsAsc(fork.pinnedTag, latest.tag) >= 0) return null;
 		if (fork.pendingUpgrade && compareTagsAsc(fork.pendingUpgrade.tag, latest.tag) >= 0) return null;
 		return { tag: latest.tag, from: fork.pinnedTag, graceUntil: latest.graceUntil! };
+	}
+
+	/**
+	 * What the ask path needs to know about a fork, in one call: the stock
+	 * release that answers for it once a safety grace period is over
+	 * (safetyFallback), and the verified renamed copy it serves (morphState).
+	 */
+	askState(repo: string, now = Date.now()): AskState {
+		return { fallback: this.safetyFallback(repo, now), morph: this.morphState(repo) };
 	}
 
 	/** Stores a gate result for GET /api/gates/:repo, keeping the most recent per repo. */
@@ -611,6 +663,17 @@ export function compareTagsAsc(a: string, b: string): number {
 	const pb = b.replace(/^v/, "").split(/[.-]/).map((x) => Number(x) || 0);
 	for (let i = 0; i < 3; i++) if (pa[i] !== pb[i]) return (pa[i] ?? 0) - (pb[i] ?? 0);
 	return 0;
+}
+
+const COMMIT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+const HEX8 = /^[0-9a-f]{8}$/;
+
+/** A stored copy must name one: the live path seeds it from the epoch and commit and compares the hash. */
+function checkMorphState(state: Omit<MorphState, "at">): void {
+	if (!Number.isSafeInteger(state.epoch) || state.epoch < 0) throw new Error(`setMorph: epoch must be a non-negative integer, got ${JSON.stringify(state.epoch)}`);
+	if (typeof state.sha !== "string" || !COMMIT_ID.test(state.sha)) throw new Error(`setMorph: sha must be a full lowercase commit id, got ${JSON.stringify(state.sha)}`);
+	if (typeof state.fingerprint !== "string" || !HEX8.test(state.fingerprint)) throw new Error("setMorph: fingerprint must be eight lowercase hex characters");
+	if (typeof state.namesHash !== "string" || !HEX8.test(state.namesHash)) throw new Error("setMorph: namesHash must be eight lowercase hex characters");
 }
 
 export function sse(event: string, data: unknown): string {
