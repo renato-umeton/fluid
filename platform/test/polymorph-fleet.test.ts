@@ -147,12 +147,37 @@ describe("Fleet security events", () => {
 		expect(fleet.securityEvents("user-a")).toEqual([]);
 	});
 
+	it("reach the stream at most once per fork and kind every 10 seconds, and never for a refused rotation", async () => {
+		const fleet = fleetWith("user-a", "user-b");
+		const response = await fleet.fetch(new Request("https://fleet/stream", { headers: { "x-fluid-client": "203.0.113.8" } }));
+		const reader = response.body!.getReader();
+		const record = (repo: string, kind: "tripwire" | "rotated" | "rotation_refused", after: number) => fleet.recordSecurityEvent(repo, { kind }, t0 + after);
+		record("user-a", "tripwire", 0);
+		record("user-a", "tripwire", 1_000);
+		record("user-a", "rotated", 2_000);
+		record("user-b", "tripwire", 3_000);
+		record("user-a", "rotation_refused", 4_000);
+		record("user-a", "tripwire", 9_999);
+		record("user-a", "tripwire", 10_000);
+		// A fork event after them marks where they end.
+		fleet.register({ ...fork("user-c"), status: "pinned" });
+		const events = await readUntil(reader, "fork");
+		await reader.cancel();
+		expect(events.filter((event) => event.type === "security").map((event) => event.data)).toEqual([
+			{ type: "security", repo: "user-a", kind: "tripwire", at: iso(t0) },
+			{ type: "security", repo: "user-a", kind: "rotated", at: iso(t0 + 2_000) },
+			{ type: "security", repo: "user-b", kind: "tripwire", at: iso(t0 + 3_000) },
+			{ type: "security", repo: "user-a", kind: "tripwire", at: iso(t0 + 10_000) },
+		]);
+		expect(fleet.securityEvents("user-a")).toHaveLength(6);
+	});
+
 	it("tell stream subscribers the repo, the kind, and the time, and nothing more", async () => {
 		const fleet = fleetWith("user-a");
 		const response = await fleet.fetch(new Request("https://fleet/stream", { headers: { "x-fluid-client": "203.0.113.7" } }));
 		const reader = response.body!.getReader();
 		fleet.recordSecurityEvent("user-a", { kind: "tripwire", detail: hit }, t0);
-		const { raw, data } = await nextEvent(reader, "security");
+		const { raw, data } = (await readUntil(reader, "security")).at(-1)!;
 		await reader.cancel();
 		expect(data).toEqual({ type: "security", repo: "user-a", kind: "tripwire", at: iso(t0) });
 		for (const secret of [hit.name, hit.path, hit.fingerprint, "decoy"]) expect(raw).not.toContain(secret);
@@ -190,17 +215,22 @@ describe("serveAsk", () => {
 	});
 });
 
-/** Reads server-sent events until one of the given type arrives; returns its text and its parsed data. */
-async function nextEvent(reader: ReadableStreamDefaultReader<Uint8Array>, type: string): Promise<{ raw: string; data: unknown }> {
+/** Reads server-sent events until one of the given type arrives; returns every event read, in order, with its text and parsed data. */
+async function readUntil(reader: ReadableStreamDefaultReader<Uint8Array>, type: string): Promise<{ type: string; raw: string; data: unknown }[]> {
 	const decoder = new TextDecoder();
+	const events: { type: string; raw: string; data: unknown }[] = [];
 	let buffer = "";
 	for (;;) {
 		const { value, done } = await reader.read();
 		if (done) throw new Error(`the stream ended before a ${type} event`);
 		buffer += decoder.decode(value, { stream: true });
-		for (const block of buffer.split("\n\n")) {
+		for (let end = buffer.indexOf("\n\n"); end !== -1; end = buffer.indexOf("\n\n")) {
+			const block = buffer.slice(0, end);
+			buffer = buffer.slice(end + 2);
 			const match = /^event: (\S+)\ndata: (.*)$/s.exec(block);
-			if (match?.[1] === type) return { raw: block, data: JSON.parse(match[2]!) };
+			if (match === null) continue;
+			events.push({ type: match[1]!, raw: block, data: JSON.parse(match[2]!) });
+			if (match[1] === type) return events;
 		}
 	}
 }

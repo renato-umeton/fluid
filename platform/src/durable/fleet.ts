@@ -128,6 +128,15 @@ export type FleetEvent =
 const GATES_PER_REPO = 20;
 const HEALTH_HISTORY_PER_REPO = 50;
 export const SECURITY_EVENTS_PER_REPO = 100;
+/**
+ * A fork's security events reach the public stream at most once per kind in
+ * this window, so a flood of tripwire hits is one line on the fleet view (and
+ * shows an onlooker nothing about each request); every event is recorded.
+ */
+export const SECURITY_BROADCAST_WINDOW_MS = 10_000;
+/** Kinds recorded but never broadcast: a refused rotation changes nothing a fork serves. */
+const QUIET_SECURITY_KINDS: ReadonlySet<SecurityEventKind> = new Set(["rotation_refused"]);
+const SECURITY_BROADCAST_KEYS_LIMIT = 1000;
 
 const encoder = new TextEncoder();
 const HEARTBEAT_MS = 25_000;
@@ -152,6 +161,8 @@ interface Subscriber {
 export class Fleet extends DurableObject<Env> {
 	private subscribers = new Set<Subscriber>();
 	private heartbeat: ReturnType<typeof setInterval> | null = null;
+	/** When each repo:kind last reached the stream. */
+	private securityBroadcasts = new Map<string, number>();
 
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
@@ -344,8 +355,9 @@ export class Fleet extends DurableObject<Env> {
 	/**
 	 * Records a security event for a fork, its detail values clipped, keeping
 	 * the latest SECURITY_EVENTS_PER_REPO, and tells stream subscribers only
-	 * that one happened: the repo, the kind, and the time. Null when the fork
-	 * is not in the fleet.
+	 * that one happened: the repo, the kind, and the time, at most once per
+	 * fork and kind every SECURITY_BROADCAST_WINDOW_MS, and never for a refused
+	 * rotation. Null when the fork is not in the fleet.
 	 */
 	recordSecurityEvent(repo: string, input: { kind: SecurityEventKind; detail?: Record<string, Json> }, at = Date.now()): SecurityEvent | null {
 		if (!SECURITY_EVENT_KINDS.includes(input.kind)) throw new Error(`recordSecurityEvent: unknown kind ${JSON.stringify(input.kind)}; kinds are ${SECURITY_EVENT_KINDS.join(", ")}`);
@@ -356,8 +368,21 @@ export class Fleet extends DurableObject<Env> {
 		const sql = this.ctx.storage.sql;
 		sql.exec("INSERT INTO security_events (repo, event) VALUES (?, ?)", repo, JSON.stringify(event));
 		sql.exec("DELETE FROM security_events WHERE repo = ? AND seq NOT IN (SELECT seq FROM security_events WHERE repo = ? ORDER BY seq DESC LIMIT ?)", repo, repo, SECURITY_EVENTS_PER_REPO);
-		this.broadcast({ type: "security", repo, kind: event.kind, at: event.at });
+		if (this.securityBroadcastDue(repo, event.kind, at)) this.broadcast({ type: "security", repo, kind: event.kind, at: event.at });
 		return event;
+	}
+
+	/** Whether an event of this kind for this fork goes to the stream now: not a quiet kind, and none went in the last window. */
+	private securityBroadcastDue(repo: string, kind: SecurityEventKind, at: number): boolean {
+		if (QUIET_SECURITY_KINDS.has(kind)) return false;
+		const key = `${repo}:${kind}`;
+		const last = this.securityBroadcasts.get(key);
+		if (last !== undefined && at - last < SECURITY_BROADCAST_WINDOW_MS) return false;
+		if (this.securityBroadcasts.size >= SECURITY_BROADCAST_KEYS_LIMIT) {
+			for (const [seen, time] of this.securityBroadcasts) if (at - time >= SECURITY_BROADCAST_WINDOW_MS) this.securityBroadcasts.delete(seen);
+		}
+		this.securityBroadcasts.set(key, at);
+		return true;
 	}
 
 	/** A fork's security events, newest first. */
