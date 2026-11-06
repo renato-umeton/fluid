@@ -41,6 +41,17 @@ export async function fingerprint(seed: string): Promise<string> {
 	return hex(await sign(await seedKey(seed), "polymorph:v1:fingerprint")).slice(0, 8);
 }
 
+/**
+ * Eight hex characters naming which listed names a copy renamed: SHA-256 over
+ * the names, sorted and joined with ",", which no name contains. A copy is the
+ * one the gate verified only when its seed and this hash both match, since a
+ * platform change could skip different names with the same seed.
+ */
+export async function namesHash(names: Iterable<string>): Promise<string> {
+	const sorted = [...new Set(names)].sort();
+	return hex(new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(sorted.join(","))))).slice(0, 8);
+}
+
 async function seedKey(seed: string): Promise<CryptoKey> {
 	if (typeof seed !== "string" || !SEED_PATTERN.test(seed)) throw new Error("polymorph seed must be 64 lowercase hex characters, as deriveSeed returns");
 	return hmacKey(seed);

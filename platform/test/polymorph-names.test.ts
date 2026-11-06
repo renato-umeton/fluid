@@ -1,8 +1,8 @@
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import stockSource from "../src/generated/stock-source.json";
 import { POLYMORPH_LIST_PATH, RESERVED_NAMES, parsePolymorphList, runtimeBuiltInNames } from "../src/polymorph/list.ts";
-import { VARIANT_PATTERN, deriveSeed, fingerprint, variantNames } from "../src/polymorph/names.ts";
+import { VARIANT_PATTERN, deriveSeed, fingerprint, namesHash, variantNames } from "../src/polymorph/names.ts";
 
 const files = stockSource.files as Record<string, string>;
 const stockNames: string[] = JSON.parse(files["polymorph.json"]!).names;
@@ -192,5 +192,26 @@ describe("fingerprint", () => {
 
 	it("refuses a seed that did not come from deriveSeed", async () => {
 		await expect(fingerprint("abc")).rejects.toThrow(/seed/);
+	});
+});
+
+describe("namesHash", () => {
+	it("is the first eight hex characters of SHA-256 over the sorted names, so a stored hash stays valid", async () => {
+		expect(await namesHash(["b", "a"])).toBe(createHash("sha256").update("a,b").digest("hex").slice(0, 8));
+		expect(await namesHash(["weightKg", "evidence"])).toBe("7890c422");
+	});
+
+	it("depends on the set of names only: not their order, not repeats", async () => {
+		const hash = await namesHash(stockNames);
+		expect(await namesHash([...stockNames].reverse())).toBe(hash);
+		expect(await namesHash([...stockNames, ...stockNames])).toBe(hash);
+		expect(await namesHash(new Map(stockNames.map((name) => [name, name])).keys())).toBe(hash);
+	});
+
+	it("changes when a name is skipped, and cannot confuse two sets by how they join", async () => {
+		const hash = await namesHash(stockNames);
+		expect(await namesHash(stockNames.filter((name) => name !== "weightKg"))).not.toBe(hash);
+		expect(await namesHash(["ab", "c"])).not.toBe(await namesHash(["a", "bc"]));
+		expect(await namesHash([])).toMatch(/^[0-9a-f]{8}$/);
 	});
 });
