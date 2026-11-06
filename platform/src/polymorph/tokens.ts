@@ -44,27 +44,36 @@ export class PolymorphUnavailableError extends Error {
 export const scanTokens = tokenScanner(parse, TokenType);
 
 /**
- * How much JavaScript the renamer reads, so a copy fits in a 128 MB Worker:
+ * How much text the renamer reads, so a copy fits in a 128 MB Worker:
  * sucrase holds about 48 bytes per source character while it parses one
- * module, and the tokens kept for every module add about 7 more. Stock's
- * runtime is about 60 KB of JavaScript.
+ * module, and the tokens kept for every module add about 7 more. A JSON
+ * module counts toward the same limits, since the skip step reads every key
+ * and string of it. Stock's runtime is about 60 KB of JavaScript and 10 KB
+ * of JSON.
  */
 export const SCAN_LIMITS = { moduleChars: 256 * 1024, totalChars: 1024 * 1024 } as const;
 
 /**
  * The tokens of every JS module a copy renames (all but the generated entry),
  * read once each, keyed by module path. Throws PolymorphUnavailableError,
- * naming the module where there is one, when the code is larger than
- * SCAN_LIMITS (checked before anything is read) or cannot be read.
+ * naming the module where there is one, when the code and JSON are larger
+ * than SCAN_LIMITS (checked before any module is parsed) or cannot be read.
  */
 export function scanModuleMap(map: ModuleMap): Map<string, SourceTokens> {
 	const modules = Object.entries(map.modules).flatMap(([path, module]) => (path !== ENTRY_MODULE && "js" in module ? [{ path, js: module.js }] : []));
 	let total = 0;
-	for (const { path, js } of modules) {
-		if (js.length > SCAN_LIMITS.moduleChars) throw new PolymorphUnavailableError(`${path}: polymorph: the module has ${js.length} characters, more than the ${SCAN_LIMITS.moduleChars} characters the renamer reads in one module`);
-		total += js.length;
+	for (const [path, module] of Object.entries(map.modules)) {
+		if (path === ENTRY_MODULE) continue;
+		if ("js" in module) {
+			if (module.js.length > SCAN_LIMITS.moduleChars) throw new PolymorphUnavailableError(`${path}: polymorph: the module has ${module.js.length} characters, more than the ${SCAN_LIMITS.moduleChars} characters the renamer reads in one module`);
+			total += module.js.length;
+			continue;
+		}
+		const size = jsonTextSize(module.json, SCAN_LIMITS.moduleChars);
+		if (size > SCAN_LIMITS.moduleChars) throw new PolymorphUnavailableError(`${path}: polymorph: the module has more than the ${SCAN_LIMITS.moduleChars} characters of keys and strings the renamer reads in one module`);
+		total += size;
 	}
-	if (total > SCAN_LIMITS.totalChars) throw new PolymorphUnavailableError(`polymorph: the fork has ${total} characters of JavaScript, more than the ${SCAN_LIMITS.totalChars} characters of JavaScript the renamer reads`);
+	if (total > SCAN_LIMITS.totalChars) throw new PolymorphUnavailableError(`polymorph: the fork has ${total} characters of JavaScript and JSON text, more than the ${SCAN_LIMITS.totalChars} characters of JavaScript and JSON text the renamer reads`);
 	const scanned = new Map<string, SourceTokens>();
 	for (const { path, js } of modules) {
 		try {
@@ -75,6 +84,61 @@ export function scanModuleMap(map: ModuleMap): Map<string, SourceTokens> {
 		}
 	}
 	return scanned;
+}
+
+/**
+ * The size of a JSON value as the skip step reads it: the characters of every
+ * key and string, and one for every other value, so a long array of numbers
+ * counts too. Every visit counts at least one, so counting stops soon after
+ * passing limit.
+ */
+function jsonTextSize(value: unknown, limit: number): number {
+	let size = 0;
+	walkJson(value, (kind, text) => {
+		size += kind === "other" ? 1 : Math.max(1, text.length);
+		return size <= limit;
+	});
+	return size;
+}
+
+interface JsonCursor {
+	container: unknown[] | Record<string, unknown>;
+	/** An object's keys; null for an array. */
+	keys: string[] | null;
+	next: number;
+}
+
+/**
+ * Visits a JSON value depth first in document order: each object key and
+ * then its value, each array element, and every string. visit gets "other"
+ * (and no text) for a number, boolean, null, array, or object, and returns
+ * false to stop. Iterative, with one cursor per nesting level, so neither deep
+ * nesting nor a long array costs more than that.
+ */
+export function walkJson(value: unknown, visit: (kind: "key" | "string" | "other", text: string) => boolean): void {
+	const cursors: JsonCursor[] = [];
+	const enter = (item: unknown): boolean => {
+		if (typeof item === "string") return visit("string", item);
+		if (Array.isArray(item)) cursors.push({ container: item, keys: null, next: 0 });
+		else if (typeof item === "object" && item !== null) cursors.push({ container: item as Record<string, unknown>, keys: Object.keys(item), next: 0 });
+		return visit("other", "");
+	};
+	if (!enter(value)) return;
+	while (cursors.length > 0) {
+		const cursor = cursors[cursors.length - 1]!;
+		const { container, keys } = cursor;
+		if (cursor.next >= (keys ?? (container as unknown[])).length) {
+			cursors.pop();
+			continue;
+		}
+		const index = cursor.next++;
+		if (keys === null) {
+			if (!enter((container as unknown[])[index])) return;
+			continue;
+		}
+		const key = keys[index]!;
+		if (!visit("key", key) || !enter((container as Record<string, unknown>)[key])) return;
+	}
 }
 
 interface TokenKinds {

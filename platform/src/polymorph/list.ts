@@ -7,7 +7,7 @@
 // expression, or JSON key or value can be read back as a property name at run
 // time, and that use would not be renamed.
 import type { ModuleMap } from "../runtime/modules.ts";
-import { scanModuleMap, type SourceTokens } from "./tokens.ts";
+import { scanModuleMap, walkJson, type SourceTokens } from "./tokens.ts";
 
 /** Where stock publishes the list. */
 export const POLYMORPH_LIST_PATH = "polymorph.json";
@@ -242,54 +242,37 @@ export function usableNames(
 function textUses(names: readonly string[], map: ModuleMap, scanned: ReadonlyMap<string, SourceTokens>): SkippedName[] {
 	const uses: SkippedName[] = [];
 	if (names.length === 0) return uses;
+	const listed = new Set(names);
+	// Two kinds of text per module, each with the listed names found in it, and the reason each gives.
+	const record = (path: string, found: [Set<string>, string][]): void => {
+		for (const name of names) for (const [inText, reason] of found) if (inText.has(name)) uses.push({ name, reason: `${reason} ${path}` });
+	};
 	for (const [path, module] of Object.entries(map.modules)) {
 		if ("js" in module) {
 			const tokens = scanned.get(path);
 			if (tokens === undefined) continue;
-			const { strings, regexes } = tokens;
-			const stringWords = wordsOf(strings);
-			const regexWords = wordsOf(regexes);
-			for (const name of names) {
-				if (stringWords.has(name)) uses.push({ name, reason: `appears in a string or template text in ${path}` });
-				if (regexWords.has(name)) uses.push({ name, reason: `appears in a regular expression in ${path}` });
-			}
+			const inStrings = new Set<string>();
+			const inRegexes = new Set<string>();
+			for (const text of tokens.strings) addListedWords(text, listed, inStrings);
+			for (const text of tokens.regexes) addListedWords(text, listed, inRegexes);
+			record(path, [[inStrings, "appears in a string or template text in"], [inRegexes, "appears in a regular expression in"]]);
 		} else {
-			const { keys, strings } = jsonText(module.json);
-			const keyWords = wordsOf(keys);
-			const valueWords = wordsOf(strings);
-			for (const name of names) {
-				if (keyWords.has(name)) uses.push({ name, reason: `appears in a key in ${path}` });
-				if (valueWords.has(name)) uses.push({ name, reason: `appears in a string value in ${path}` });
-			}
+			const inKeys = new Set<string>();
+			const inValues = new Set<string>();
+			walkJson(module.json, (kind, text) => {
+				if (kind !== "other") addListedWords(text, listed, kind === "key" ? inKeys : inValues);
+				return true;
+			});
+			record(path, [[inKeys, "appears in a key in"], [inValues, "appears in a string value in"]]);
 		}
 	}
 	return uses;
 }
 
-/** Identifier-like words of the texts: the pieces a property name could be read back from at run time. */
-function wordsOf(texts: readonly string[]): Set<string> {
-	const words = new Set<string>();
-	for (const text of texts) for (const word of text.match(/[A-Za-z0-9_$]+/g) ?? []) words.add(word);
-	return words;
-}
+/** Identifier-like words: the pieces of a text a property name could be read back from at run time. */
+const WORD = /[A-Za-z0-9_$]+/g;
 
-/** Every key and string value of a JSON value. Iterative, so deeply nested data cannot overflow the stack. */
-function jsonText(value: unknown): { keys: string[]; strings: string[] } {
-	const keys: string[] = [];
-	const strings: string[] = [];
-	const pending: unknown[] = [value];
-	while (pending.length > 0) {
-		const item = pending.pop();
-		if (typeof item === "string") {
-			strings.push(item);
-		} else if (Array.isArray(item)) {
-			for (const inner of item) pending.push(inner);
-		} else if (item !== null && typeof item === "object") {
-			for (const [key, inner] of Object.entries(item)) {
-				keys.push(key);
-				pending.push(inner);
-			}
-		}
-	}
-	return { keys, strings };
+/** Adds to found each listed name that is a whole word of text. One check per word, keeping no other word, so a large text costs no memory. */
+function addListedWords(text: string, listed: ReadonlySet<string>, found: Set<string>): void {
+	for (const [word] of text.matchAll(WORD)) if (listed.has(word)) found.add(word);
 }

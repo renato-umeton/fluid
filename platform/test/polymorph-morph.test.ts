@@ -194,6 +194,27 @@ describe("scanModuleMap", () => {
 		expectUnavailable(() => scanModuleMap(forkMap(files)), /more than the 1048576 characters of JavaScript/);
 	});
 
+	it("counts the keys and strings of a JSON module against what it can afford, and names it", () => {
+		const map = forkMap({ "policies/big.json": JSON.stringify({ note: "x".repeat(SCAN_LIMITS.moduleChars) }) });
+		expectUnavailable(() => scanModuleMap(map), /^policies\/big\.json: .*more than the 262144 characters/);
+	});
+
+	it("counts every JSON value, so a long array of numbers is not read for free", () => {
+		const map = forkMap({ "policies/numbers.json": JSON.stringify(new Array(SCAN_LIMITS.moduleChars + 1).fill(0)) });
+		expectUnavailable(() => scanModuleMap(map), /^policies\/numbers\.json: .*more than the 262144 characters/);
+	});
+
+	it("will not read more JavaScript and JSON text in all than it can afford", () => {
+		const part = JSON.stringify({ note: "x".repeat(SCAN_LIMITS.moduleChars - 100) });
+		const files = Object.fromEntries(Array.from({ length: 5 }, (_, i) => [`policies/part${i}.json`, part]));
+		expectUnavailable(() => scanModuleMap(forkMap(files)), /more than the 1048576 characters of JavaScript and JSON text/);
+	});
+
+	it("reads a JSON module nested deeper than any stack would allow", () => {
+		const deep = `${"[".repeat(100_000)}"secretName"${"]".repeat(100_000)}`;
+		expect(usableNames(suffixed("secretName"), forkMap({ "policies/deep.json": deep })).skipped).toEqual([{ name: "secretName", reason: "appears in a string value in policies/deep.json" }]);
+	});
+
 	it("cannot read a module sucrase does not parse, and names it", () => {
 		expectUnavailable(() => scanModuleMap(forkMap({ "connectors/broken.js": "export const = ;" })), /^connectors\/broken\.js: .*cannot parse/);
 	});
