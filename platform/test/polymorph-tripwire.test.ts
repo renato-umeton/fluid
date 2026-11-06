@@ -108,12 +108,14 @@ describe("scanRequest", () => {
 });
 
 describe("ForkTripwireError", () => {
-	it("carries the hit and names the key it refused", () => {
-		const hit = { kind: "decoy" as const, name: "researchNeedsAttestation", path: "context.display.researchNeedsAttestation" };
-		const error = new ForkTripwireError(hit);
-		expect(error).toBeInstanceOf(Error);
-		expect(error.name).toBe("ForkTripwireError");
-		expect(error.hit).toEqual(hit);
-		expect(error.message).toContain("context.display.researchNeedsAttestation");
+	it("carries the hit for logs and says the same thing for every hit", () => {
+		const decoy = { kind: "decoy" as const, name: "researchNeedsAttestation", path: "context.display.researchNeedsAttestation" };
+		const foreign = { kind: "foreign" as const, name: "evidence", path: `context.${otherCopy}` };
+		const errors = [new ForkTripwireError(decoy), new ForkTripwireError(foreign)];
+		expect(errors[0]).toBeInstanceOf(Error);
+		expect(errors[0]!.name).toBe("ForkTripwireError");
+		expect(errors.map((error) => error.hit)).toEqual([decoy, foreign]);
+		expect(errors[0]!.message).toBe(errors[1]!.message);
+		expect(errors[0]!.message).not.toMatch(/researchNeedsAttestation|evidence|context|decoy|foreign/);
 	});
 });

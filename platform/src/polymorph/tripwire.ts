@@ -21,10 +21,12 @@ export interface TripwireHit {
 export const TRIPWIRE_LIMITS = { maxDepth: 32, maxKeys: 10_000 } as const;
 
 export class ForkTripwireError extends Error {
+	/** Which key tripped which wire, for logs; never part of the message. */
 	readonly hit: TripwireHit;
 
 	constructor(hit: TripwireHit) {
-		super(`request refused: ${hit.path} uses ${hit.kind === "decoy" ? "an internal name from the public source" : "an internal name of another running copy"} (${hit.name})`);
+		// One message for every hit, so whoever sent the request learns nothing about which wire it tripped.
+		super("request refused: it names an internal identifier");
 		this.name = "ForkTripwireError";
 		this.hit = hit;
 	}
@@ -33,8 +35,11 @@ export class ForkTripwireError extends Error {
 /**
  * The first request key that trips a wire, or null. Walks the keys of plain
  * objects and arrays at any depth; values are never inspected. This copy's
- * own renamed names are not flagged. Throws a RangeError for a request deeper
- * or wider than TRIPWIRE_LIMITS: callers refuse such a request.
+ * own renamed names are not flagged. It expects JSON data, such as a parsed
+ * request body: a getter on a plain object runs when its key is walked, and an
+ * object with any other prototype (a Date, a Map, a class instance) is not
+ * walked. Throws a RangeError for a request deeper or wider than
+ * TRIPWIRE_LIMITS: callers refuse such a request.
  */
 export function scanRequest(request: unknown, names: ReadonlyMap<string, string>): TripwireHit | null {
 	const pending: { value: unknown; path: string; depth: number }[] = [{ value: request, path: "", depth: 1 }];
