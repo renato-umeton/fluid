@@ -12,7 +12,7 @@ import { loadPolymorphList } from "../src/polymorph/install.ts";
 import { POLYMORPH_LIST_PATH, parsePolymorphList } from "../src/polymorph/list.ts";
 import { deriveSeed, fingerprint, namesHash } from "../src/polymorph/names.ts";
 import { SCAN_LIMITS } from "../src/polymorph/tokens.ts";
-import { askCard, loadForkRuntime, type LoadedFork, type RuntimeDeps } from "../src/runtime/loader.ts";
+import { askCard, askLoaded, ForkRuntimeError, loadForkRuntime, type LoadedFork, type RuntimeDeps } from "../src/runtime/loader.ts";
 import { releaseMetadata, releaseMetadataPath } from "../src/stock/releases.ts";
 import { apiEnv } from "./helpers/api-env.ts";
 import { fakeLoader } from "./helpers/fake-loader.ts";
@@ -29,6 +29,27 @@ const SLOW_MS = 60_000;
 const release = (tag: string): Record<string, string> => ({ [releaseMetadataPath(tag)]: `${JSON.stringify(releaseMetadata({ tag, date: new Date("2026-10-04T00:00:00Z") }), null, 2)}\n` });
 const published: Record<string, string> = { ...stockFiles, ...release(TAG) };
 const withoutList = Object.fromEntries(Object.entries(published).filter(([path]) => path !== POLYMORPH_LIST_PATH));
+/** Stock with one file patched; the anchor must still be there, so a stock change cannot quietly empty a test. */
+function patched(path: string, anchor: string, replacement: string): Record<string, string> {
+	const text = published[path]!;
+	if (!text.includes(anchor)) throw new Error(`stock ${path} no longer contains ${JSON.stringify(anchor)}`);
+	return { ...published, [path]: text.replace(anchor, replacement) };
+}
+
+// A fork that turns the decision's keys, several of them listed names, into
+// card text and into an error message: in a copy, those keys are renamed.
+const BUILD_CARD = "  return buildCard({ request, env, decision, classification, signals, config, answerId: newAnswerId(env) });";
+const reflecting = patched(
+	"app/index.ts",
+	BUILD_CARD,
+	[
+		'  const fields = Object.keys(decision).join(", ");',
+		'  if (request.question.startsWith("Which decision fields")) throw new Error("decision fields: " + fields);',
+		"  const card = await buildCard({ request, env, decision, classification, signals, config, answerId: newAnswerId(env) });",
+		'  return { ...card, framing: [...card.framing, "decision fields: " + fields] };',
+	].join("\n"),
+);
+
 /** The stock fork pinned to another stock release. */
 const pinnedTo = (tag: string): Record<string, string> => ({ ...published, "fluid.toml": setTomlValue(published["fluid.toml"]!, null, "stock_tag", tag) });
 
@@ -65,6 +86,7 @@ beforeAll(() => {
 		"user-broken": pinnedTo("v0.8.0"),
 		// More JavaScript in one module than the renamer reads: V8 runs it, the renamer will not.
 		"user-big": { ...published, "app/big.js": `// ${"x".repeat(SCAN_LIMITS.moduleChars)}\nexport const big = 1;\n` },
+		"user-reflect": reflecting,
 	};
 	for (const [repo, files] of Object.entries(forks)) heads[repo] = t.artifacts.seed(repo, { commits: [files] }).commits[0]!;
 	loader = fakeLoader();
@@ -234,5 +256,46 @@ describe("loadForkRuntime with a renamed copy", () => {
 		const loaded = await loadForkRuntime(deps, "user-1", "main");
 		expect([loaded.isolateId, loaded.morph]).toEqual([`user-1:${heads["user-1"]}`, null]);
 		expect(warn).not.toHaveBeenCalled();
+	});
+});
+
+describe("asking a renamed copy", () => {
+	const which = { question: "Which decision fields are set?", context: {} };
+
+	it(
+		"maps the copy's names back in its card, so the card reads as the plain fork's",
+		async () => {
+			const plain = await loadForkRuntime(deps, "user-reflect", "main");
+			const copy = await loadForkRuntime(deps, "user-reflect", "main", { morph: { epoch: 1 } });
+			// What the copy itself sends: its renamed names, which must not get any further.
+			expect(await copy.fork.ask(requests.heldResearch, {})).toMatch(/researchNeedsAttestation\$[0-9a-z]{8}/);
+			for (const request of Object.values(requests)) {
+				const card = await askLoaded(copy, request);
+				expect(JSON.stringify(card)).not.toMatch(/\$[0-9a-z]{8}/);
+				expect(cardDifferences(await askLoaded(plain, request), card)).toEqual([]);
+			}
+			expect((await askLoaded(copy, requests.heldResearch)).framing).toContainEqual(expect.stringContaining("researchNeedsAttestation"));
+		},
+		SLOW_MS,
+	);
+
+	it(
+		"maps the copy's names back in its errors, so they read as the plain fork's",
+		async () => {
+			const plain = await loadForkRuntime(deps, "user-reflect", "main");
+			const copy = await loadForkRuntime(deps, "user-reflect", "main", { morph: { epoch: 1 } });
+			const error = (await askLoaded(copy, which).catch((thrown: unknown) => thrown)) as Error;
+			expect(error).toBeInstanceOf(ForkRuntimeError);
+			expect(error.message).toMatch(/^decision fields: .*researchNeedsAttestation/);
+			expect(error.message).not.toMatch(/\$[0-9a-z]{8}/);
+			expect(error.message).toBe(((await askLoaded(plain, which).catch((thrown: unknown) => thrown)) as Error).message);
+		},
+		SLOW_MS,
+	);
+
+	it("asks a plain fork exactly as askCard does", async () => {
+		const plain = await loadForkRuntime(deps, "user-reflect", "main");
+		expect(cardDifferences(await askLoaded(plain, requests.research), await askCard(plain.fork, requests.research))).toEqual([]);
+		await expect(askLoaded(plain, which)).rejects.toThrow(/^decision fields: /);
 	});
 });

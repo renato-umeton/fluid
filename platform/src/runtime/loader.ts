@@ -8,6 +8,7 @@
 import synthetic from "../generated/synthetic.json";
 import { buildCopy, planCopy } from "../polymorph/install.ts";
 import type { SkippedName } from "../polymorph/list.ts";
+import { unmorphText } from "../polymorph/morph.ts";
 import { PolymorphUnavailableError } from "../polymorph/tokens.ts";
 import { buildE2ERunnerModuleMap, buildModuleMap, buildRunnerModuleMap, isRuntimePath, RUNTIME_DIRS, type ModuleMap } from "./modules.ts";
 import { resolveCommit, shortRef } from "./refs.ts";
@@ -41,11 +42,6 @@ export interface ForkEntrypoint {
 /** Largest card text accepted from a fork. */
 export const MAX_CARD_CHARS = 256 * 1024;
 
-/**
- * Asks a fork and parses its card. The fork serializes the card itself, so
- * the platform and the gate only ever see plain JSON data: no RPC stubs,
- * getters, or toJSON methods that could answer differently on each read.
- */
 /** The fork's own code threw while answering, or answered with something that is not a card. */
 export class ForkRuntimeError extends Error {
 	constructor(message: string) {
@@ -54,15 +50,37 @@ export class ForkRuntimeError extends Error {
 	}
 }
 
+/**
+ * Asks a fork and parses its card. The fork serializes the card itself, so
+ * the platform and the gate only ever see plain JSON data: no RPC stubs,
+ * getters, or toJSON methods that could answer differently on each read.
+ */
 export async function askCard(fork: ForkEntrypoint, request: unknown, options?: AskOptions): Promise<AnswerCardLike> {
-	let text: unknown;
+	return askMapped(fork, request, options, null);
+}
+
+/**
+ * Asks a loaded fork, as askCard does. A renamed copy's card text and error
+ * messages have the copy's names mapped back to the originals before anything
+ * else sees them, so the caller gets what the plain fork would have sent and
+ * never a renamed name. Ask a loaded fork through this, never through askCard.
+ */
+export function askLoaded(loaded: LoadedFork, request: unknown, options?: AskOptions): Promise<AnswerCardLike> {
+	return askMapped(loaded.fork, request, options, loaded.morph?.names ?? null);
+}
+
+async function askMapped(fork: ForkEntrypoint, request: unknown, options: AskOptions | undefined, names: ReadonlyMap<string, string> | null): Promise<AnswerCardLike> {
+	const outgoing = (text: string) => (names === null ? text : unmorphText(text, names));
+	let answer: unknown;
 	try {
-		text = await fork.ask(request, options);
+		answer = await fork.ask(request, options);
 	} catch (error) {
-		throw new ForkRuntimeError(error instanceof Error ? error.message : String(error));
+		throw new ForkRuntimeError(outgoing(error instanceof Error ? error.message : String(error)));
 	}
-	if (typeof text !== "string") throw new ForkRuntimeError("the fork answered with something other than a JSON card");
-	if (text.length > MAX_CARD_CHARS) throw new ForkRuntimeError(`the fork's card is larger than ${MAX_CARD_CHARS} characters`);
+	if (typeof answer !== "string") throw new ForkRuntimeError("the fork answered with something other than a JSON card");
+	if (answer.length > MAX_CARD_CHARS) throw new ForkRuntimeError(`the fork's card is larger than ${MAX_CARD_CHARS} characters`);
+	// Mapped before parsing, so even a parse error's quote of the text shows original names.
+	const text = outgoing(answer);
 	let card: unknown;
 	try {
 		card = JSON.parse(text);
@@ -251,7 +269,7 @@ export interface AskForkInput {
 export async function askFork(deps: RuntimeDeps, input: AskForkInput): Promise<{ card: AnswerCardLike; sha: string; ref: string }> {
 	const useModel = input.useModel ?? false;
 	const loaded = await loadForkRuntime(deps, input.repo, input.ref ?? "main", { useModel });
-	const card = await withTimeout(askCard(loaded.fork, input.request, { useModel }), FORK_CALL_TIMEOUT_MS, `fork ${input.repo} did not answer`);
+	const card = await withTimeout(askLoaded(loaded, input.request, { useModel }), FORK_CALL_TIMEOUT_MS, `fork ${input.repo} did not answer`);
 	return { card, sha: loaded.sha, ref: loaded.ref };
 }
 
