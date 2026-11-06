@@ -71,7 +71,8 @@ describe("runGate with a renamed copy", () => {
 			expect(found).toHaveLength(10);
 			expect(found[0]).toMatchObject({ tier: "invariant", op: "equals", sample: 1, samples: 1 });
 			expect(found[0]!.description).toMatch(/renamed copy [0-9a-f]{8} answered ".+" differently from the plain fork/);
-			expect(found.at(-1)!.description).toMatch(/ \d+ more differences? (is|are) not shown\.$/);
+			const { mismatches, compared } = gate.polymorph!;
+			expect(found.at(-1)!.description).toMatch(new RegExp(` In all, ${mismatches} of ${compared} requests were answered differently; only the first 10 differences are shown\\.$`));
 			// The equivalence failures come first; the suites' own failures on the copy's answers follow.
 			expect(gate.failures.slice(0, found.length)).toEqual(found);
 			expect(gate.tiers.invariant!.probes).toContainEqual(expect.objectContaining({ id: "polymorph-equivalence", passed: false }));

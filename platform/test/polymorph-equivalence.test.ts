@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cardDifferences } from "../src/polymorph/equivalence.ts";
+import { cardDifferences, equivalenceCheck } from "../src/polymorph/equivalence.ts";
 
 function card(overrides: Record<string, unknown> = {}) {
 	return {
@@ -104,5 +104,42 @@ describe("cardDifferences", () => {
 	it("refuses a limit that is not a positive integer", () => {
 		expect(() => cardDifferences(card(), card(), 0)).toThrow(RangeError);
 		expect(() => cardDifferences(card(), card(), 1.5)).toThrow(RangeError);
+	});
+});
+
+describe("equivalenceCheck", () => {
+	// One request per behavior: the same card from both sides, thirty fields that differ, one field that differs.
+	const wide = Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`f${i}`, i]));
+	const plain = async (request: unknown) => (request === "wide" ? wide : { mode: "research" });
+	const copy = async (request: unknown) =>
+		request === "wide" ? Object.fromEntries(Object.entries(wide).map(([key, value]) => [key, value + 1])) : request === "one" ? { mode: "clinical" } : { mode: "research" };
+
+	it("answers with the copy and counts the requests that differed exactly, however many fields differ", async () => {
+		const check = equivalenceCheck(plain, copy, 10);
+		expect(await check.ask("same")).toEqual({ mode: "research" });
+		expect(await check.ask("wide")).toEqual(Object.fromEntries(Object.entries(wide).map(([key, value]) => [key, value + 1])));
+		expect(await check.ask("one")).toEqual({ mode: "clinical" });
+		const report = check.report();
+		expect([report.compared, report.mismatches, report.truncated]).toEqual([3, 2, true]);
+		expect(report.findings).toHaveLength(10);
+		expect(report.findings.every((finding) => finding.request === "wide")).toBe(true);
+	});
+
+	it("is not truncated when every difference fits", async () => {
+		const check = equivalenceCheck(plain, copy, 10);
+		await check.ask("one");
+		expect(check.report()).toEqual({ compared: 1, mismatches: 1, truncated: false, findings: [{ request: "one", difference: { path: "mode", plain: "research", morphed: "clinical" } }] });
+	});
+
+	it("compares errors by message, and counts an error against a card as a difference at the whole answer", async () => {
+		const failing = (message: string) => async () => {
+			throw new Error(message);
+		};
+		const same = equivalenceCheck(failing("no card"), failing("no card"), 10);
+		await expect(same.ask("q")).rejects.toThrow("no card");
+		expect(same.report()).toMatchObject({ compared: 1, mismatches: 0 });
+		const mixed = equivalenceCheck(plain, failing("broken"), 10);
+		await expect(mixed.ask("q")).rejects.toThrow("broken");
+		expect(mixed.report().findings).toEqual([{ request: "q", difference: { path: "", plain: { mode: "research" }, morphed: "threw: broken" } }]);
 	});
 });

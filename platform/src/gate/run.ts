@@ -63,7 +63,7 @@ export interface GateInput {
 
 /** The probe id of the equivalence check between a fork and its renamed copy. */
 export const EQUIVALENCE_PROBE = "polymorph-equivalence";
-/** Differences recorded as failures per gate run; the last one says how many more there were. */
+/** Differences recorded as failures per gate run; when there were more, the last one says how many requests differed in all. */
 const MAX_EQUIVALENCE_FAILURES = 10;
 
 /** Isolate variant for one gate run: the gate never shares an isolate (or its module state) with production or another gate. */
@@ -282,7 +282,8 @@ function addIntentFailure(tiers: Record<TierName, TierSummary | null>, failures:
 /**
  * A renamed copy must answer every probe request exactly like the plain fork.
  * Each difference fails tier 1 as probe "polymorph-equivalence" (the first
- * MAX_EQUIVALENCE_FAILURES, the last saying how many more there were), ahead
+ * MAX_EQUIVALENCE_FAILURES, the last saying how many requests differed in
+ * all when there were more), ahead
  * of whatever the suites found on the copy's answers. A copy no request
  * reached fails too: nothing showed it answers like the fork. Returns the
  * gate's report of the copy.
@@ -299,8 +300,9 @@ function addEquivalence(tiers: Record<TierName, TierSummary | null>, failures: G
 		expected: clipValue(difference.plain),
 		actual: clipValue(difference.morphed),
 	}));
+	// cardDifferences stops at 20 differences per answer, so only the count of requests is exact.
 	const last = recorded[recorded.length - 1];
-	if (last && report.unrecorded > 0) last.description += ` ${report.unrecorded} more ${report.unrecorded === 1 ? "difference is" : "differences are"} not shown.`;
+	if (last && report.truncated) last.description += ` In all, ${report.mismatches} of ${report.compared} requests were answered differently; only the first ${recorded.length} differences are shown.`;
 	if (report.compared === 0) {
 		recorded.push({ tier: "invariant", probe: EQUIVALENCE_PROBE, description: "No probe request reached the renamed copy, so nothing showed it answers like the plain fork.", sample: 1, samples: 1, path: "", op: "compared", expected: "at least one request", actual: 0 });
 	}

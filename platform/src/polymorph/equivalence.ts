@@ -82,8 +82,8 @@ export interface EquivalenceReport {
 	mismatches: number;
 	/** The first differences found, in the order found, up to the limit. */
 	findings: EquivalenceFinding[];
-	/** How many more differences were found past the limit. */
-	unrecorded: number;
+	/** Whether more differences were found than findings holds: then only mismatches says how many requests differed. */
+	truncated: boolean;
 }
 
 /**
@@ -99,7 +99,7 @@ export function equivalenceCheck(plain: Ask, copy: Ask, limit: number): { ask: A
 	if (!Number.isInteger(limit) || limit < 1) throw new RangeError(`equivalenceCheck: limit must be a positive integer, got ${limit}`);
 	let compared = 0;
 	let mismatches = 0;
-	let unrecorded = 0;
+	let truncated = false;
 	const findings: EquivalenceFinding[] = [];
 	const ask: Ask = async (request) => {
 		const [plainOutcome, copyOutcome] = await Promise.allSettled([plain(request), copy(request)]);
@@ -108,12 +108,12 @@ export function equivalenceCheck(plain: Ask, copy: Ask, limit: number): { ask: A
 		if (differences.length > 0) mismatches++;
 		for (const difference of differences) {
 			if (findings.length < limit) findings.push({ request, difference });
-			else unrecorded++;
+			else truncated = true;
 		}
 		if (copyOutcome.status === "rejected") throw copyOutcome.reason;
 		return copyOutcome.value;
 	};
-	return { ask, report: () => ({ compared, mismatches, findings: [...findings], unrecorded }) };
+	return { ask, report: () => ({ compared, mismatches, findings: [...findings], truncated }) };
 }
 
 function outcomeDifferences(plain: PromiseSettledResult<unknown>, copy: PromiseSettledResult<unknown>): CardDifference[] {
