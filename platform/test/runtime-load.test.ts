@@ -122,12 +122,28 @@ describe("in-memory repositories", () => {
 
 describe("the fake Worker Loader", () => {
 	const probeSource = (who: string) => `import { WorkerEntrypoint } from "cloudflare:workers";
+let count = 0;
+const state = { n: 1 };
 class Point {
   constructor() {
     this.x = 1;
   }
 }
 export class Probe extends WorkerEntrypoint {
+  async bump() {
+    return ++count;
+  }
+  async state() {
+    return state;
+  }
+  async mutateEnv() {
+    this.env.label = "changed inside";
+    this.env.nested.n = 2;
+    return this.env;
+  }
+  async readEnv() {
+    return this.env;
+  }
   async echo(value) {
     return value;
   }
@@ -231,6 +247,30 @@ export class Probe extends WorkerEntrypoint {
 			const failure = await probe.throwIt!("plain words").catch((error: unknown) => error);
 			expect(failure).toBeInstanceOf(Error);
 			expect((failure as Error).message).toBe("plain words");
+		});
+	});
+
+	describe("keeps isolates apart", () => {
+		it("gives each id its own module state", async () => {
+			const a = probeOf("probe:state-a");
+			const b = probeOf("probe:state-b");
+			expect([await a.bump!(), await a.bump!(), await b.bump!()]).toEqual([1, 2, 1]);
+		});
+
+		it("copies the env into each isolate, so a change inside one reaches neither another isolate nor the platform", async () => {
+			const env = { label: "shared", nested: { n: 1 } };
+			const a = probeOf("probe:env-a", () => code("A", env));
+			const b = probeOf("probe:env-b", () => code("A", env));
+			expect(await a.mutateEnv!()).toEqual({ label: "changed inside", nested: { n: 2 } });
+			expect(await b.readEnv!()).toEqual({ label: "shared", nested: { n: 1 } });
+			expect(env).toEqual({ label: "shared", nested: { n: 1 } });
+		});
+
+		it("returns copies, so a caller that changes a result changes nothing inside the isolate", async () => {
+			const probe = probeOf("probe:results");
+			const first = (await probe.state!()) as { n: number };
+			first.n = 99;
+			expect(await probe.state!()).toEqual({ n: 1 });
 		});
 	});
 
