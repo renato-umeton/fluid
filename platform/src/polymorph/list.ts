@@ -129,9 +129,10 @@ function nameProblem(name: unknown): string | null {
 
 /**
  * Why renaming these names in this module map would not be safe, one plain
- * message per problem. A name that no module uses is fine (forks differ); it
- * is simply not renamed. The generated entry module is never renamed, so it
- * is not checked.
+ * message per problem: a name that can never be renamed, or one the fork's
+ * text uses. morphModuleMap refuses on any of them, while usableNames skips
+ * the names a fork's text uses. A name that no module uses is fine (forks
+ * differ): it is simply not renamed.
  */
 export function listProblems(names: readonly string[], map: ModuleMap): string[] {
 	const problems: string[] = [];
@@ -141,23 +142,65 @@ export function listProblems(names: readonly string[], map: ModuleMap): string[]
 		if (problem === null) renamed.push(name);
 		else problems.push(problem);
 	}
-	if (renamed.length === 0) return problems;
+	for (const { name, reason } of textUses(renamed, map)) problems.push(`${JSON.stringify(name)} ${reason}`);
+	return problems;
+}
+
+export interface SkippedName {
+	name: string;
+	/** Every place the fork's text uses the name, for example "appears in a string or template text in app/x.js". */
+	reason: string;
+}
+
+/**
+ * Splits one copy's names into those this module map can have renamed and
+ * those the fork's own text uses (a string, template text, or a JSON key or
+ * value), where renaming the identifiers would leave the text pointing at the
+ * old name. A skipped name is neither renamed nor treated as a tripwire, so a
+ * fork's text costs only the names it collides with. Whether a name may be
+ * listed at all is for parsePolymorphList (and morphModuleMap) to judge.
+ */
+export function usableNames(names: ReadonlyMap<string, string>, map: ModuleMap): { usable: Map<string, string>; skipped: SkippedName[] } {
+	const reasons = new Map<string, string[]>();
+	for (const { name, reason } of textUses([...names.keys()], map)) {
+		const found = reasons.get(name) ?? [];
+		found.push(reason);
+		reasons.set(name, found);
+	}
+	const usable = new Map<string, string>();
+	const skipped: SkippedName[] = [];
+	for (const [name, variant] of names) {
+		const found = reasons.get(name);
+		if (found === undefined) usable.set(name, variant);
+		else skipped.push({ name, reason: found.join("; ") });
+	}
+	return { usable, skipped };
+}
+
+/**
+ * Every place one of the names reaches this module map as text, in module
+ * order: as a whole word of a string or template text, or of a JSON key or
+ * string value. The generated entry module is never renamed, so it is not read.
+ */
+function textUses(names: readonly string[], map: ModuleMap): SkippedName[] {
+	const uses: SkippedName[] = [];
+	if (names.length === 0) return uses;
 	for (const [path, module] of Object.entries(map.modules)) {
 		if (path === ENTRY_MODULE) continue;
 		if ("js" in module) {
 			const words = wordsOf(moduleStrings(path, module.js));
-			for (const name of renamed) if (words.has(name)) problems.push(`${JSON.stringify(name)} appears in a string or template text in ${path}`);
+			for (const name of names) if (words.has(name)) uses.push({ name, reason: `appears in a string or template text in ${path}` });
 		} else {
 			const { keys, strings } = jsonText(module.json);
 			const keyWords = wordsOf(keys);
 			const valueWords = wordsOf(strings);
-			for (const name of renamed) {
-				if (keyWords.has(name)) problems.push(`${JSON.stringify(name)} appears in a key in ${path}`);
-				if (valueWords.has(name)) problems.push(`${JSON.stringify(name)} appears in a string value in ${path}`);
+			for (const name of names) {
+				if (keyWords.has(name)) uses.push({ name, reason: `appears in a key in ${path}` });
+				if (valueWords.has(name)) uses.push({ name, reason: `appears in a string value in ${path}` });
 			}
 		}
 	}
-	return problems;
+	return uses;
 }
 
 /** String literal and template text values of a JS module. Code that does not parse is the fork's to fix. */

@@ -45,14 +45,16 @@ function checkTargets(names: ReadonlyMap<string, string>): void {
 }
 
 /**
- * A renamed copy of a module map. Refuses with every problem listProblems
- * finds; otherwise renames every JS module except the generated entry (which
- * calls the fork only through its default export and ask) and keeps JSON
- * modules and the main module as they are. The input map is not modified.
+ * A renamed copy of a module map. Callers pass the usable names from
+ * usableNames; as a last line of defense, any name that is still unsafe to
+ * rename here is refused with every problem listProblems finds. Renames every
+ * JS module except the generated entry (which calls the fork only through its
+ * default export and ask) and keeps JSON modules and the main module as they
+ * are. The input map is not modified.
  */
 export function morphModuleMap(map: ModuleMap, names: ReadonlyMap<string, string>): ModuleMap {
 	const problems = listProblems([...names.keys()], map);
-	if (problems.length > 0) throw new Error(`polymorph: cannot rename this fork's modules safely:\n- ${problems.join("\n- ")}`);
+	if (problems.length > 0) throw new Error(`polymorph: cannot rename this fork's modules safely (pass the usable names from usableNames):\n- ${problems.join("\n- ")}`);
 	const modules: Record<string, LoaderModule> = {};
 	for (const [path, module] of Object.entries(map.modules)) {
 		modules[path] = path === ENTRY_MODULE || !("js" in module) ? module : { js: morphModule(path, module.js, names) };

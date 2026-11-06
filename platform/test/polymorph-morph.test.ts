@@ -2,7 +2,7 @@ import { parse } from "sucrase/dist/parser/index.js";
 import { TokenType } from "sucrase/dist/parser/tokenizer/types.js";
 import { describe, expect, it } from "vitest";
 import stockSource from "../src/generated/stock-source.json";
-import { POLYMORPH_LIST_PATH, listProblems, parsePolymorphList } from "../src/polymorph/list.ts";
+import { POLYMORPH_LIST_PATH, listProblems, parsePolymorphList, usableNames } from "../src/polymorph/list.ts";
 import { morphModuleMap, morphSource } from "../src/polymorph/morph.ts";
 import { scanTokens, tokenScanner } from "../src/polymorph/tokens.ts";
 import { ENTRY_MODULE, ForkCodeError, buildModuleMap, type ModuleMap } from "../src/runtime/modules.ts";
@@ -183,6 +183,62 @@ describe("listProblems", () => {
 		const map = forkMap({ "connectors/broken.js": "export const = ;" });
 		expect(() => listProblems(["secretName"], map)).toThrow(ForkCodeError);
 		expect(() => listProblems(["secretName"], map)).toThrow(/connectors\/broken\.js/);
+	});
+});
+
+describe("usableNames", () => {
+	const variants = new Map([
+		["secretName", "secretName$abcd1234"],
+		["otherName", "otherName$abcd1234"],
+		["thirdName", "thirdName$abcd1234"],
+	]);
+	const jsOf = (map: ModuleMap, name: string) => (map.modules[name] as { js: string }).js;
+
+	it("keeps every name of upstream's list usable on stock", () => {
+		const stockVariants = new Map(stockNames.map((name) => [name, `${name}$abcd1234`]));
+		expect(usableNames(stockVariants, buildModuleMap(stockFiles))).toEqual({ usable: stockVariants, skipped: [] });
+	});
+
+	it("skips only the name the fork's text uses, so every other name is still renamed", () => {
+		const map = forkMap({
+			"app/a.ts": 'export function secretName() { return 1; }\nexport const otherName = (o: Record<string, unknown>) => o["otherName"];',
+			"app/b.ts": 'import { secretName, otherName } from "./a.js";\nexport const thirdName = () => [secretName(), otherName({})];',
+		});
+		const { usable, skipped } = usableNames(variants, map);
+		expect(skipped).toEqual([{ name: "otherName", reason: "appears in a string or template text in app/a.js" }]);
+		expect([...usable]).toEqual([
+			["secretName", "secretName$abcd1234"],
+			["thirdName", "thirdName$abcd1234"],
+		]);
+		const morphed = morphModuleMap(map, usable);
+		expect(jsOf(morphed, "app/b.js")).toBe('import { secretName$abcd1234, otherName } from "./a.js";\nexport const thirdName$abcd1234 = () => [secretName$abcd1234(), otherName({})];');
+		expect(() => morphModuleMap(map, variants)).toThrow(/"otherName" appears in a string or template text in app\/a\.js/);
+	});
+
+	it("gives one reason per skipped name, naming every place the fork's text uses it", () => {
+		const map = forkMap({
+			"app/a.ts": "export const path = `card.secretName`;",
+			"policies/x.json": JSON.stringify({ secretName: { note: "see otherName" } }),
+		});
+		expect(usableNames(variants, map).skipped).toEqual([
+			{ name: "secretName", reason: "appears in a string or template text in app/a.js; appears in a key in policies/x.json" },
+			{ name: "otherName", reason: "appears in a string value in policies/x.json" },
+		]);
+	});
+
+	it("reads neither the generated entry nor the names themselves; morphModuleMap still refuses a bad name", () => {
+		const map = forkMap({});
+		map.modules[ENTRY_MODULE] = { js: 'export const note = "secretName";' };
+		const names = new Map([...variants, ["then", "then$abcd1234"]]);
+		const { usable, skipped } = usableNames(names, map);
+		expect(skipped).toEqual([]);
+		expect(() => morphModuleMap(map, usable)).toThrow(/"then" is reserved/);
+	});
+
+	it("blames the fork, with the module path, for JavaScript that does not parse", () => {
+		const map = forkMap({ "connectors/broken.js": "export const = ;" });
+		expect(() => usableNames(variants, map)).toThrow(ForkCodeError);
+		expect(() => usableNames(variants, map)).toThrow(/connectors\/broken\.js/);
 	});
 });
 

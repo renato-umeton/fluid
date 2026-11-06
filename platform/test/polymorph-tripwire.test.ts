@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import stockSource from "../src/generated/stock-source.json";
-import { POLYMORPH_LIST_PATH, parsePolymorphList } from "../src/polymorph/list.ts";
+import { POLYMORPH_LIST_PATH, parsePolymorphList, usableNames } from "../src/polymorph/list.ts";
 import { deriveSeed, variantNames } from "../src/polymorph/names.ts";
 import { ForkTripwireError, TRIPWIRE_LIMITS, scanRequest } from "../src/polymorph/tripwire.ts";
+import { buildModuleMap } from "../src/runtime/modules.ts";
 
 const stockNames = parsePolymorphList((stockSource.files as Record<string, string>)[POLYMORPH_LIST_PATH]!);
 const seed = await deriveSeed("polymorph-test-secret-0123456789", "user-ada", "0123456789abcdef0123456789abcdef01234567", 0);
@@ -85,6 +86,18 @@ describe("scanRequest", () => {
 		expect(scanRequest(wide, names)).toBeNull();
 		expect(() => scanRequest({ ...wide, extra: 1 }, names)).toThrow(/more than 10000 keys/);
 		expect(() => scanRequest({ list: Array.from({ length: TRIPWIRE_LIMITS.maxKeys + 1 }, () => 0) }, names)).toThrow(RangeError);
+	});
+
+	it("is not tripped by a name the copy skipped, since it scans with the usable names only", () => {
+		const fork = buildModuleMap({ "app/index.ts": 'export default { ask(r: { context: Record<string, unknown> }) { return { seen: r.context["evidence"] }; } };' });
+		const { usable, skipped } = usableNames(names, fork);
+		expect(skipped.map((s) => s.name)).toEqual(["evidence"]);
+		expect(scanRequest({ question, context: { evidence: 1 } }, usable)).toBeNull();
+		expect(scanRequest({ question, context: { evidence: 1, researchNeedsAttestation: false } }, usable)).toEqual({
+			kind: "decoy",
+			name: "researchNeedsAttestation",
+			path: "context.researchNeedsAttestation",
+		});
 	});
 
 	it("ends on a cyclic object", () => {
