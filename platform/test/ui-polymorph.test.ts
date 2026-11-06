@@ -50,8 +50,11 @@ function demo() {
 	};
 }
 
+/** One change to a recording, made in place. */
+type Edit = (d: ReturnType<typeof demo>) => unknown;
+
 /** A fresh recording with one change made by `edit`. */
-function changed(edit: (d: ReturnType<typeof demo>) => unknown) {
+function changed(edit: Edit) {
 	const copy = demo();
 	edit(copy);
 	return copy;
@@ -68,43 +71,41 @@ describe("validateDemo", () => {
 		expect(validateDemo(changed((d) => Reflect.deleteProperty(d, "afterRotation")))).toEqual([]);
 	});
 
-	it("rejects anything that is not an object", () => {
-		for (const value of [null, [], "run", 3]) expect(validateDemo(value)).toEqual(["the recording must be a JSON object"]);
+	it.each([null, [], "run", 3])("rejects %j, which is not an object", (value) => {
+		expect(validateDemo(value)).toEqual(["the recording must be a JSON object"]);
 	});
 
-	it("names each missing field", () => {
-		expect(validateDemo(changed((d) => Reflect.deleteProperty(d, "release")))).toEqual(["release must be a non-empty string"]);
-		expect(validateDemo(changed((d) => Reflect.deleteProperty(d, "forks")))).toEqual(["forks must be a non-empty list"]);
-		expect(validateDemo(changed((d) => Reflect.deleteProperty(d, "attacks")))).toEqual(["attacks must be a non-empty list"]);
-		expect(validateDemo(changed((d) => Reflect.deleteProperty(d.attacks[0], "platform")))).toEqual(["attacks[0].platform must be an object"]);
-		expect(validateDemo(changed((d) => Reflect.deleteProperty(d.attacks[1].platform, "rotated")))).toEqual(["attacks[1].platform.rotated must be a list of repo names"]);
-		expect(validateDemo(changed((d) => Reflect.deleteProperty(d.forks[2], "mismatches")))).toEqual(["forks[2].mismatches must be a whole number of 0 or more"]);
+	it.each<[string, Edit, string]>([
+		["release", (d) => Reflect.deleteProperty(d, "release"), "release must be a non-empty string"],
+		["forks", (d) => Reflect.deleteProperty(d, "forks"), "forks must be a non-empty list"],
+		["attacks", (d) => Reflect.deleteProperty(d, "attacks"), "attacks must be a non-empty list"],
+		["attacks[0].platform", (d) => Reflect.deleteProperty(d.attacks[0], "platform"), "attacks[0].platform must be an object"],
+		["attacks[1].platform.rotated", (d) => Reflect.deleteProperty(d.attacks[1].platform, "rotated"), "attacks[1].platform.rotated must be a list of repo names"],
+		["forks[2].mismatches", (d) => Reflect.deleteProperty(d.forks[2], "mismatches"), "forks[2].mismatches must be a whole number of 0 or more"],
+	])("names the missing field %s", (_field, edit, problem) => {
+		expect(validateDemo(changed(edit))).toEqual([problem]);
 	});
 
-	it("rejects wrong types", () => {
-		expect(validateDemo(changed((d) => Object.assign(d, { version: 2 })))).toEqual(["version must be 1"]);
-		expect(validateDemo(changed((d) => Object.assign(d, { recordedAt: "yesterday" })))).toEqual(["recordedAt must be an ISO time"]);
-		expect(validateDemo(changed((d) => Object.assign(d, { probes: "71" })))).toEqual(["probes must be a whole number of 0 or more"]);
-		expect(validateDemo(changed((d) => Object.assign(d, { listSize: 2.5 })))).toEqual(["listSize must be a whole number of 0 or more"]);
-		expect(validateDemo(changed((d) => Object.assign(d.forks[0], { before: "0A1B2C3D" })))).toEqual(["forks[0].before must be 8 lowercase hex characters"]);
-		expect(validateDemo(changed((d) => Object.assign(d.forks[1], { after: "4e5f6a7" })))).toEqual(["forks[1].after must be 8 lowercase hex characters"]);
-		expect(validateDemo(changed((d) => Object.assign(d.attacks[2], { tries: -1 })))).toEqual(["attacks[2].tries must be a whole number of 0 or more"]);
-		expect(validateDemo(changed((d) => Object.assign(d.attacks[0], { targets: "user-01" })))).toEqual(["attacks[0].targets must be a list of repo names"]);
-		expect(validateDemo(changed((d) => Object.assign(d.attacks[3], { label: "" })))).toEqual(["attacks[3].label must be a non-empty string"]);
-		expect(validateDemo(changed((d) => Object.assign(d, { afterRotation: "A2" })))).toEqual(["afterRotation must be an object"]);
-	});
-
-	it("rejects attack ids it does not know", () => {
-		expect(validateDemo(changed((d) => Object.assign(d.attacks[0], { id: "C" })))).toEqual(['attacks[0].id must be one of A, A2, A3, B, not "C"']);
-		expect(validateDemo(changed((d) => Object.assign(d.attacks[1], { id: "A" })))).toEqual(['attacks[1].id "A" appears twice', "afterRotation.attack names A2, which is not in attacks"]);
-		expect(validateDemo(changed((d) => Object.assign(d.afterRotation, { attack: "A9" })))).toEqual(['afterRotation.attack must be "A2"']);
-	});
-
-	it("rejects repos in attack lists that are not in forks", () => {
-		expect(validateDemo(changed((d) => d.attacks[2].platform.refused.push("user-99")))).toEqual(['attacks[2].platform.refused names "user-99", which is not in forks']);
-		expect(validateDemo(changed((d) => d.attacks[0].targets.push("user-42")))).toEqual(['attacks[0].targets names "user-42", which is not in forks']);
-		expect(validateDemo(changed((d) => d.attacks[3].direct.compromised.push("upstream")))).toEqual(['attacks[3].direct.compromised names "upstream", which is not in forks']);
-		expect(validateDemo(changed((d) => d.afterRotation.refused.push("user-7")))).toEqual(['afterRotation.refused names "user-7", which is not in forks']);
+	it.each<[string, Edit, string[]]>([
+		["version 2", (d) => Object.assign(d, { version: 2 }), ["version must be 1"]],
+		["a recordedAt that is not a time", (d) => Object.assign(d, { recordedAt: "yesterday" }), ["recordedAt must be an ISO time"]],
+		["probes written as text", (d) => Object.assign(d, { probes: "71" }), ["probes must be a whole number of 0 or more"]],
+		["a listSize that is not whole", (d) => Object.assign(d, { listSize: 2.5 }), ["listSize must be a whole number of 0 or more"]],
+		["an uppercase fingerprint", (d) => Object.assign(d.forks[0], { before: "0A1B2C3D" }), ["forks[0].before must be 8 lowercase hex characters"]],
+		["a short fingerprint", (d) => Object.assign(d.forks[1], { after: "4e5f6a7" }), ["forks[1].after must be 8 lowercase hex characters"]],
+		["negative tries", (d) => Object.assign(d.attacks[2], { tries: -1 }), ["attacks[2].tries must be a whole number of 0 or more"]],
+		["targets that are not a list", (d) => Object.assign(d.attacks[0], { targets: "user-01" }), ["attacks[0].targets must be a list of repo names"]],
+		["an empty label", (d) => Object.assign(d.attacks[3], { label: "" }), ["attacks[3].label must be a non-empty string"]],
+		["an afterRotation that is not an object", (d) => Object.assign(d, { afterRotation: "A2" }), ["afterRotation must be an object"]],
+		["an attack id it does not know", (d) => Object.assign(d.attacks[0], { id: "C" }), ['attacks[0].id must be one of A, A2, A3, B, not "C"']],
+		["an attack id used twice", (d) => Object.assign(d.attacks[1], { id: "A" }), ['attacks[1].id "A" appears twice', "afterRotation.attack names A2, which is not in attacks"]],
+		["an afterRotation for another attack", (d) => Object.assign(d.afterRotation, { attack: "A9" }), ['afterRotation.attack must be "A2"']],
+		["a target that is not in forks", (d) => d.attacks[0].targets.push("user-42"), ['attacks[0].targets names "user-42", which is not in forks']],
+		["an outcome for a fork that is not in forks", (d) => d.attacks[2].platform.refused.push("user-99"), ['attacks[2].platform.refused names "user-99", which is not in forks']],
+		["a bypassed-scan outcome for a fork that is not in forks", (d) => d.attacks[3].direct.compromised.push("upstream"), ['attacks[3].direct.compromised names "upstream", which is not in forks']],
+		["an afterRotation entry that is not in forks", (d) => d.afterRotation.refused.push("user-7"), ['afterRotation.refused names "user-7", which is not in forks']],
+	])("rejects %s", (_what, edit, problems) => {
+		expect(validateDemo(changed(edit))).toEqual(problems);
 	});
 
 	it("rejects a fork listed twice", () => {
@@ -130,19 +131,24 @@ describe("parseDemo", () => {
 });
 
 describe("tileStates", () => {
-	it("starts every tile neutral, with its first copy when the switch is on and plain code when it is off", () => {
-		expect(tileStates(demo(), null, true)).toEqual({ "user-01": tile("neutral", "0a1b2c3d", ""), "user-02": tile("neutral", "8c9d0e1f", ""), "user-03": tile("neutral", "6e7f8091", "") });
-		expect(tileStates(demo(), null, false)).toEqual({ "user-01": tile("neutral", null, ""), "user-02": tile("neutral", null, ""), "user-03": tile("neutral", null, "") });
+	it.each<[boolean, Record<string, Tile>]>([
+		[true, { "user-01": tile("neutral", "0a1b2c3d", ""), "user-02": tile("neutral", "8c9d0e1f", ""), "user-03": tile("neutral", "6e7f8091", "") }],
+		[false, { "user-01": tile("neutral", null, ""), "user-02": tile("neutral", null, ""), "user-03": tile("neutral", null, "") }],
+	])("starts every tile neutral (switch on: %s), on its first copy, or on plain code with the switch off", (on, expected) => {
+		expect(tileStates(demo(), null, on)).toEqual(expected);
 	});
 
-	it("attack A: compromises the plain fleet; with the switch on every fork refuses it, and the forks that moved show their new copy", () => {
-		expect(tileStates(demo(), "A", false)).toEqual({ "user-01": tile("compromised", null, "compromised"), "user-02": tile("compromised", null, "compromised"), "user-03": tile("compromised", null, "compromised") });
-		expect(tileStates(demo(), "A", true)).toEqual({ "user-01": tile("refused", "4e5f6a7b", "refused, new copy"), "user-02": tile("refused", "2a3b4c5d", "refused, new copy"), "user-03": tile("refused", "6e7f8091", "refused") });
-	});
-
-	it("attack A2: does nothing on the plain fleet; with the switch on only the leaked copy's fork is compromised", () => {
-		expect(tileStates(demo(), "A2", false)).toEqual({ "user-01": tile("neutral", null, "not compromised"), "user-02": tile("neutral", null, "not compromised"), "user-03": tile("neutral", null, "not compromised") });
-		expect(tileStates(demo(), "A2", true)).toEqual({ "user-01": tile("refused", "4e5f6a7b", "refused, new copy"), "user-02": tile("compromised", "8c9d0e1f", "compromised"), "user-03": tile("neutral", "a2b3c4d5", "not compromised, new copy") });
+	it.each<[string, boolean, string, Record<string, Tile>]>([
+		["A", false, "compromises the plain fleet", { "user-01": tile("compromised", null, "compromised"), "user-02": tile("compromised", null, "compromised"), "user-03": tile("compromised", null, "compromised") }],
+		["A", true, "is refused everywhere, and the forks that moved show their new copy", { "user-01": tile("refused", "4e5f6a7b", "refused, new copy"), "user-02": tile("refused", "2a3b4c5d", "refused, new copy"), "user-03": tile("refused", "6e7f8091", "refused") }],
+		["A2", false, "does nothing on the plain fleet", { "user-01": tile("neutral", null, "not compromised"), "user-02": tile("neutral", null, "not compromised"), "user-03": tile("neutral", null, "not compromised") }],
+		["A2", true, "compromises only the leaked copy's fork", { "user-01": tile("refused", "4e5f6a7b", "refused, new copy"), "user-02": tile("compromised", "8c9d0e1f", "compromised"), "user-03": tile("neutral", "a2b3c4d5", "not compromised, new copy") }],
+		["A3", false, "leaves the forks it did not attack neutral", { "user-01": tile("neutral", null, "not attacked"), "user-02": tile("neutral", null, "not attacked"), "user-03": tile("neutral", null, "not compromised") }],
+		["A3", true, "is refused on the one fork it attacked", { "user-01": tile("neutral", "0a1b2c3d", "not attacked"), "user-02": tile("neutral", "8c9d0e1f", "not attacked"), "user-03": tile("refused", "a2b3c4d5", "refused, new copy") }],
+		["B", false, "compromises every fork", { "user-01": tile("compromised", null, "compromised"), "user-02": tile("compromised", null, "compromised"), "user-03": tile("compromised", null, "compromised") }],
+		["B", true, "compromises every fork through the platform too", { "user-01": tile("compromised", "0a1b2c3d", "compromised"), "user-02": tile("compromised", "8c9d0e1f", "compromised"), "user-03": tile("compromised", "6e7f8091", "compromised") }],
+	])("attack %s, switch on: %s, %s", (id, on, _why, expected) => {
+		expect(tileStates(demo(), id, on)).toEqual(expected);
 	});
 
 	it("tells a refused fork from a moved one: refused on its old copy, or moved without a refusal", () => {
@@ -153,16 +159,6 @@ describe("tileStates", () => {
 	it("shows a fork that is both compromised and refused as compromised, since the harm happened", () => {
 		const both = changed((d) => d.attacks[1].platform.refused.push("user-02"));
 		expect(tileStates(both, "A2", true)["user-02"]).toEqual(tile("compromised", "8c9d0e1f", "compromised"));
-	});
-
-	it("attack A3: leaves forks it did not attack neutral", () => {
-		expect(tileStates(demo(), "A3", false)).toEqual({ "user-01": tile("neutral", null, "not attacked"), "user-02": tile("neutral", null, "not attacked"), "user-03": tile("neutral", null, "not compromised") });
-		expect(tileStates(demo(), "A3", true)).toEqual({ "user-01": tile("neutral", "0a1b2c3d", "not attacked"), "user-02": tile("neutral", "8c9d0e1f", "not attacked"), "user-03": tile("refused", "a2b3c4d5", "refused, new copy") });
-	});
-
-	it("attack B: compromises every fork with the switch on or off", () => {
-		expect(tileStates(demo(), "B", false)).toEqual({ "user-01": tile("compromised", null, "compromised"), "user-02": tile("compromised", null, "compromised"), "user-03": tile("compromised", null, "compromised") });
-		expect(tileStates(demo(), "B", true)).toEqual({ "user-01": tile("compromised", "0a1b2c3d", "compromised"), "user-02": tile("compromised", "8c9d0e1f", "compromised"), "user-03": tile("compromised", "6e7f8091", "compromised") });
 	});
 
 	it("refuses an attack the recording does not have", () => {
