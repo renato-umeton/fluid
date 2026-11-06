@@ -43,6 +43,7 @@ describe("RESERVED_NAMES", () => {
 		["keywords and reserved words", ["if", "class", "enum", "let", "yield", "static", "implements"]],
 		["contextual keywords, including the ones sucrase may tokenize specially", ["as", "async", "await", "from", "get", "set", "of", "type", "declare"]],
 		["special names", ["constructor", "prototype", "__proto__", "arguments", "eval", "undefined", "NaN", "Infinity"]],
+		["meta-property names (import.meta, new.target)", ["meta", "target"]],
 		["globals", ["globalThis", "Math", "JSON", "crypto", "caches"]],
 		["properties of built-ins and their prototypes", ["floor", "map", "includes", "toLocaleString", "subarray", "format", "test", "lastIndex", "groups"]],
 		["protocol names", ["then", "catch", "finally", "next", "done", "value", "return", "throw", "toJSON", "default", "__esModule"]],

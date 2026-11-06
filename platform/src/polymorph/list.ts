@@ -48,6 +48,9 @@ const CONTEXTUAL_KEYWORDS = [
 
 const SPECIAL_NAMES = ["constructor", "prototype", "__proto__", "arguments", "eval", "undefined", "NaN", "Infinity"];
 
+/** Meta-properties: renaming the name after import. or new. would not even parse. */
+const META_PROPERTY_NAMES = ["meta", "target"];
+
 /** Names the language and the module system call by name on any object. */
 const PROTOCOL_NAMES = ["then", "catch", "finally", "next", "done", "value", "return", "throw", "toJSON", "default", "__esModule"];
 
@@ -94,6 +97,7 @@ export const RESERVED_NAMES: ReadonlySet<string> = new Set([
 	...KEYWORDS,
 	...CONTEXTUAL_KEYWORDS,
 	...SPECIAL_NAMES,
+	...META_PROPERTY_NAMES,
 	...PROTOCOL_NAMES,
 	...RUNTIME_CONTRACT_NAMES,
 	...INSTANCE_PROPERTY_NAMES,
