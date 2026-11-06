@@ -4,7 +4,8 @@
 // (random per answer) and fork_commit (differs per commit) are ignored, at any
 // depth. A card reaches the platform as JSON, so a key whose value is
 // undefined counts as absent, key order does not matter, and a Date, Map, or
-// other non-plain object is compared by its JSON form.
+// other non-plain object is compared by its JSON form. equivalenceCheck runs
+// that comparison on every request a gate sends.
 
 export interface CardDifference {
 	/** Dotted path into the card, as probe assertions write it ("" is the whole card). */
@@ -64,4 +65,68 @@ function keysOf(record: Record<string, unknown>): string[] {
 
 function joinPath(path: string, key: string): string {
 	return path === "" ? key : `${path}.${key}`;
+}
+
+export type Ask = (request: unknown) => Promise<unknown>;
+
+export interface EquivalenceFinding {
+	/** The request both sides were asked. */
+	request: unknown;
+	difference: CardDifference;
+}
+
+export interface EquivalenceReport {
+	/** Requests sent to both sides. */
+	compared: number;
+	/** Requests the two sides answered differently. */
+	mismatches: number;
+	/** The first differences found, in the order found, up to the limit. */
+	findings: EquivalenceFinding[];
+	/** How many more differences were found past the limit. */
+	unrecorded: number;
+}
+
+/**
+ * Compares a plain fork with its renamed copy on every request: ask sends the
+ * request to both at once and answers with what the copy did, its card or its
+ * error, so whoever asks sees the copy. Two cards are compared with
+ * cardDifferences. Two errors match when their messages do; a card on one side
+ * and an error on the other is a difference at the whole answer. Both asks
+ * must already map the copy's names back (askLoaded), or every renamed name in
+ * a message would count as a difference.
+ */
+export function equivalenceCheck(plain: Ask, copy: Ask, limit: number): { ask: Ask; report(): EquivalenceReport } {
+	if (!Number.isInteger(limit) || limit < 1) throw new RangeError(`equivalenceCheck: limit must be a positive integer, got ${limit}`);
+	let compared = 0;
+	let mismatches = 0;
+	let unrecorded = 0;
+	const findings: EquivalenceFinding[] = [];
+	const ask: Ask = async (request) => {
+		const [plainOutcome, copyOutcome] = await Promise.allSettled([plain(request), copy(request)]);
+		compared++;
+		const differences = outcomeDifferences(plainOutcome, copyOutcome);
+		if (differences.length > 0) mismatches++;
+		for (const difference of differences) {
+			if (findings.length < limit) findings.push({ request, difference });
+			else unrecorded++;
+		}
+		if (copyOutcome.status === "rejected") throw copyOutcome.reason;
+		return copyOutcome.value;
+	};
+	return { ask, report: () => ({ compared, mismatches, findings: [...findings], unrecorded }) };
+}
+
+function outcomeDifferences(plain: PromiseSettledResult<unknown>, copy: PromiseSettledResult<unknown>): CardDifference[] {
+	if (plain.status === "fulfilled" && copy.status === "fulfilled") return cardDifferences(plain.value, copy.value);
+	if (plain.status === "rejected" && copy.status === "rejected" && messageOf(plain.reason) === messageOf(copy.reason)) return [];
+	return [{ path: "", plain: outcomeOf(plain), morphed: outcomeOf(copy) }];
+}
+
+/** A card as it is, an error as "threw: " and its message. */
+function outcomeOf(settled: PromiseSettledResult<unknown>): unknown {
+	return settled.status === "fulfilled" ? settled.value : `threw: ${messageOf(settled.reason)}`;
+}
+
+function messageOf(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }

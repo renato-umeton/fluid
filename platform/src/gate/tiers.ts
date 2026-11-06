@@ -5,6 +5,7 @@
 // live in stock's runner; this module only summarizes and decides.
 
 import { validateProbe, type Probe } from "../agents/suggester.ts";
+import type { SkippedName } from "../polymorph/list.ts";
 
 export type TierName = "invariant" | "functional" | "user";
 export const TIER_NAMES: readonly TierName[] = ["invariant", "functional", "user"];
@@ -59,6 +60,21 @@ export interface GateFailure {
 	actual: unknown;
 }
 
+/** The renamed copy a gate compared with the plain fork (GateInput.morph). */
+export interface GatePolymorph {
+	epoch: number;
+	/** Eight hex characters naming the copy; safe to show. */
+	fingerprint: string;
+	/** namesHash of the names the copy renamed. */
+	namesHash: string;
+	/** Probe requests sent to both the plain fork and the copy. */
+	compared: number;
+	/** Requests the two answered differently. */
+	mismatches: number;
+	/** Listed names the copy left as they are, and why. */
+	skipped: SkippedName[];
+}
+
 export interface GateResult {
 	repo: string;
 	ref: string;
@@ -72,6 +88,8 @@ export interface GateResult {
 	durationMs: number;
 	runId?: string;
 	error?: string;
+	/** Only when the gate was asked to check a renamed copy: what it compared, or null when no copy could be made and the fork ran plain. */
+	polymorph?: GatePolymorph | null;
 }
 
 const MAX_FAILURES_PER_PROBE = 3;
