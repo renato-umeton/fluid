@@ -179,11 +179,11 @@ describe("listProblems", () => {
 		]);
 	});
 
-	it("reports reserved names", () => {
+	it("reports reserved names and built-in names of this runtime", () => {
 		expect(listProblems(["then", "floor", "fluidToml"], forkMap({}))).toEqual([
-			'"then" is reserved (a keyword, a global, a property of a built-in, or a name of the runtime contract)',
-			'"floor" is reserved (a keyword, a global, a property of a built-in, or a name of the runtime contract)',
-			'"fluidToml" is reserved (a keyword, a global, a property of a built-in, or a name of the runtime contract)',
+			'"then" is reserved (a keyword, or a name the language or the runtime contract reads)',
+			'"fluidToml" is reserved (a keyword, or a name the language or the runtime contract reads)',
+			'"floor" is a built-in name in this runtime',
 		]);
 	});
 
@@ -243,6 +243,27 @@ describe("usableNames", () => {
 		expect(usableNames(stockVariants, buildModuleMap(stockFiles))).toEqual({ usable: stockVariants, skipped: [] });
 	});
 
+	it("skips names this runtime builds in, such as globals and members of host APIs", () => {
+		const builtIns = ["URL", "fetch", "encode", "json", "searchParams", "randomUUID"];
+		const { usable, skipped } = usableNames(new Map([...builtIns, "secretName"].map((name) => [name, `${name}$abcd1234`])), forkMap({}));
+		expect(skipped).toEqual(builtIns.map((name) => ({ name, reason: "a built-in name in this runtime" })));
+		expect([...usable.keys()]).toEqual(["secretName"]);
+	});
+
+	it("keeps a host API call working when its member name is listed", () => {
+		const map = forkMap({ "app/a.ts": "function encode(s: string) { return new TextEncoder().encode(s).length; }\nexport function main() { return encode('abc'); }" });
+		const { usable, skipped } = usableNames(new Map([["encode", "encode$abcd1234"]]), map);
+		expect(skipped).toEqual([{ name: "encode", reason: "a built-in name in this runtime" }]);
+		expect(runMain(jsOf(morphModuleMap(map, usable), "app/a.js"))).toBe(3);
+	});
+
+	it("gives every reason a name is skipped, the runtime's first", () => {
+		const map = forkMap({ "app/a.ts": 'export const kind = "json";' });
+		expect(usableNames(new Map([["json", "json$abcd1234"]]), map).skipped).toEqual([
+			{ name: "json", reason: "a built-in name in this runtime; appears in a string or template text in app/a.js" },
+		]);
+	});
+
 	it("skips only the name the fork's text uses, so every other name is still renamed", () => {
 		const map = forkMap({
 			"app/a.ts": 'export function secretName() { return 1; }\nexport const otherName = (o: Record<string, unknown>) => o["otherName"];',
@@ -289,10 +310,10 @@ describe("usableNames", () => {
 	it("reads neither the generated entry nor the names themselves; morphModuleMap still refuses a bad name", () => {
 		const map = forkMap({});
 		map.modules[ENTRY_MODULE] = { js: 'export const note = "secretName";' };
-		const names = new Map([...variants, ["then", "then$abcd1234"]]);
+		const names = new Map([...variants, ["fluidToml", "fluidToml$abcd1234"]]);
 		const { usable, skipped } = usableNames(names, map);
 		expect(skipped).toEqual([]);
-		expect(() => morphModuleMap(map, usable)).toThrow(/"then" is reserved/);
+		expect(() => morphModuleMap(map, usable)).toThrow(/"fluidToml" is reserved/);
 	});
 
 	it("cannot check a module sucrase does not parse, and names it", () => {

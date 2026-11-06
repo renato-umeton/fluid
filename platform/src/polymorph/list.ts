@@ -65,42 +65,18 @@ const PROTOCOL_NAMES = ["then", "catch", "finally", "next", "done", "value", "re
 /** Names the platform's generated entry module reads from the fork, or passes in. */
 const RUNTIME_CONTRACT_NAMES = ["ask", "env", "fluidToml", "forkCommit", "data", "llm", "newId", "LLM"];
 
-/** Properties the built-ins put on instances rather than prototypes (errors, regex matches, template objects, property descriptors). */
+/** Properties the language puts on instances rather than prototypes (errors, regex matches, template objects, property descriptors). */
 const INSTANCE_PROPERTY_NAMES = [
 	"length", "name", "message", "stack", "cause", "errors", "lastIndex", "index", "input", "groups", "indices", "raw",
 	"writable", "enumerable", "configurable", "get", "set",
 ];
 
-// Globals that exist in workerd but not in Node, so tests in Node and
-// production in a Worker agree on what is reserved.
-const WORKER_GLOBALS = ["self", "caches", "scheduler", "navigator", "HTMLRewriter", "WebSocketPair", "addEventListener", "removeEventListener", "dispatchEvent"];
-
-const BUILT_INS = [
-	"Object", "Function", "Array", "String", "Number", "Boolean", "Symbol", "BigInt", "Math", "JSON", "Reflect", "Proxy", "Atomics",
-	"Promise", "Map", "Set", "WeakMap", "WeakSet", "WeakRef", "FinalizationRegistry", "RegExp", "Date", "Error", "AggregateError",
-	"EvalError", "RangeError", "ReferenceError", "SyntaxError", "TypeError", "URIError", "ArrayBuffer", "SharedArrayBuffer", "DataView",
-	"Int8Array", "Uint8Array", "Uint8ClampedArray", "Int16Array", "Uint16Array", "Int32Array", "Uint32Array", "Float16Array",
-	"Float32Array", "Float64Array", "BigInt64Array", "BigUint64Array", "Intl", "Iterator",
-];
-
-/** Own property names of the standard built-ins and their prototypes, including the shared typed array base and Intl's constructors. */
-function builtInPropertyNames(): string[] {
-	const global = globalThis as unknown as Record<string, unknown>;
-	const objects = BUILT_INS.map((name) => global[name]).filter(isObject);
-	objects.push(Object.getPrototypeOf(Int8Array));
-	const intl = global.Intl;
-	if (isObject(intl)) objects.push(...Object.getOwnPropertyNames(intl).map((key) => (intl as Record<string, unknown>)[key]).filter(isObject));
-	return objects.flatMap((value) => {
-		const prototype = (value as { prototype?: unknown }).prototype;
-		return [...Object.getOwnPropertyNames(value), ...(isObject(prototype) ? Object.getOwnPropertyNames(prototype) : [])];
-	});
-}
-
-function isObject(value: unknown): value is object {
-	return (typeof value === "object" || typeof value === "function") && value !== null;
-}
-
-/** Names a list may never rename: renaming them would break the language, a built-in, or the runtime contract. */
+/**
+ * Names a list may never hold, the same in every runtime: renaming them would
+ * break the language or the runtime contract. Written out rather than read
+ * from the running runtime, so a list passes or fails the same in tests and in
+ * production; what a runtime adds is skipped per name (runtimeBuiltInNames).
+ */
 export const RESERVED_NAMES: ReadonlySet<string> = new Set([
 	...KEYWORDS,
 	...CONTEXTUAL_KEYWORDS,
@@ -109,10 +85,93 @@ export const RESERVED_NAMES: ReadonlySet<string> = new Set([
 	...PROTOCOL_NAMES,
 	...RUNTIME_CONTRACT_NAMES,
 	...INSTANCE_PROPERTY_NAMES,
-	...WORKER_GLOBALS,
-	...Object.getOwnPropertyNames(globalThis),
-	...builtInPropertyNames(),
 ]);
+
+let builtInNames: ReadonlySet<string> | null = null;
+
+/**
+ * Every name the running runtime gives a meaning: the globals along the
+ * global object's prototype chain (where workerd keeps fetch, URL, and the
+ * other Web APIs), the properties of each global value and of its prototype,
+ * along both prototype chains, and the prototypes of constructors that
+ * namespaces such as Intl hold. Runtimes differ (workerd's V8 adds names
+ * Node lacks), so these names are skipped where they exist rather than
+ * refused everywhere. Worked out once per isolate.
+ */
+export function runtimeBuiltInNames(): ReadonlySet<string> {
+	builtInNames ??= collectBuiltInNames();
+	return builtInNames;
+}
+
+function collectBuiltInNames(): Set<string> {
+	const names = new Set<string>();
+	const visited = new WeakSet<object>();
+	const addChain = (start: unknown): void => {
+		for (let object = start; isObject(object) && !visited.has(object); object = prototypeOf(object)) {
+			visited.add(object);
+			for (const name of ownNames(object)) names.add(name);
+		}
+	};
+	const addValue = (value: unknown): void => {
+		addChain(value);
+		addChain(dataProperty(value, "prototype"));
+	};
+	for (let scope: unknown = globalThis; isObject(scope) && scope !== Object.prototype; scope = prototypeOf(scope)) {
+		for (const name of ownNames(scope)) {
+			names.add(name);
+			const value = readGlobal(name);
+			addValue(value);
+			// Namespaces such as Intl or WebAssembly hold constructors whose prototypes carry the methods.
+			for (const member of isObject(value) ? ownNames(value) : []) {
+				const inner = dataProperty(value, member);
+				if (typeof inner === "function") addValue(inner);
+			}
+		}
+	}
+	return names;
+}
+
+function isObject(value: unknown): value is object {
+	return (typeof value === "object" || typeof value === "function") && value !== null;
+}
+
+// Host objects may refuse to be read (a getter that checks its receiver, a
+// proxy). The walk only collects names, so a value it cannot read simply
+// adds nothing further.
+function readGlobal(name: string): unknown {
+	try {
+		return (globalThis as Record<string, unknown>)[name];
+	} catch {
+		return undefined;
+	}
+}
+
+/** A data property's value; accessors are never invoked, so reading a namespace runs none of its getters. */
+function dataProperty(object: unknown, key: string): unknown {
+	if (!isObject(object)) return undefined;
+	try {
+		const descriptor = Object.getOwnPropertyDescriptor(object, key);
+		return descriptor !== undefined && "value" in descriptor ? descriptor.value : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function ownNames(object: object): string[] {
+	try {
+		return Object.getOwnPropertyNames(object);
+	} catch {
+		return [];
+	}
+}
+
+function prototypeOf(object: object): unknown {
+	try {
+		return Object.getPrototypeOf(object);
+	} catch {
+		return null;
+	}
+}
 
 // Plain ASCII identifiers only: "$" separates a listed name from its per-copy
 // suffix, so a tripwire can tell a renamed name from anything else.
@@ -123,16 +182,18 @@ function nameProblem(name: unknown): string | null {
 	if (typeof name !== "string" || !LISTABLE.test(name)) {
 		return `${JSON.stringify(name)} is not a valid identifier (letters, digits, and underscores, not starting with a digit; "$" marks renamed names)`;
 	}
-	if (RESERVED_NAMES.has(name)) return `${JSON.stringify(name)} is reserved (a keyword, a global, a property of a built-in, or a name of the runtime contract)`;
+	if (RESERVED_NAMES.has(name)) return `${JSON.stringify(name)} is reserved (a keyword, or a name the language or the runtime contract reads)`;
 	return null;
 }
 
+const BUILT_IN_REASON = "a built-in name in this runtime";
+
 /**
  * Why renaming these names in this module map would not be safe, one plain
- * message per problem: a name that can never be renamed, or one the fork's
- * text uses. morphModuleMap refuses on any of them, while usableNames skips
- * the names a fork's text uses. A name that no module uses is fine (forks
- * differ): it is simply not renamed.
+ * message per problem: a name that can never be renamed, one this runtime
+ * builds in, or one the fork's text uses. morphModuleMap refuses on any of
+ * them, while usableNames skips the last two kinds. A name that no module
+ * uses is fine (forks differ): it is simply not renamed.
  */
 export function listProblems(names: readonly string[], map: ModuleMap): string[] {
 	const problems: string[] = [];
@@ -142,6 +203,7 @@ export function listProblems(names: readonly string[], map: ModuleMap): string[]
 		if (problem === null) renamed.push(name);
 		else problems.push(problem);
 	}
+	for (const name of renamed) if (runtimeBuiltInNames().has(name)) problems.push(`${JSON.stringify(name)} is ${BUILT_IN_REASON}`);
 	for (const { name, reason } of textUses(renamed, map)) problems.push(`${JSON.stringify(name)} ${reason}`);
 	return problems;
 }
@@ -154,14 +216,16 @@ export interface SkippedName {
 
 /**
  * Splits one copy's names into those this module map can have renamed and
- * those the fork's own text uses (a string, template text, or a JSON key or
- * value), where renaming the identifiers would leave the text pointing at the
- * old name. A skipped name is neither renamed nor treated as a tripwire, so a
- * fork's text costs only the names it collides with. Whether a name may be
- * listed at all is for parsePolymorphList (and morphModuleMap) to judge.
+ * those it skips: names this runtime builds in, and names the fork's own text
+ * uses (a string, template text, regular expression, or a JSON key or value),
+ * where renaming the identifiers would leave the text pointing at the old
+ * name. A skipped name is neither renamed nor treated as a tripwire, so it
+ * costs the copy only that name. Whether a name may be listed at all is for
+ * parsePolymorphList (and morphModuleMap) to judge.
  */
 export function usableNames(names: ReadonlyMap<string, string>, map: ModuleMap): { usable: Map<string, string>; skipped: SkippedName[] } {
 	const reasons = new Map<string, string[]>();
+	for (const name of names.keys()) if (runtimeBuiltInNames().has(name)) reasons.set(name, [BUILT_IN_REASON]);
 	for (const { name, reason } of textUses([...names.keys()], map)) {
 		const found = reasons.get(name) ?? [];
 		found.push(reason);

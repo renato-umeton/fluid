@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import stockSource from "../src/generated/stock-source.json";
-import { POLYMORPH_LIST_PATH, RESERVED_NAMES, parsePolymorphList } from "../src/polymorph/list.ts";
+import { POLYMORPH_LIST_PATH, RESERVED_NAMES, parsePolymorphList, runtimeBuiltInNames } from "../src/polymorph/list.ts";
 import { VARIANT_PATTERN, deriveSeed, fingerprint, variantNames } from "../src/polymorph/names.ts";
 
 const files = stockSource.files as Record<string, string>;
@@ -44,6 +44,11 @@ describe("parsePolymorphList", () => {
 		const text = JSON.stringify({ version: 1, names: ["then", "secret-name", "secretName", "secretName"] });
 		expect(() => parsePolymorphList(text)).toThrow(/"then" is reserved.*; "secret-name" is not a valid identifier.*; "secretName" is listed twice/);
 	});
+
+	it("accepts names that only some runtime gives a meaning, which are skipped where they do", () => {
+		const runtimeNames = ["URL", "fetch", "encode", "json", "first", "getOrInsert", "toBase64", "sumPrecise", "floor"];
+		expect(parsePolymorphList(JSON.stringify({ version: 1, names: runtimeNames }))).toEqual(runtimeNames);
+	});
 });
 
 describe("RESERVED_NAMES", () => {
@@ -52,16 +57,37 @@ describe("RESERVED_NAMES", () => {
 		["contextual keywords, including the ones sucrase may tokenize specially", ["as", "async", "await", "from", "get", "set", "of", "type", "declare"]],
 		["special names", ["constructor", "prototype", "__proto__", "arguments", "eval", "undefined", "NaN", "Infinity"]],
 		["meta-property names (import.meta, new.target)", ["meta", "target"]],
-		["globals", ["globalThis", "Math", "JSON", "crypto", "caches"]],
-		["properties of built-ins and their prototypes", ["floor", "map", "includes", "toLocaleString", "subarray", "format", "test", "lastIndex", "groups"]],
+		["properties the language puts on instances", ["length", "name", "message", "stack", "lastIndex", "index", "groups", "raw", "writable"]],
 		["protocol names", ["then", "catch", "finally", "next", "done", "value", "return", "throw", "toJSON", "default", "__esModule"]],
 		["runtime contract names", ["ask", "env", "fluidToml", "forkCommit", "data", "llm", "newId", "LLM"]],
 	])("holds %s", (_label, words) => {
 		expect(words.filter((word) => !RESERVED_NAMES.has(word))).toEqual([]);
 	});
 
+	it("holds nothing that depends on the runtime, so a list passes or fails the same everywhere", () => {
+		expect(["globalThis", "Math", "URL", "fetch", "crypto", "caches", "floor", "map", "format", "encode", "first", "getOrInsert"].filter((word) => RESERVED_NAMES.has(word))).toEqual([]);
+	});
+
 	it("holds none of upstream's listed names", () => {
 		expect(stockNames.filter((name) => RESERVED_NAMES.has(name))).toEqual([]);
+	});
+});
+
+describe("runtimeBuiltInNames", () => {
+	it.each([
+		["globals, Web APIs included", ["globalThis", "Math", "JSON", "URL", "fetch", "TextEncoder", "structuredClone", "crypto"]],
+		["members of host APIs", ["encode", "json", "searchParams", "randomUUID", "subtle", "headers"]],
+		["properties of the standard built-ins, their prototypes, and constructors inside namespaces", ["floor", "map", "includes", "subarray", "format", "test", "toString", "call"]],
+	])("holds %s", (_label, words) => {
+		expect(words.filter((word) => !runtimeBuiltInNames().has(word))).toEqual([]);
+	});
+
+	it("holds none of upstream's listed names in this runtime", () => {
+		expect(stockNames.filter((name) => runtimeBuiltInNames().has(name))).toEqual([]);
+	});
+
+	it("is worked out once per isolate", () => {
+		expect(runtimeBuiltInNames()).toBe(runtimeBuiltInNames());
 	});
 });
 
