@@ -67,7 +67,7 @@ describe("scanRequest", () => {
 
 	it("writes odd keys in the path quoted and shortened", () => {
 		const longKey = "k".repeat(100);
-		expect(scanRequest({ "a.b": { [longKey]: { researchNeedsAttestation: 1 } } }, names)?.path).toBe(`"a.b".${JSON.stringify("k".repeat(64))}….researchNeedsAttestation`);
+		expect(scanRequest({ "a.b": { [longKey]: { researchNeedsAttestation: 1 } } }, names)?.path).toBe(`"a.b".${JSON.stringify("k".repeat(64))}....researchNeedsAttestation`);
 	});
 
 	it("refuses a request nested deeper than it scans, instead of skipping what lies below", () => {

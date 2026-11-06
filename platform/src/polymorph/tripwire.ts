@@ -81,6 +81,6 @@ const PLAIN_SEGMENT = /^[A-Za-z0-9_$]{1,64}$/;
 
 /** Plain keys as they are; anything else quoted and cut to 64 characters, so a hostile key cannot flood a log line. */
 function joinPath(path: string, key: string): string {
-	const segment = PLAIN_SEGMENT.test(key) ? key : key.length > 64 ? `${JSON.stringify(key.slice(0, 64))}…` : JSON.stringify(key);
+	const segment = PLAIN_SEGMENT.test(key) ? key : key.length > 64 ? `${JSON.stringify(key.slice(0, 64))}...` : JSON.stringify(key);
 	return path === "" ? segment : `${path}.${segment}`;
 }

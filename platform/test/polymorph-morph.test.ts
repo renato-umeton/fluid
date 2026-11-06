@@ -52,6 +52,12 @@ describe("scanTokens", () => {
 	it("decodes string and template escapes", () => {
 		const { strings } = scanTokens("f('it\\'s', \"\\x41\\u0042\\u{43}\\n\", \"a\\\nb\", `t\\u0021${x}\\x41`);");
 		expect(strings).toEqual(["it's", "ABC\n", "ab", "t!", "A"]);
+		const lineSeparator = String.fromCharCode(0x2028);
+		expect(scanTokens(`f("c\\${lineSeparator}d");`).strings).toEqual(["cd"]);
+	});
+
+	it("accepts identifiers with a zero-width joiner or non-joiner", () => {
+		expect(scanTokens("const a\\u200cb = 1;").identifiers[0]!.text).toBe(`a${String.fromCharCode(0x200c)}b`);
 	});
 
 	it("reads neither regular expressions nor comments as strings or identifiers", () => {

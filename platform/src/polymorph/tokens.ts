@@ -10,7 +10,7 @@ export interface IdentifierToken {
 	/** Offsets of the token in the source (end exclusive). */
 	start: number;
 	end: number;
-	/** The identifier's name, with any \u escapes decoded. */
+	/** The identifier's name, with any unicode escapes decoded. */
 	text: string;
 }
 
@@ -99,7 +99,9 @@ function readTokens(js: string, parsed: unknown, kinds: TokenKinds): SourceToken
 	return { identifiers, strings };
 }
 
-const IDENTIFIER = /^[\p{ID_Start}$_][\p{ID_Continue}$‌‍]*$/u;
+// An ECMAScript identifier name: ID_Start, "$", or "_", then ID_Continue, "$",
+// or the two join controls (zero-width non-joiner and joiner).
+const IDENTIFIER = /^[\p{ID_Start}$_][\p{ID_Continue}$\p{Join_Control}]*$/u;
 
 function identifierText(raw: string, index: number): string {
 	const text = decodeEscapes(raw);
@@ -122,14 +124,26 @@ function templateText(js: string, start: number, end: number, index: number): st
 }
 
 const ESCAPE = /\\(?:u\{([0-9A-Fa-f]+)\}|u([0-9A-Fa-f]{4})|x([0-9A-Fa-f]{2})|(\r\n|[\s\S]))/g;
-const SINGLE_ESCAPES: Record<string, string> = { n: "\n", r: "\r", t: "\t", b: "\b", f: "\f", v: "\v", "0": "\0", "\n": "", "\r": "", "\r\n": "", " ": "", " ": "" };
+// A backslash before a line terminator continues the line and stands for nothing.
+const LINE_TERMINATORS = ["\n", "\r", "\r\n", String.fromCharCode(0x2028), String.fromCharCode(0x2029)];
+const SINGLE_ESCAPES: Record<string, string> = {
+	n: "\n",
+	r: "\r",
+	t: "\t",
+	b: "\b",
+	f: "\f",
+	v: "\v",
+	"0": "\0",
+	...Object.fromEntries(LINE_TERMINATORS.map((terminator) => [terminator, ""])),
+};
+const REPLACEMENT_CHARACTER = String.fromCharCode(0xfffd);
 
 /** Decodes JavaScript escapes, so a name spelled with escapes in a string still counts as that name. */
 function decodeEscapes(text: string): string {
 	return text.replace(ESCAPE, (_match, braced?: string, four?: string, two?: string, other?: string) => {
 		if (braced !== undefined) {
 			const codePoint = parseInt(braced, 16);
-			return codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : "�";
+			return codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : REPLACEMENT_CHARACTER;
 		}
 		if (four !== undefined) return String.fromCharCode(parseInt(four, 16));
 		if (two !== undefined) return String.fromCharCode(parseInt(two, 16));
