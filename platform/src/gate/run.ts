@@ -3,6 +3,7 @@
 // stock files at the pinned tag and reaches the fork through an ask callback
 // that the platform time-boxes. Used by the Gate, Upgrade, and Repair
 // workflows and by the admin suite route.
+import { clipValue } from "../lib/clip.ts";
 import { parseToml } from "../lib/toml.ts";
 import { equivalenceCheck, type EquivalenceReport } from "../polymorph/equivalence.ts";
 import { askLoaded, FORK_CALL_TIMEOUT_MS, loadForkRuntime, loadRunner, withTimeout, type LoadedCopy, type LoadedFork, type RuntimeDeps } from "../runtime/loader.ts";
@@ -18,7 +19,6 @@ import type { Observation } from "../contest/behavior.ts";
 import { buildObservations, cardRecorder, recordedKeys, type ManifestProbeLike } from "../contest/observe.ts";
 import {
 	capFailures,
-	clipValue,
 	emptyUserTier,
 	erroredTier,
 	prepareUserManifest,

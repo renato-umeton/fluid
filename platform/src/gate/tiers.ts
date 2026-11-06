@@ -5,11 +5,13 @@
 // live in stock's runner; this module only summarizes and decides.
 
 import { validateProbe, type Probe } from "../agents/suggester.ts";
+import { clipValue } from "../lib/clip.ts";
 import type { SkippedName } from "../polymorph/list.ts";
 
 export type TierName = "invariant" | "functional" | "user";
 export const TIER_NAMES: readonly TierName[] = ["invariant", "functional", "user"];
 export { USER_MANIFEST_PATH } from "../lib/names.ts";
+export { clipValue } from "../lib/clip.ts";
 
 export interface RunnerFailure {
 	sample: number;
@@ -94,16 +96,6 @@ export interface GateResult {
 
 const MAX_FAILURES_PER_PROBE = 3;
 const MAX_FAILURES = 40;
-const MAX_VALUE_CHARS = 400;
-
-/** Keeps failure values small enough for run records and the fleet view. */
-export function clipValue(value: unknown): unknown {
-	if (value === undefined) return null;
-	const text = typeof value === "string" ? value : JSON.stringify(value);
-	if (text === undefined) return String(value);
-	if (text.length <= MAX_VALUE_CHARS) return value;
-	return `${text.slice(0, MAX_VALUE_CHARS)}... (${text.length} chars)`;
-}
 
 /** Turns one runner result into a tier summary plus flat failures (failing probes only). */
 export function summarizeTier(tier: TierName, result: RunnerManifestResult, options: { file?: string; disabled?: { id: string; reason: string }[] } = {}): { summary: TierSummary; failures: GateFailure[] } {

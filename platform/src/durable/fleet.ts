@@ -2,9 +2,9 @@
 // last run, plus the published stock tags. One instance ("global"). Status
 // changes are broadcast to Server-Sent Events subscribers (the fleet view).
 import { DurableObject } from "cloudflare:workers";
+import { clipValue } from "../lib/clip.ts";
 import type { Json } from "../lib/json.ts";
 import { upsertWishNote, wishNotesKey, type WishNote } from "../contest/wishes.ts";
-import { clipValue } from "../gate/tiers.ts";
 import { contestKey, joinDecision, type ContestState } from "../contest/plan.ts";
 import { addImportNote, importLogKey, type ImportNote } from "../forks/import-log.ts";
 import type { BaselineRecord } from "../yellow/baseline.ts";
