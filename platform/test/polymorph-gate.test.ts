@@ -5,7 +5,9 @@
 // Worker Loader, so each one boots isolates; the timeouts leave room for a
 // loaded machine.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { runGate, runGateObserved } from "../src/gate/run.ts";
+import { addEquivalence, runGate, runGateObserved } from "../src/gate/run.ts";
+import { verdict, type GateFailure, type TierName, type TierSummary } from "../src/gate/tiers.ts";
+import type { LoadedCopy } from "../src/runtime/loader.ts";
 import { deriveSeed, fingerprint, namesHash } from "../src/polymorph/names.ts";
 import { BUILD_CARD, LISTED, POLYMORPH_TEST_SECRET, PUBLISHED, REFLECTIVE, patched, polymorphPlatform, type PolymorphPlatform } from "./helpers/polymorph-platform.ts";
 
@@ -145,4 +147,44 @@ describe("runGate with a renamed copy", () => {
 		},
 		SLOW_MS,
 	);
+});
+
+describe("addEquivalence", () => {
+	const copy: LoadedCopy = { epoch: 3, fingerprint: "a1b2c3d4", namesHash: "87806eb6", names: new Map(), skipped: [{ name: "weightKg", reason: "appears in a key in tests/user/manifest.json" }] };
+	const passingTiers = (): Record<TierName, TierSummary | null> => ({
+		invariant: { tier: "invariant", passed: true, total: 1, failed: 0, probes: [{ id: "inv-a", passed: true, samples: 1, passedSamples: 1 }] },
+		functional: { tier: "functional", passed: true, total: 1, failed: 0, probes: [{ id: "fn-a", passed: true, samples: 1, passedSamples: 1 }] },
+		user: null,
+	});
+
+	it("fails tier 1 when no probe request reached the copy, since nothing showed it answers like the fork", () => {
+		const tiers = passingTiers();
+		const failures: GateFailure[] = [];
+		const report = addEquivalence(tiers, failures, copy, { compared: 0, mismatches: 0, findings: [], truncated: false });
+		expect(failures).toEqual([
+			{ tier: "invariant", probe: "polymorph-equivalence", description: "No probe request reached the renamed copy, so nothing showed it answers like the plain fork.", sample: 1, samples: 1, path: "", op: "compared", expected: "at least one request", actual: 0 },
+		]);
+		expect(tiers.invariant).toEqual({
+			tier: "invariant",
+			passed: false,
+			total: 2,
+			failed: 1,
+			probes: [
+				{ id: "inv-a", passed: true, samples: 1, passedSamples: 1 },
+				{ id: "polymorph-equivalence", passed: false, samples: 0, passedSamples: 0 },
+			],
+		});
+		expect(verdict(tiers, failures)).toBe(false);
+		expect(report).toEqual({ epoch: 3, fingerprint: "a1b2c3d4", namesHash: "87806eb6", compared: 0, mismatches: 0, skipped: copy.skipped });
+	});
+
+	it("adds a passing probe and no failure when every compared request matched", () => {
+		const tiers = passingTiers();
+		const failures: GateFailure[] = [];
+		addEquivalence(tiers, failures, copy, { compared: 5, mismatches: 0, findings: [], truncated: false });
+		expect(failures).toEqual([]);
+		expect(tiers.invariant).toMatchObject({ passed: true, total: 2, failed: 0 });
+		expect(tiers.invariant!.probes.at(-1)).toEqual({ id: "polymorph-equivalence", passed: true, samples: 5, passedSamples: 5 });
+		expect(verdict(tiers, failures)).toBe(true);
+	});
 });

@@ -288,7 +288,7 @@ function addIntentFailure(tiers: Record<TierName, TierSummary | null>, failures:
  * reached fails too: nothing showed it answers like the fork. Returns the
  * gate's report of the copy.
  */
-function addEquivalence(tiers: Record<TierName, TierSummary | null>, failures: GateFailure[], copy: LoadedCopy, report: EquivalenceReport): GatePolymorph {
+export function addEquivalence(tiers: Record<TierName, TierSummary | null>, failures: GateFailure[], copy: LoadedCopy, report: EquivalenceReport): GatePolymorph {
 	const recorded: GateFailure[] = report.findings.map(({ request, difference }) => ({
 		tier: "invariant",
 		probe: EQUIVALENCE_PROBE,
