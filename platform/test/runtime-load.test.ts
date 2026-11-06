@@ -1,16 +1,21 @@
-// What the fork runtime reads, through the platform's own code paths, on
-// in-memory Artifacts repos, and the fake Worker Loader it runs in. Stock is
-// published at its bundled release tag and user-1 is a fresh fork of it, so
-// its main holds the same files. Nothing reaches the network: fetch is the
-// fake git remote, which serves only the ref listing the platform reads to
-// resolve a stock tag.
+// The fork runtime and the gate through the platform's own code paths
+// (loadForkRuntime, askCard, runGate, serveAsk) on in-memory Artifacts repos
+// and a fake Worker Loader. Stock is published at its bundled release tag and
+// user-1 is a fresh fork of it, so its main holds the same files. Nothing
+// reaches the network: fetch is the fake git remote, which serves only the
+// ref listing the gate reads to resolve the stock tag.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import stockSource from "../src/generated/stock-source.json";
+import { serveAsk } from "../src/api/ask.ts";
+import { runGate } from "../src/gate/run.ts";
 import { listRemoteRefs } from "../src/git/ops.ts";
+import { setTomlValue } from "../src/lib/toml.ts";
+import { askCard, loadForkRuntime, type RuntimeDeps } from "../src/runtime/loader.ts";
 import { isRuntimePath } from "../src/runtime/modules.ts";
 import { RefNotFoundError, resolveCommit } from "../src/runtime/refs.ts";
 import { listCommitFiles, openRepo, readCommitFiles } from "../src/runtime/repo-files.ts";
 import { releaseMetadata, releaseMetadataPath } from "../src/stock/releases.ts";
+import { ledgerStub } from "../src/stubs.ts";
 import { apiEnv } from "./helpers/api-env.ts";
 import { fakeLoader } from "./helpers/fake-loader.ts";
 import { fakeGitRepo, type FakeGitRepo } from "./helpers/fake-repos.ts";
@@ -21,9 +26,14 @@ const published: Record<string, string> = {
 	...(stockSource.files as Record<string, string>),
 	[releaseMetadataPath(TAG)]: `${JSON.stringify(releaseMetadata({ tag: TAG, date: new Date("2026-10-04T00:00:00Z") }), null, 2)}\n`,
 };
+const research = {
+	question: "What is the right dose of Morphinex for a patient of 70 kg and 45 years?",
+	context: { documentType: "manuscript", onService: false, screenLabel: { label: "manuscript_editor", confidence: 0.9 } },
+};
 
 let t: ReturnType<typeof apiEnv>;
 let loader: ReturnType<typeof fakeLoader>;
+let deps: RuntimeDeps;
 let stock: FakeGitRepo;
 let main: string;
 
@@ -34,6 +44,7 @@ beforeAll(() => {
 	loader = fakeLoader();
 	Object.assign(t.env, { LOADER: loader });
 	vi.stubGlobal("fetch", t.artifacts.fetch);
+	deps = { env: t.env, exports: { LlmHost: () => Promise.reject(new Error("these tests never use the model")) } };
 });
 
 afterAll(() => {
@@ -113,5 +124,53 @@ export class Probe extends WorkerEntrypoint {
 		await loader.get("probe:once", factory).getEntrypoint("Probe").poke!({}, () => null);
 		expect(factory).toHaveBeenCalledTimes(1);
 		expect(loader.built.filter((id) => id === "probe:once")).toHaveLength(1);
+	});
+});
+
+describe("loadForkRuntime", () => {
+	it("loads the fork's main into an isolate keyed by repo and commit, and the fork answers", async () => {
+		const loaded = await loadForkRuntime(deps, "user-1", "main");
+		const card = await askCard(loaded.fork, research);
+		expect([loaded.repo, loaded.ref, loaded.sha, loaded.isolateId]).toEqual(["user-1", "main", main, `user-1:${main}`]);
+		expect(loader.built).toContain(`user-1:${main}`);
+		expect(card).toMatchObject({ mode: "research", computed_dose: { value: 7, unit: "mg" }, ledger: { fork_commit: main, stock_tag: TAG } });
+		expect(card.sources.length).toBeGreaterThanOrEqual(2);
+	});
+
+	it("reuses the isolate for the same commit instead of building it again", async () => {
+		await askCard((await loadForkRuntime(deps, "user-1", "main")).fork, research);
+		await askCard((await loadForkRuntime(deps, "user-1", main)).fork, research);
+		expect(loader.built.filter((id) => id === `user-1:${main}`)).toHaveLength(1);
+	});
+});
+
+describe("runGate", () => {
+	it("passes the unchanged fork with the invariant and functional tiers run", async () => {
+		const gate = await runGate(deps, { repo: "user-1", ref: "main", mode: "check", samples: 1 });
+		expect(gate.failures).toEqual([]);
+		expect(gate).toMatchObject({ repo: "user-1", commit: main, stockTag: TAG, stockCommit: stock.commits[0], passed: true });
+		for (const tier of [gate.tiers.invariant, gate.tiers.functional]) {
+			expect(tier).toMatchObject({ passed: true, failed: 0 });
+			expect(tier!.total).toBeGreaterThan(0);
+		}
+		// The fork ran in a gate variant of its own, the probes in stock's runner isolate.
+		expect(loader.built).toContainEqual(expect.stringMatching(new RegExp(`^user-1:${main}:gate-[0-9a-f]{8}$`)));
+		expect(loader.built).toContain(`stock-runner:${stock.commits[0]}`);
+	});
+
+	it("fails a fork that lowers tau below the stock floor", async () => {
+		t.artifacts.seed("user-2", { commits: [published, { ...published, "fluid.toml": setTomlValue(published["fluid.toml"]!, "thresholds", "tau", 0.6) }] });
+		const gate = await runGate(deps, { repo: "user-2", ref: "main", mode: "check", samples: 1 });
+		expect(gate.passed).toBe(false);
+		expect(gate.failures).toContainEqual(expect.objectContaining({ tier: "invariant", probe: "inv-tau-config-floor", expected: 0.85, actual: 0.6 }));
+	});
+});
+
+describe("serveAsk", () => {
+	it("serves the fork's card with its commit and records the answer in the user's ledger", async () => {
+		const card = await serveAsk(deps, { repo: "user-1", ref: "main", request: research, useModel: false, userId: "1", fallback: false });
+		expect(card.fork).toEqual({ repo: "user-1", ref: "main", commit: main });
+		const ledger = await ledgerStub(t.env, "1").list();
+		expect(ledger.map((entry) => [entry.repo, entry.record.answer_id])).toEqual([["user-1", card.answer_id]]);
 	});
 });

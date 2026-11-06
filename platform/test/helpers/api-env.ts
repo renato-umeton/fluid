@@ -5,6 +5,7 @@
 import { Fleet } from "../../src/durable/fleet.ts";
 import { Quota } from "../../src/durable/quota.ts";
 import { Runs } from "../../src/durable/runs.ts";
+import { UserLedger } from "../../src/durable/user-ledger.ts";
 import { signSession, SESSION_COOKIE, type Session } from "../../src/lib/session.ts";
 import { construct } from "./durable.ts";
 import { fakeGitRepo, type FakeGitRepo, type RepoSeed } from "./fake-repos.ts";
@@ -111,6 +112,7 @@ export function apiEnv() {
 	env.FLEET = namespace(Fleet as never, () => env);
 	env.QUOTA = namespace(Quota as never, () => env);
 	env.RUNS = namespace(Runs as never, () => env);
+	env.USER_LEDGER = namespace(UserLedger as never, () => env);
 	return { env: env as unknown as Env, artifacts, fleet: (env.FLEET as { get(id: string): Fleet }).get("global") };
 }
 
