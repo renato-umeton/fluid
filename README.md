@@ -14,14 +14,16 @@ Fluid is an entry to Cloudflare's "Build the next Git platform" competition. Liv
 
 ## Secure: a fleet of forks is a moving target
 
-Every fork starts from the same upstream code, so a bug in upstream is a bug in every fork. One exploit written against upstream's public source reaches every user at once. Finding bugs got cheap: models now help find and exploit them (see the design doc's [background](docs/plans/2026-11-06-polymorphic-installation-design.md#background)). Fluid answers with **polymorphic installation**:
+Every fork starts from the same upstream code, so a bug in upstream is a bug in every fork. One exploit written against upstream's public source can reach every user at once. Bugs are now cheap to find: models help find and exploit them (see the design doc's [background](docs/plans/2026-11-06-polymorphic-installation-design.md#background)). Fluid answers with **polymorphic installation**:
 
-- **Each fork runs its own renamed copy.** Upstream lists 74 internal names in `stock/polymorph.json`, such as `researchNeedsAttestation`. When the platform loads a fork's copy, it renames each one with a suffix from a secret seed for that fork, commit, and epoch, so `researchNeedsAttestation` becomes `researchNeedsAttestation$` and 8 secret characters. Git keeps the readable code, so customizations, contests, and upgrades work as before.
-- **The gate checks that the copy behaves the same.** Before a copy goes live, a check mode gate sends every probe to the plain fork and to the copy. Any difference fails tier 1, and the fork keeps the copy it has.
-- **Original names become tripwires.** No request needs an internal name, so a request that uses an original name, or another copy's name, was built from upstream's source or from a leaked copy. The platform refuses it with one answer for every wire, records a security event, and starts a rotation that moves that fork to a new copy.
+- **Each fork runs its own renamed copy.** Upstream lists 74 internal names in `stock/polymorph.json`, such as `researchNeedsAttestation`. When the platform loads a fork's copy, it adds a suffix to each listed name that the fork's own text and the runtime do not use (in the experiment, all 74). The suffix comes from a secret seed for that fork, commit, and rotation, so `researchNeedsAttestation` becomes `researchNeedsAttestation$` plus 8 secret characters. Git keeps the readable code, so customizations, contests, and upgrades work as before.
+- **The gate checks that the copy behaves the same.** Before a copy goes live, the gate sends every test request to the plain fork and to the copy. Any difference fails the gate, and the fork keeps the copy it has.
+- **Original names become tripwires.** No request needs an internal name. A request whose keys, at any depth, use an original name or another copy's name was built from upstream's source or from a leaked copy. Values are not checked. The platform refuses such a request with the same answer whichever tripwire it hits, records a security event, and starts a rotation that moves that fork to a new copy.
 - **Copies rotate.** Every fork moves to a new copy every 6 hours and after a change lands on its `main`. Whatever an attacker learned about a copy goes stale.
 
-To measure it, a test release plants a zero-day in the medical app: a mass assignment bug that lets one request release a research dose held for attestation. Twenty forks on that release run through the platform's own loader, gate, and ask path, with in-memory fakes for Artifacts and the Worker Loader:
+Polymorphic installation is opt-in: a deployment turns it on with the optional `POLYMORPH_SECRET` ([docs/DEPLOY.md](docs/DEPLOY.md#6-create-the-secrets-file)), and without it every fork runs plain. A renamed copy answers with the model off.
+
+To measure the protection, a test fixture plants two zero-days in a release of the medical app. The release exists only in the test, and stock stays clean. The first zero-day is a mass assignment bug: the release copies display options from the request into its internal options, so one request can release a research dose held for attestation (attacks A, A2, and A3). The second is a public switch, `display.preview`, that skips the same hold (attack B). Twenty forks on that release run through the platform's own loader, gate, and ask path, with in-memory fakes for Artifacts and the Worker Loader:
 
 | Attack | Plain fleet | Renamed copies, scan bypassed | Through the platform | Refused | Moved to a new copy |
 | :-- | :-- | :-- | :-- | :-- | :-- |
@@ -30,11 +32,11 @@ To measure it, a test release plants a zero-day in the medical app: a mass assig
 | A3: 1000 blind guesses on fork 3 | 0 of 1000 | 0 of 1000 | 0 of 1000 | 1000 of 1000 | 1 of 1 fork |
 | B: public field only | 20 of 20 | 20 of 20 | 20 of 20 | 0 of 20 | 0 of 20 |
 
-The first three result columns count requests that released the held dose (7 mg) while an identified patient's chart was open and nothing was attested. Every copy renamed all 74 names and answered all 70 probe requests like the plain fork, with 0 differences. After fork 7 moved to a new copy, its leaked names were refused there too.
+The first three result columns count requests that released a held research dose (7 mg) while an identified patient was in context and no attestation was given. The "scan bypassed" column sends each request straight to the fork's renamed copy, as if the tripwire scan were skipped. "Refused" counts requests, and "Moved to a new copy" counts forks. Every copy renamed all 74 names and answered all 70 probe requests like the plain fork, with 0 differences. After fork 7 moved to a new copy, its leaked names were refused there too.
 
-The limit, stated plainly: renaming cannot stop a bug that public fields alone reach, so attack B works on every copy. A leaked copy works on its own fork until that fork rotates (attack A2). These results come from tests; nothing has run on the deployed site yet.
+The limits, stated plainly: renaming cannot stop a bug that public fields alone reach, so attack B works on every copy. A leaked copy works on its own fork until that fork rotates (attack A2). These results come from tests; nothing has run on the deployed site yet.
 
-Details and every limit: [docs/POLYMORPH.md](docs/POLYMORPH.md). The question, the research, and the design: the [design doc](docs/plans/2026-11-06-polymorphic-installation-design.md) for [issue #1](https://github.com/renato-umeton/fluid/issues/1). Replay the recorded run in mock mode: `/?mock=1#polymorph`.
+Run it yourself, with no Cloudflare account: `cd platform && npm install && npm run polymorph:demo` (a 20-fork run takes about 15 seconds). Details and every limit: [docs/POLYMORPH.md](docs/POLYMORPH.md). The question, the research, and the design: the [design doc](docs/plans/2026-11-06-polymorphic-installation-design.md) for [issue #1](https://github.com/renato-umeton/fluid/issues/1). Replay the recorded run in mock mode: `/?mock=1#polymorph`.
 
 ## Four ideas
 
