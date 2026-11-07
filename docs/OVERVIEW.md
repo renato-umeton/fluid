@@ -41,6 +41,7 @@ The platform is the control plane in `platform/`. The tenant is the app that ups
 | `tests/e2e/manifest.json`, `tests/e2e/runner.ts` | The end-to-end suite and runner for the yellow soak. |
 | `tests/user/` | An empty template for the user's own tests (tier 3 and soak scenarios). Forks fill it in. |
 | `fluid.toml` | `stock_tag` pins the release. It also holds user preferences such as `auto_upgrade` and `harvest_opt_in`. |
+| `polymorph.json` | Optional. The internal names a fork's renamed copy may rename (polymorphic installation), checked by upstream's own unit test. A release without it runs every fork plain. See [POLYMORPH.md](POLYMORPH.md). |
 | `.intent/` | Build-time intent records for upstream's own changes. |
 
 Releases are `vMAJOR.MINOR.PATCH` tags. The platform writes `releases/<tag>.json` (notes, safety flag, grace period) when it publishes one. See `stock/README.md` for the runtime contract.
@@ -50,6 +51,7 @@ Releases are `vMAJOR.MINOR.PATCH` tags. The platform writes `releases/<tag>.json
 - **Forks.** Provisioning from an upstream tag, sessions, and quotas.
 - **Runtime.** One Worker Loader isolate per fork commit, keyed by repo and sha, with no network. The gate's test runner runs in a separate isolate built only from upstream files and reaches the fork through one `ask` RPC. The soak's runner reaches the live fork through a small set of platform calls.
 - **Gate.** The three tiers, published pins only, pins that only move forward, append-only intent records, and `main` that only fast-forwards.
+- **Polymorphic installation.** Each fork can run its own copy of upstream's code, with the names upstream lists renamed by a secret seed per fork, commit, and epoch. A check mode gate shows that the copy answers every probe like the plain fork before it goes live. Requests that use an original name are refused, and copies rotate every 6 hours and after changes land. It needs the optional `POLYMORPH_SECRET`. See [POLYMORPH.md](POLYMORPH.md).
 - **Yellow soak.** End-to-end runs against the live fork, browser checks, rollback by revert commit, and repair.
 - **Agents.** Customize (recipes or a model plan, checked before anything runs), the test suggester, merge, repair, intent replay, and harvest. Models run on Workers AI behind AI Gateway. Every decision about what merges is plain code.
 - **Outside agents.** A one hour token for a per-fork inbox repo. The platform imports `work/*` branches into the fork, and the gate decides.
@@ -74,14 +76,17 @@ These parts of the platform code assume the medical app. A second tenant would n
 - **Demo release.** `platform/src/stock/releases.ts` rewords a line in `app/cards.ts` and adds research cross-check invariants.
 - **Platform end-to-end scenarios and browser checks.** `PLATFORM_SCENARIOS` in `platform/src/yellow/tiers.ts` and the checks in `platform/src/yellow/browser.ts` ask the bedside dosing question and expect a clinical card with no dose.
 - **UI.** `platform/public/` renders medical answer cards, the context simulator, and charts by mode.
+- **Polymorph list (already in upstream).** Which internal names move is tenant-specific, so the list lives in upstream's `polymorph.json`, and a second tenant brings its own. The platform's polymorph code works with any list. Only the experiment's fixture release and its exploits are medical (`platform/test/fixtures/zero-day.ts`).
 
 ## Not built yet
 
 - Several tenants on one deployment. Upstream is always the repo named `stock`.
 - Contest at scale on the live site. One live contest ran end to end on 2026-10-06 (three model plans, all passed, the pick went through the merge gate and turned green). Contest and the list of wishes in flight shipped in v2.0-beta; the mock contest plays one fixed scenario.
+- Polymorphic installation on the live site. It is built and measured in tests (20 forks, with in-memory fakes for Artifacts and the Worker Loader), and nothing has run on the deployed site yet. Renamed copies answer with the model off.
 
 ## Related documents
 
 - [ARCHITECTURE.md](ARCHITECTURE.md): concepts mapped to code and Cloudflare primitives.
 - [GATE_AND_AGENTS.md](GATE_AND_AGENTS.md): the gate, the soak, and every agent in detail.
+- [POLYMORPH.md](POLYMORPH.md): polymorphic installation, its results, and its limits.
 - [Fluid_ Personal Software for Academic Medicine.md](<Fluid_ Personal Software for Academic Medicine.md>): the original medical case study spec.
