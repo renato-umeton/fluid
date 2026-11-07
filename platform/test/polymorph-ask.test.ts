@@ -64,6 +64,9 @@ beforeAll(() => {
 		"user-route": { ...PUBLISHED, "app/route.ts": "export const route = 1;\n" },
 		"user-busy": { ...PUBLISHED, "app/busy.ts": "export const busy = 1;\n" },
 		"user-asbuilt": { ...PUBLISHED, "app/asbuilt.ts": "export const asbuilt = 1;\n" },
+		"user-http": { ...PUBLISHED, "app/http.ts": "export const http = 1;\n" },
+		"user-other": { ...PUBLISHED, "app/other.ts": "export const other = 1;\n" },
+		"user-crowd": { ...PUBLISHED, "app/crowd.ts": "export const crowd = 1;\n" },
 		"user-flaky": { ...PUBLISHED, "app/flaky.ts": "export const flaky = 1;\n" },
 		"user-resecret": { ...PUBLISHED, "app/resecret.ts": "export const resecret = 1;\n" },
 		"user-renames": { ...PUBLISHED, "app/renames.ts": "export const renames = 1;\n" },
@@ -455,6 +458,65 @@ describe("serveAsk on another ref of a fork with a copy", () => {
 			expect(card.fork).toEqual({ repo: "user-asbuilt", ref: p.heads["user-asbuilt"], commit: p.heads["user-asbuilt"] });
 			expect(p.t.fleet.securityEvents("user-asbuilt")).toEqual([]);
 			expect(rotationsOf("user-asbuilt")).toEqual([]);
+		},
+		SLOW_MS,
+	);
+});
+
+describe("the live path at the HTTP layer", () => {
+	/** A response as a client sees it, without its request id, which differs per request. */
+	async function seen(response: Response) {
+		const { requestId, ...body } = (await response.json()) as Record<string, unknown>;
+		return { status: response.status, headers: [...response.headers.entries()].filter(([name]) => name !== "x-request-id").sort(), body, requestId: typeof requestId };
+	}
+
+	it(
+		"answers an original name, a made-up renamed name, and another fork's real renamed name with the same status, headers, and body",
+		async () => {
+			const own = await storeCopy("user-http", 5);
+			const other = await storeCopy("user-other", 2);
+			const othersName = (await variantNames(await deriveSeed(POLYMORPH_TEST_SECRET, "user-other", other.sha, 2), LISTED)).get("researchNeedsAttestation")!;
+			const cookie = await cookieFor({ userId: "http" });
+			const responses = [];
+			for (const key of ["researchNeedsAttestation", await foreignName("user-http", 5), othersName]) {
+				responses.push(await seen(await worker.fetch(post("/api/ask", { cookie }, { question: requests.research.question, context: naming(key).context, useModel: true }), p.t.env, workflows.ctx)));
+			}
+			expect(responses[0]).toEqual({ status: 403, headers: expect.any(Array), body: { error: TRIPWIRE_REFUSAL }, requestId: "string" });
+			expect(responses[1]).toEqual(responses[0]);
+			expect(responses[2]).toEqual(responses[0]);
+			expect(JSON.stringify(responses)).not.toContain(own.fingerprint);
+			expect(await ledgerOf("user-http")).toEqual([]);
+		},
+		SLOW_MS,
+	);
+
+	it(
+		"starts one rotation for a copy that 40 requests trip at once",
+		async () => {
+			const state = await storeCopy("user-crowd", 7);
+			vi.spyOn(Date, "now").mockReturnValue(t0);
+			const foreign = await foreignName("user-crowd", 7);
+			const settled = await Promise.allSettled(Array.from({ length: 40 }, (_, i) => ask("user-crowd", naming(i % 2 ? foreign : "researchNeedsAttestation"), { useModel: i % 3 === 0 })));
+			expect(new Set(settled.map((outcome) => (outcome.status === "rejected" && outcome.reason instanceof HttpError ? outcome.reason.status : outcome.status)))).toEqual(new Set([403]));
+			const id = rotationId("user-crowd", copyKey(state, t0));
+			expect(rotationsOf("user-crowd")).toEqual([{ workflow: "RotateWorkflow", id, params: { repo: "user-crowd", reason: "tripwire", runId: `run_${id}` } }]);
+			expect(p.t.fleet.securityEvents("user-crowd")).toHaveLength(40);
+		},
+		SLOW_MS,
+	);
+
+	it(
+		"answers from the copy with the model off when the request body asks for the model",
+		async () => {
+			const state = await storeCopy("user-http", 6);
+			const calls = modelCalls.length;
+			const response = await worker.fetch(post("/api/ask", { cookie: await cookieFor({ userId: "http" }) }, { ...requests.administrative, useModel: true }), p.t.env, workflows.ctx);
+			expect(response.status).toBe(200);
+			const served = (await response.json()) as ServedCard;
+			expect(served.fork).toMatchObject({ variant: state.fingerprint });
+			expect(served.signals).not.toContain(MODEL_WORDING);
+			expect(modelCalls.length).toBe(calls);
+			expect(p.loader.built.filter((id) => id.startsWith("user-http:") && id.endsWith(":llm"))).toEqual([]);
 		},
 		SLOW_MS,
 	);
