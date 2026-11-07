@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // @ts-expect-error plain ES module from the static UI
@@ -476,7 +477,8 @@ describe("the lines around the fleet and the scoreboard", () => {
 });
 
 describe("the Polymorph view is wired in like the others", () => {
-	const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
+	const here = dirname(fileURLToPath(import.meta.url));
+	const read = (path: string) => readFileSync(join(here, path), "utf8");
 	const app = read("../public/app.js");
 	const html = read("../public/index.html");
 	const views = (app.match(/const VIEWS = \{([^}]*)\}/)?.[1] ?? "").split(",").map((entry) => entry.split(":")[0].trim());
@@ -505,7 +507,7 @@ describe("the Polymorph view is wired in like the others", () => {
 	});
 
 	it("reads the recording from public/data, next to the page", () => {
-		expect(fileURLToPath(view.DATA_URL)).toBe(fileURLToPath(new URL("../public/data/polymorph-demo.json", import.meta.url)));
+		expect(fileURLToPath(view.DATA_URL)).toBe(join(here, "../public/data/polymorph-demo.json"));
 	});
 
 	it.each(["../public/js/views/polymorph.js", "../public/js/polymorph-replay.js"])("%s builds text only through h(), never as HTML", (path) => {
