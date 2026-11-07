@@ -19,8 +19,9 @@
 // secret and the seed of the blind guesses are fixed, so every run makes the
 // same copies and sends the same requests; POLYMORPH_TEST_SECRET and
 // POLYMORPH_GUESS_SEED replace them.
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { serveAsk, TRIPWIRE_REFUSAL, type AskDeps } from "../src/api/ask.ts";
 import { HttpError } from "../src/api/http.ts";
@@ -44,6 +45,8 @@ if (!Number.isInteger(FLEET) || FLEET < 4) {
 }
 const DEMO = process.env.POLYMORPH_DEMO === "1";
 const RECORD_PATH = process.env.POLYMORPH_DEMO_RECORD;
+/** The recording the deployed Polymorph view replays (polymorph:record writes it). */
+const COMMITTED_RECORDING = resolve(dirname(fileURLToPath(import.meta.url)), "../public/data/polymorph-demo.json");
 /** A run takes under a second per fork on a quiet machine (about 15 seconds for 20 forks); this leaves room for a loaded one. */
 const EXPERIMENT_MS = FLEET * 30_000;
 /** The platform secret that seeds every copy. */
@@ -518,6 +521,26 @@ function wiresTripped(outcomes: Outcome[]): Record<string, number> {
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
+/** What a recording shows, in its own terms: each attack's score, the forks whose copy answered a probe differently, and the leaked copy's forks. */
+function outcomeOf(recording: Recording) {
+	const a2 = recording.attacks.find((attack) => attack.id === "A2");
+	return {
+		scores: Object.fromEntries(recording.attacks.map((attack) => [attack.id, scoreOf(attack)])),
+		forksWithMismatches: recording.forks.filter((fork) => fork.mismatches !== 0).map((fork) => fork.repo),
+		leakedCopy: { direct: a2?.direct.compromised, platform: a2?.platform.compromised, afterRotation: recording.afterRotation },
+	};
+}
+
+/** The outcome every run must record for a fleet of these forks, as the checks after each attack require it of this run. */
+function expectedOutcome(repos: string[]) {
+	const leaked = repos[repos.length < 7 ? 3 : 6];
+	return {
+		scores: expectedScores(repos.length),
+		forksWithMismatches: [],
+		leakedCopy: { direct: [leaked], platform: [leaked], afterRotation: { attack: "A2", compromised: [], refused: [leaked] } },
+	};
+}
+
 /** A row of the Polymorph view's scoreboard (scoreRows): the attack, and a cell for each of SCORE_COLUMNS. */
 type ScoreRow = Record<string, string> & { id: string; label: string; detail: string };
 
@@ -653,6 +676,14 @@ describe(`a fleet of ${FLEET} forks on a release with a planted zero-day`, () =>
 			expect(validateDemo(recording)).toEqual([]);
 			// Printed after every check, failed or not, so the scoreboard always shows what this run measured.
 			if (DEMO) console.log(scoreboard(forks, recording));
+			// The committed recording is what the deployed page replays: every run checks it still passes the view's checks
+			// and shows this outcome for its own fleet, unless this run is about to replace it.
+			if (RECORD_PATH === undefined || resolve(RECORD_PATH) !== COMMITTED_RECORDING) {
+				const committed = JSON.parse(readFileSync(COMMITTED_RECORDING, "utf8")) as Recording;
+				expect(validateDemo(committed), "problems in the committed recording").toEqual([]);
+				expect([committed.release, committed.listSize, committed.probes], "the committed recording's release, list size, and probes, against this run's").toEqual([recording.release, recording.listSize, recording.probes]);
+				expect(outcomeOf(committed), "the committed recording's outcome").toEqual(expectedOutcome(committed.forks.map((fork) => fork.repo)));
+			}
 			// A run with a failed check writes no recording, so the page never replays one.
 			if (RECORD_PATH && task.result?.state !== "fail") {
 				const path = resolve(RECORD_PATH);
