@@ -198,7 +198,7 @@ describe("addEquivalence", () => {
 			],
 		});
 		expect(verdict(tiers, failures)).toBe(false);
-		// The names it renamed, sorted, and never what it renamed them to.
+		// The original names it renamed, sorted.
 		expect(report).toEqual({ epoch: 3, fingerprint: "a1b2c3d4", namesHash: "87806eb6", renamed: ["buildCard", "researchNeedsAttestation"], compared: 0, mismatches: 0, skipped: copy.skipped });
 	});
 

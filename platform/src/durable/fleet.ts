@@ -96,8 +96,8 @@ export interface MorphState {
 	/**
 	 * Eight random hex characters drawn when the copy was stored: what answers
 	 * and the ledger name the copy by. Nothing derives it from the secret, so
-	 * unlike the fingerprint it gives no way to test a guess of the secret.
-	 * Null for a copy stored before Fleet kept one, whose answers name none.
+	 * it gives no way to test a guess of the secret. Null for a copy stored
+	 * before Fleet kept one, whose answers name none.
 	 */
 	variant: string | null;
 	/** When it was stored. */

@@ -51,7 +51,7 @@ describe("scanRequest", () => {
 		expect(scanRequest({ question, history: [{ role: "user", text: longer }] }, names)).toEqual({ kind: "foreign", name: "answerModes", path: "history.0.text" });
 	});
 
-	it("flags a key that holds a renamed name inside a longer word, but never this copy's own name as the whole key", () => {
+	it("flags a key that holds a renamed name inside a longer word, and lets through a key that is exactly this copy's own name", () => {
 		expect(scanRequest({ question, context: { [`x${own}`]: 1 } }, names)).toEqual({ kind: "foreign", name: "researchNeedsAttestation", path: `context.x${own}` });
 		expect(scanRequest({ question, context: { [own]: false } }, names)).toBeNull();
 	});

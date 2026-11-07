@@ -322,7 +322,7 @@ describe("serveAsk and a copy's tripwires", () => {
 	);
 
 	it(
-		"starts exactly one rotation of the fork, named by its window and never by its copy, however many requests trip it",
+		"starts exactly one rotation of the fork, named by the window alone, however many requests trip it",
 		async () => {
 			const state = await storeCopy("user-flood", 2);
 			vi.spyOn(Date, "now").mockReturnValue(t0);
