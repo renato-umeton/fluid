@@ -95,12 +95,15 @@ interface Fork {
 	after: { epoch: number; fingerprint: string } | null;
 }
 
+/** A research answer held for attestation, or released with a computed dose: the exploit worked. */
+type ResearchAnswer = "held" | "released";
+
 /** What one request did: on the plain fork, on the fork's copy with nothing scanning it, and through the platform. */
 interface Outcome {
 	repo: string;
-	plain: boolean;
-	direct: boolean;
-	platform: "compromised" | "answered" | "refused";
+	plain: ResearchAnswer;
+	direct: ResearchAnswer;
+	platform: ResearchAnswer | "refused";
 	/** For a refused request, the wire it tripped as Fleet recorded it: an original name (decoy) or another copy's (foreign). */
 	hit: string | null;
 }
@@ -164,10 +167,19 @@ function frozen<T>(value: T): T {
 	return value;
 }
 
-/** The exploit worked: the research answer (the card, or its research alternative) carries a computed dose and is not held for attestation. */
-function compromised(card: AnswerCardLike): boolean {
+/**
+ * What the research answer (the card, or its research alternative) did:
+ * held for attestation with no dose, or released with a computed dose.
+ * Throws for anything else, such as no research answer or a dose withheld
+ * for another reason: a missing dose would then say nothing about the hold.
+ */
+function researchAnswer(card: AnswerCardLike, where: string): ResearchAnswer {
 	const research = card.mode === "research" ? card : ((card.alternatives ?? []) as AnswerCardLike[]).find((alternative) => alternative.mode === "research");
-	return research !== undefined && research.computed_dose !== null && research.computed_dose !== undefined && research.requires_attestation !== true;
+	const dose = research?.computed_dose ?? null;
+	const held = research?.requires_attestation === true;
+	if (research !== undefined && held && dose === null) return "held";
+	if (research !== undefined && !held && dose !== null) return "released";
+	throw new Error(`${where}: the research answer is neither held nor released: ${JSON.stringify({ mode: card.mode, research: research?.mode ?? null, computed_dose: dose, requires_attestation: research?.requires_attestation ?? null })}`);
 }
 
 /** Each built-in's own properties, names and symbols, by key, as their descriptors. */
@@ -280,7 +292,7 @@ function restoreInstalled(forks: Fork[]): void {
 /** What the platform did with one request. */
 type PlatformAnswer = Pick<Outcome, "platform" | "hit">;
 
-/** Whether each request compromised the plain fork and the fork's stored copy, asked directly with askLoaded alone, which changes nothing. */
+/** Each request's research answer from the plain fork and from the fork's stored copy, asked directly with askLoaded alone, which changes nothing. */
 async function askDirectly(sends: Send[]): Promise<Pick<Outcome, "plain" | "direct">[]> {
 	const plain = new Map<string, LoadedFork>();
 	const copies = new Map<string, LoadedFork>();
@@ -288,7 +300,10 @@ async function askDirectly(sends: Send[]): Promise<Pick<Outcome, "plain" | "dire
 	for (const { repo, request } of sends) {
 		if (!plain.has(repo)) plain.set(repo, await loadForkRuntime(platform.deps, repo, "main"));
 		if (!copies.has(repo)) copies.set(repo, await loadCopy(repo));
-		answers.push({ plain: compromised(await askLoaded(plain.get(repo)!, request)), direct: compromised(await askLoaded(copies.get(repo)!, request)) });
+		answers.push({
+			plain: researchAnswer(await askLoaded(plain.get(repo)!, request), `${repo}, plain fork`),
+			direct: researchAnswer(await askLoaded(copies.get(repo)!, request), `${repo}, stored copy`),
+		});
 	}
 	return answers;
 }
@@ -299,7 +314,7 @@ async function askPlatformOnce(deps: AskDeps, { repo, request }: Send): Promise<
 		const served = await serveAsk(deps, { repo, ref: "main", request, useModel: false, userId: userIdFromForkRepo(repo)!, fallback: true });
 		// Only the fork's stored copy answers: neither the plain fork nor stock.
 		expect(served.fork, `${repo}: what answered`).toMatchObject({ repo, variant: platform.t.fleet.morphState(repo)!.fingerprint });
-		return { platform: compromised(served) ? "compromised" : "answered", hit: null };
+		return { platform: researchAnswer(served, `${repo}, through the platform`), hit: null };
 	} catch (error) {
 		if (!(error instanceof HttpError && error.status === 403 && error.message === TRIPWIRE_REFUSAL)) throw error;
 		return { platform: "refused", hit: trippedWire(repo, request) };
@@ -375,10 +390,10 @@ async function attack(forks: Fork[], plan: Attack, before: BuiltIns): Promise<At
 			detail: plan.detail,
 			tries: outcomes.length,
 			targets: [...new Set(plan.sends.map((entry) => entry.repo))],
-			plain: { compromised: reposWhere(outcomes, (outcome) => outcome.plain) },
-			direct: { compromised: reposWhere(outcomes, (outcome) => outcome.direct) },
+			plain: { compromised: reposWhere(outcomes, (outcome) => outcome.plain === "released") },
+			direct: { compromised: reposWhere(outcomes, (outcome) => outcome.direct === "released") },
 			platform: {
-				compromised: reposWhere(outcomes, (outcome) => outcome.platform === "compromised"),
+				compromised: reposWhere(outcomes, (outcome) => outcome.platform === "released"),
 				refused: reposWhere(outcomes, (outcome) => outcome.platform === "refused"),
 				rotated,
 			},
@@ -412,9 +427,9 @@ function requestCounts({ outcomes, recorded }: AttackRun) {
 	const count = (test: (outcome: Outcome) => boolean) => outcomes.filter(test).length;
 	return {
 		sent: outcomes.length,
-		plain: count((outcome) => outcome.plain),
-		direct: count((outcome) => outcome.direct),
-		compromised: count((outcome) => outcome.platform === "compromised"),
+		plain: count((outcome) => outcome.plain === "released"),
+		direct: count((outcome) => outcome.direct === "released"),
+		compromised: count((outcome) => outcome.platform === "released"),
 		refused: count((outcome) => outcome.platform === "refused"),
 		moved: recorded.platform.rotated.length,
 	};
@@ -487,14 +502,12 @@ describe(`a fleet of ${FLEET} forks on a release with a planted zero-day`, () =>
 
 			// Control: without display options the answer is held everywhere, and with attestation the same question gets its dose.
 			const control = await send(everyFork(HELD));
-			expect(control.outcomes.map((outcome) => [outcome.repo, outcome.plain, outcome.direct, outcome.platform])).toEqual(forks.map((fork) => [fork.repo, false, false, "answered"]));
+			expect(control.outcomes.map((outcome) => [outcome.repo, outcome.plain, outcome.direct, outcome.platform])).toEqual(forks.map((fork) => [fork.repo, "held", "held", "held"]));
 			expect(control.rotations).toEqual([]);
 			const attested = frozen({ ...HELD, attestation: true });
 			for (const fork of forks) {
 				for (const loaded of [await loadForkRuntime(platform.deps, fork.repo, "main"), await loadCopy(fork.repo)]) {
-					const held = await askLoaded(loaded, HELD);
-					expect([held.computed_dose, held.requires_attestation], `${loaded.isolateId}: held answer`).toEqual([null, true]);
-					expect((await askLoaded(loaded, attested)).computed_dose, `${loaded.isolateId}: attested answer`).not.toBeNull();
+					expect(researchAnswer(await askLoaded(loaded, attested), loaded.isolateId), `${loaded.isolateId}: attested answer`).toBe("released");
 				}
 			}
 
@@ -517,7 +530,7 @@ describe(`a fleet of ${FLEET} forks on a release with a planted zero-day`, () =>
 			const replay = await send([{ repo: leaked.repo, request: leakedRequest }]);
 			const afterRotation: AfterRotation = {
 				attack: "A2",
-				compromised: reposWhere(replay.outcomes, (outcome) => outcome.platform === "compromised"),
+				compromised: reposWhere(replay.outcomes, (outcome) => outcome.platform === "released"),
 				refused: reposWhere(replay.outcomes, (outcome) => outcome.platform === "refused"),
 			};
 			expect(builtInsChangedSince(before), "built-ins changed by the leaked copy's replay").toEqual([]);
