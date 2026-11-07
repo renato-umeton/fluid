@@ -6,13 +6,13 @@
 // machine.
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import worker from "../src/index.ts";
-import { COPY_RETRY, onCopyFailure, serveAsk, TRIPWIRE_REFUSAL, UNSCANNABLE_REFUSAL, type ServeAskInput, type ServedCard } from "../src/api/ask.ts";
+import { COPY_RETRY, onCopyFailure, serveAsk, TRIPWIRE_REFUSAL, UNSCANNABLE_REFUSAL, type AskDeps, type ServeAskInput, type ServedCard } from "../src/api/ask.ts";
 import { HttpError } from "../src/api/http.ts";
 import { cardDifferences } from "../src/polymorph/equivalence.ts";
 import { deriveSeed, fingerprint, namesHash, variantNames } from "../src/polymorph/names.ts";
 import { rotateFork } from "../src/polymorph/rotate.ts";
 import { SCAN_LIMITS } from "../src/polymorph/tokens.ts";
-import { askLoaded, loadForkRuntime, type RuntimeDeps } from "../src/runtime/loader.ts";
+import { askLoaded, loadForkRuntime } from "../src/runtime/loader.ts";
 import { ledgerStub } from "../src/stubs.ts";
 import { hostCallback } from "../src/yellow/run.ts";
 import { copyKey, rotationId, tripKey } from "../src/workflows/common.ts";
@@ -60,7 +60,7 @@ const withNext = (name: string) => [{ ...PUBLISHED, [`app/${name}.ts`]: `export 
 
 let p: PolymorphPlatform;
 const workflows = fakeWorkflows(MODEL);
-let deps: RuntimeDeps;
+let deps: AskDeps;
 /** The commit of user-ahead's work/next, one commit ahead of its main. */
 let aheadCommit: string;
 /** The commit of each fork's work/next, for the forks seeded withNext. */
@@ -132,7 +132,7 @@ async function storeCopy(repo: string, epoch: number, sha = p.heads[repo]!) {
 }
 
 /** serveAsk on production main, as POST /api/ask calls it for the fork's owner. */
-function ask(repo: string, request: Record<string, unknown>, options: Partial<ServeAskInput> & { deps?: RuntimeDeps } = {}): Promise<ServedCard> {
+function ask(repo: string, request: Record<string, unknown>, options: Partial<ServeAskInput> & { deps?: AskDeps } = {}): Promise<ServedCard> {
 	const { deps: using = deps, ...input } = options;
 	return serveAsk(using, { repo, ref: "main", request, useModel: false, userId: repo.slice(5), fallback: true, ...input });
 }
