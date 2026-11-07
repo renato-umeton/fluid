@@ -440,9 +440,19 @@ describe("the lines around the fleet and the scoreboard", () => {
 		expect(introLines(noB)[2]).toBe("Renaming cannot stop a bug that public fields alone can reach.");
 	});
 
-	it("sums up an attack after it plays, with the switch on or off", () => {
+	it("sums up an attack after it plays, with the switch on or off, counting forks in words", () => {
 		expect(outcomeLine(demo(), "A", false)).toBe("Attack A (Built from upstream's source) with polymorphic installation off: 3 of 3 forks compromised.");
-		expect(outcomeLine(demo(), "A2", true)).toBe("Attack A2 (Built from a leaked copy) with polymorphic installation on: 1 of 3 forks compromised, 1 refused, 2 moved to a new copy.");
+		expect(outcomeLine(demo(), "A2", true)).toBe("Attack A2 (Built from a leaked copy) with polymorphic installation on: 1 of 3 forks compromised, 1 fork refused it, and 2 forks moved to a new copy.");
+	});
+
+	it("counts the forks that refused attack A3, whose 1000 refused requests the scoreboard counts", () => {
+		// Attack A3 sends 1000 requests to one fork: the scoreboard shows 1000 of 1000 refused, and the status line one fork.
+		expect(scoreRows(demo())[2].refused).toBe("1000 of 1000");
+		expect(outcomeLine(demo(), "A3", true)).toBe("Attack A3 (Blind guessing) with polymorphic installation on: 0 of 3 forks compromised, 1 fork refused it, and 1 fork moved to a new copy.");
+	});
+
+	it("says no fork when none refused an attack or moved", () => {
+		expect(outcomeLine(demo(), "B", true)).toBe("Attack B (Public field only) with polymorphic installation on: 3 of 3 forks compromised, no fork refused it, and no fork moved to a new copy.");
 	});
 
 	it("says what the leaked names did after their fork moved to a new copy", () => {

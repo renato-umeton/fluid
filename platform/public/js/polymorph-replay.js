@@ -276,14 +276,18 @@ export function introLines(data) {
   ];
 }
 
-/** The status line once an attack has played. */
+/**
+ * The status line once an attack has played. It counts forks and says so in each count, since the scoreboard under it
+ * counts requests for what compromised a fork and what was refused: attack A3 sends 1000 requests to one fork.
+ */
 export function outcomeLine(data, attackId, polymorphOn) {
   const a = findAttack(data, attackId);
   const head = `Attack ${a.id} (${a.label}) with polymorphic installation ${polymorphOn ? "on" : "off"}`;
   const total = plural(data.forks.length, "fork");
   if (!polymorphOn) return `${head}: ${a.plain.compromised.length} of ${total} compromised.`;
   const p = a.platform;
-  return `${head}: ${p.compromised.length} of ${total} compromised, ${p.refused.length} refused, ${p.rotated.length} moved to a new copy.`;
+  const forks = (n) => (n === 0 ? "no fork" : plural(n, "fork"));
+  return `${head}: ${p.compromised.length} of ${total} compromised, ${forks(p.refused.length)} refused it, and ${forks(p.rotated.length)} moved to a new copy.`;
 }
 
 /** The line under the scoreboard about the leaked copy once its own fork moved; null without that part of the run. */
