@@ -312,12 +312,12 @@ export const LIVE_ROTATION_WINDOW_MS = 10 * 60 * 1000;
  * The key of the live path's rotation of a stored copy at `now`: however many
  * requests trip the copy or find it stale, one rotation starts per copy in
  * each LIVE_ROTATION_WINDOW_MS, and one that skipped (the fork was busy) can
- * start again in the next. The copy is named by its epoch and a hash of its
- * fingerprint, never the fingerprint itself: anyone who knows a run id can
- * read the run, and its id is part of the key.
+ * start again in the next. The epoch names the stored copy (a fork stores
+ * each epoch once), so nothing derived from the fingerprint goes into the
+ * key: anyone who knows a run id can read the run, and the key is part of it.
  */
-export function copyKey(copy: { epoch: number; fingerprint: string }, now = Date.now()): string {
-	return `c${copy.epoch}-${fnv1a(copy.fingerprint)}-t${Math.floor(now / LIVE_ROTATION_WINDOW_MS).toString(36)}`;
+export function copyKey(copy: { epoch: number }, now = Date.now()): string {
+	return `c${copy.epoch}-t${Math.floor(now / LIVE_ROTATION_WINDOW_MS).toString(36)}`;
 }
 
 /** The key of a new fork's first rotation, which installs it as a renamed copy: one per fork. */

@@ -11,7 +11,7 @@ import * as entry from "../src/index.ts";
 import { forkRepoName } from "../src/lib/names.ts";
 import { runsStub } from "../src/stubs.ts";
 import { deriveSeed, fingerprint } from "../src/polymorph/names.ts";
-import { GATE_STEP, INSTALL_KEY, rotationId, startRotation, type RotateParams } from "../src/workflows/common.ts";
+import { copyKey, GATE_STEP, INSTALL_KEY, LIVE_ROTATION_WINDOW_MS, rotationId, startRotation, type RotateParams } from "../src/workflows/common.ts";
 import { SeedForkWorkflow } from "../src/workflows/fleet.ts";
 import { GateWorkflow } from "../src/workflows/gate.ts";
 import { RotateWorkflow } from "../src/workflows/rotate.ts";
@@ -189,6 +189,16 @@ describe("RotateWorkflow without a repo", () => {
 		expect(workflows.created).toEqual([]);
 		expect(output).toEqual({ started: 0 });
 		expect(await runsStub(t.env, "run_sched-2").get()).toMatchObject({ status: "cancelled", cancelReason: "POLYMORPH_SECRET is not set or is shorter than 16 characters" });
+	});
+});
+
+describe("copyKey", () => {
+	it("names the live path's rotation of a stored copy by the copy's epoch and the ten-minute window, and nothing about its fingerprint", () => {
+		const at = Date.parse("2026-11-06T10:07:00Z");
+		const window = Math.floor(at / LIVE_ROTATION_WINDOW_MS).toString(36);
+		expect(copyKey({ epoch: 3, fingerprint: "a1b2c3d4" }, at)).toBe(`c3-t${window}`);
+		expect(copyKey({ epoch: 3, fingerprint: "0f0f0f0f" }, at + 2 * 60_000)).toBe(`c3-t${window}`);
+		expect(copyKey({ epoch: 3, fingerprint: "a1b2c3d4" }, at + 3 * 60_000)).not.toBe(`c3-t${window}`);
 	});
 });
 
