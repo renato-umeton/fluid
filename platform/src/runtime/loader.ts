@@ -3,11 +3,20 @@
 // null). Only the model variant of an isolate (id suffix ":llm") gets the LLM
 // capability in its env; every other isolate has no route to the platform.
 // Isolates are keyed by repo:sha (plus a variant), and the transformed module
-// map is cached per key in this isolate.
+// map is cached per key in this isolate. A renamed copy of a fork (see
+// polymorph/) adds ":m<epoch>.<fingerprint>.<names hash>" to both, which
+// names exactly the code it runs.
+import type { MorphState } from "../durable/fleet.ts";
 import synthetic from "../generated/synthetic.json";
+import { CopyMismatchError, plainKindOf, PolymorphUnavailableError, type PlainKind } from "../polymorph/errors.ts";
+import { buildCopy, clearCopyCaches, planCopy, readContract } from "../polymorph/install.ts";
+import type { SkippedName } from "../polymorph/list.ts";
+import { unmorphText } from "../polymorph/morph.ts";
+import { forgetRotations } from "../polymorph/started.ts";
+import { clearStockCaches } from "../stock/suite.ts";
 import { buildE2ERunnerModuleMap, buildModuleMap, buildRunnerModuleMap, isRuntimePath, RUNTIME_DIRS, type ModuleMap } from "./modules.ts";
-import { resolveCommit, shortRef } from "./refs.ts";
-import { openRepo, readCommitFiles } from "./repo-files.ts";
+import { isSha, resolveCommit, shortRef } from "./refs.ts";
+import { clearBlobCache, openRepo, readCommitFiles } from "./repo-files.ts";
 
 export const RUNTIME_COMPATIBILITY_DATE = "2026-10-01";
 const MODULE_CACHE_LIMIT = 200;
@@ -37,11 +46,6 @@ export interface ForkEntrypoint {
 /** Largest card text accepted from a fork. */
 export const MAX_CARD_CHARS = 256 * 1024;
 
-/**
- * Asks a fork and parses its card. The fork serializes the card itself, so
- * the platform and the gate only ever see plain JSON data: no RPC stubs,
- * getters, or toJSON methods that could answer differently on each read.
- */
 /** The fork's own code threw while answering, or answered with something that is not a card. */
 export class ForkRuntimeError extends Error {
 	constructor(message: string) {
@@ -50,15 +54,31 @@ export class ForkRuntimeError extends Error {
 	}
 }
 
-export async function askCard(fork: ForkEntrypoint, request: unknown, options?: AskOptions): Promise<AnswerCardLike> {
-	let text: unknown;
+/**
+ * Asks a loaded fork and parses its card. The fork serializes the card
+ * itself, so the platform and the gate only ever see plain JSON data: no RPC
+ * stubs, getters, or toJSON methods that could answer differently on each
+ * read. A renamed copy's card text and error messages have the copy's names
+ * mapped back to the originals before anything else sees them, so the caller
+ * gets what the plain fork would have sent and never a renamed name. It is
+ * the only way the platform asks a fork, so no caller can skip the mapping.
+ */
+export function askLoaded(loaded: LoadedFork, request: unknown, options?: AskOptions): Promise<AnswerCardLike> {
+	return askMapped(loaded.fork, request, options, loaded.morph?.names ?? null);
+}
+
+async function askMapped(fork: ForkEntrypoint, request: unknown, options: AskOptions | undefined, names: ReadonlyMap<string, string> | null): Promise<AnswerCardLike> {
+	const outgoing = (text: string) => (names === null ? text : unmorphText(text, names));
+	let answer: unknown;
 	try {
-		text = await fork.ask(request, options);
+		answer = await fork.ask(request, options);
 	} catch (error) {
-		throw new ForkRuntimeError(error instanceof Error ? error.message : String(error));
+		throw new ForkRuntimeError(outgoing(error instanceof Error ? error.message : String(error)));
 	}
-	if (typeof text !== "string") throw new ForkRuntimeError("the fork answered with something other than a JSON card");
-	if (text.length > MAX_CARD_CHARS) throw new ForkRuntimeError(`the fork's card is larger than ${MAX_CARD_CHARS} characters`);
+	if (typeof answer !== "string") throw new ForkRuntimeError("the fork answered with something other than a JSON card");
+	if (answer.length > MAX_CARD_CHARS) throw new ForkRuntimeError(`the fork's card is larger than ${MAX_CARD_CHARS} characters`);
+	// Mapped before parsing, so even a parse error's quote of the text shows original names.
+	const text = outgoing(answer);
 	let card: unknown;
 	try {
 		card = JSON.parse(text);
@@ -101,6 +121,57 @@ export interface LoadOptions {
 	variant?: string;
 	/** Give the isolate the LLM capability (a separate ":llm" isolate). */
 	useModel?: boolean;
+	/**
+	 * Load a renamed copy for this epoch instead of the plain fork, when the
+	 * platform can make one: POLYMORPH_SECRET is set, the fork's pinned stock
+	 * release publishes a list, and there are no extraFiles. With onlyAt, only
+	 * when the ref resolves to that commit; with fingerprint, only when the
+	 * seed makes that copy (a changed secret does not); with namesHash, only
+	 * when the copy renames exactly the names the gate verified. Otherwise the
+	 * plain fork loads (morph: null, plain says why) and a log line says why,
+	 * once per reason, fork commit, and epoch every ten minutes: this never
+	 * fails a load.
+	 */
+	morph?: { epoch: number; onlyAt?: string; fingerprint?: string; namesHash?: string };
+	/**
+	 * The commit ref is at, when the caller has just resolved it: the loader
+	 * loads it without resolving ref again, which saves a round trip to
+	 * Artifacts on the live path. LoadedFork.ref is still ref as asked.
+	 */
+	commit?: string;
+}
+
+/**
+ * The morph option that loads exactly the copy a gate verified and Fleet
+ * stored: its epoch, only at its commit, only while the platform secret still
+ * makes its fingerprint, and only when it renames the names the gate checked.
+ * Every caller that loads a stored copy goes through this, so none can leave
+ * a guard out.
+ */
+export function storedCopy(state: Pick<MorphState, "epoch" | "sha" | "fingerprint" | "namesHash">): NonNullable<LoadOptions["morph"]> {
+	return { epoch: state.epoch, onlyAt: state.sha, fingerprint: state.fingerprint, namesHash: state.namesHash };
+}
+
+/** Why a fork loaded plain rather than as a renamed copy (see polymorph/errors.ts). */
+export type { PlainKind };
+
+export interface PlainLoad {
+	kind: PlainKind;
+	/** What the log line says, with any renamed name mapped back. */
+	reason: string;
+}
+
+/** The renamed copy a fork loaded as. */
+export interface LoadedCopy {
+	epoch: number;
+	/** Eight hex characters naming the copy inside the platform (logs, isolate ids); answers show its random variant instead. */
+	fingerprint: string;
+	/** namesHash of the names it renamed: with the fingerprint, what identifies a verified copy. */
+	namesHash: string;
+	/** The names it renamed, original to renamed: the copy's secret, for its tripwires and for mapping its text back. */
+	names: ReadonlyMap<string, string>;
+	/** Listed names it left as they are, and why. */
+	skipped: readonly SkippedName[];
 }
 
 export interface LoadedFork {
@@ -110,11 +181,17 @@ export interface LoadedFork {
 	isolateId: string;
 	fluidToml: string | undefined;
 	fork: ForkEntrypoint;
+	/** The renamed copy that loaded, or null for the plain fork. */
+	morph: LoadedCopy | null;
+	/** Why the plain fork loaded, or null when the copy did. */
+	plain: PlainLoad | null;
 }
 
 interface CachedBuild {
 	map: ModuleMap;
 	fluidToml: string | undefined;
+	/** Set on a renamed copy's build. */
+	copy?: LoadedCopy;
 }
 
 const builds = new Map<string, CachedBuild>();
@@ -124,14 +201,31 @@ function runtimeDir(path: string): boolean {
 	return RUNTIME_DIRS.some((dir) => `${path}/`.startsWith(dir) || dir.startsWith(`${path}/`));
 }
 
-export function isolateId(repo: string, sha: string, variant?: string, useModel = false): string {
-	const base = variant ? `${repo}:${sha}:${variant}` : `${repo}:${sha}`;
-	return useModel ? `${base}:llm` : base;
+export interface IsolateIdOptions {
+	/** A separate isolate for the same code (a gate run, a candidate check). */
+	variant?: string;
+	/** The isolate that has the LLM capability. */
+	useModel?: boolean;
+	/** A renamed copy: its epoch, fingerprint, and names hash name its code exactly. */
+	copy?: { epoch: number; fingerprint: string; namesHash: string };
+}
+
+/** repo:sha, then the variant, then "m<epoch>.<fingerprint>.<names hash>" for a renamed copy, then "llm" for the model isolate. */
+export function isolateId(repo: string, sha: string, options: IsolateIdOptions = {}): string {
+	let id = `${repo}:${sha}`;
+	if (options.variant) id += `:${options.variant}`;
+	if (options.copy) id += `:m${options.copy.epoch}.${options.copy.fingerprint}.${options.copy.namesHash}`;
+	return options.useModel ? `${id}:llm` : id;
+}
+
+function cacheBuild(key: string, build: CachedBuild): void {
+	if (builds.size >= MODULE_CACHE_LIMIT) builds.delete(builds.keys().next().value!);
+	builds.set(key, build);
 }
 
 async function buildFor(env: Env, repoName: string, sha: string, options: LoadOptions): Promise<CachedBuild> {
 	// The module map depends only on the files: a variant without extra files reuses the commit's build.
-	const key = options.extraFiles ? isolateId(repoName, sha, options.variant) : isolateId(repoName, sha);
+	const key = options.extraFiles ? isolateId(repoName, sha, { variant: options.variant }) : isolateId(repoName, sha);
 	const cached = builds.get(key);
 	if (cached) return cached;
 	using repo = await openRepo(env.ARTIFACTS, repoName);
@@ -141,22 +235,116 @@ async function buildFor(env: Env, repoName: string, sha: string, options: LoadOp
 	});
 	const merged = { ...files, ...(options.extraFiles ?? {}) };
 	const build = { map: buildModuleMap(merged), fluidToml: merged["fluid.toml"] };
-	if (builds.size >= MODULE_CACHE_LIMIT) builds.delete(builds.keys().next().value!);
-	builds.set(key, build);
+	cacheBuild(key, build);
 	return build;
+}
+
+/**
+ * The names hash of each copy built in this isolate, by repo:sha:m<epoch>.<fingerprint>:
+ * the hash only building tells, and the last part of the copy's build key.
+ */
+const copyHashes = new Map<string, string>();
+
+/**
+ * The renamed copy of a plain build for one epoch, built once (a variant
+ * shares it, so the gate checks the code production runs). Throws, saying
+ * why, when no copy may load.
+ */
+async function copyFor(env: Env, repoName: string, sha: string, plain: CachedBuild, morph: NonNullable<LoadOptions["morph"]>, options: LoadOptions): Promise<CachedBuild & { copy: LoadedCopy }> {
+	// A candidate's extra files are not the commit the seed names, and its check never needs a copy.
+	if (options.extraFiles) throw new PolymorphUnavailableError("a build with extra files (a candidate under validation) is never renamed");
+	if (morph.onlyAt !== undefined && morph.onlyAt !== sha) throw new CopyMismatchError(`the copy is only for commit ${morph.onlyAt.slice(0, 7)}`);
+	const plan = await planCopy(env, { repo: repoName, sha, epoch: morph.epoch, fluidToml: plain.fluidToml });
+	// Another secret seeds another copy, one the gate never saw: refuse it before building anything.
+	if (morph.fingerprint !== undefined && morph.fingerprint !== plan.fingerprint) {
+		throw new CopyMismatchError(`this copy's fingerprint ${plan.fingerprint} is not the verified copy's (${morph.fingerprint})`);
+	}
+	const seeded = `${repoName}:${sha}:m${plan.epoch}.${plan.fingerprint}`;
+	// A hash this isolate learned by building comes first; the caller's expected hash may name a copy built from it.
+	const hash = copyHashes.get(seeded) ?? morph.namesHash;
+	const cached = hash === undefined ? undefined : builds.get(isolateId(repoName, sha, { copy: { epoch: plan.epoch, fingerprint: plan.fingerprint, namesHash: hash } }));
+	let build = cached?.copy ? { ...cached, copy: cached.copy } : null;
+	if (build === null) {
+		const built = await buildCopy(plan, plain.map, await readContract(env, repoName, sha, plain.fluidToml));
+		const copy: LoadedCopy = { epoch: plan.epoch, fingerprint: plan.fingerprint, namesHash: built.namesHash, names: built.names, skipped: built.skipped };
+		build = { map: built.map, fluidToml: plain.fluidToml, copy };
+		cacheBuild(isolateId(repoName, sha, { copy }), build);
+		if (copyHashes.size >= MODULE_CACHE_LIMIT) copyHashes.delete(copyHashes.keys().next().value!);
+		copyHashes.set(seeded, built.namesHash);
+	}
+	if (morph.namesHash !== undefined && morph.namesHash !== build.copy.namesHash) {
+		throw new CopyMismatchError(`this copy renames other names (${build.copy.namesHash}) than the verified copy (${morph.namesHash})`);
+	}
+	return build;
+}
+
+/**
+ * When each plain-fallback line was last logged, by repo:sha:epoch and
+ * reason. The live path loads on every ask, so one line per reason in each
+ * REPORT_EVERY_MS says enough, and a reason that comes back later (Artifacts
+ * failing again) shows up again.
+ */
+const reportedFallbacks = new Map<string, number>();
+const REPORTED_FALLBACK_LIMIT = 1000;
+const REPORT_EVERY_MS = 10 * 60 * 1000;
+
+function reportPlain(repo: string, sha: string, epoch: number, reason: string): void {
+	const key = `${repo}:${sha}:${epoch}:${reason}`;
+	const now = Date.now();
+	const last = reportedFallbacks.get(key);
+	if (last !== undefined && now - last < REPORT_EVERY_MS) return;
+	// Set again at the end, so a full map drops the line logged longest ago.
+	reportedFallbacks.delete(key);
+	if (reportedFallbacks.size >= REPORTED_FALLBACK_LIMIT) reportedFallbacks.delete(reportedFallbacks.keys().next().value!);
+	reportedFallbacks.set(key, now);
+	console.warn(`polymorph: ${repo}@${sha.slice(0, 7)} runs plain: ${reason}`);
+}
+
+/** The copy a load asks for, or the plain build and why there is none (logged as reportPlain says). */
+async function makeCopy(env: Env, repoName: string, sha: string, plain: CachedBuild, morph: NonNullable<LoadOptions["morph"]>, options: LoadOptions): Promise<{ build: CachedBuild; copy: LoadedCopy | null; plain: PlainLoad | null }> {
+	try {
+		const copied = await copyFor(env, repoName, sha, plain, morph, options);
+		return { build: copied, copy: copied.copy, plain: null };
+	} catch (error) {
+		// Whatever stops a copy (no secret, no list, code the renamer cannot read, Artifacts failing), the plain fork still serves.
+		const why: PlainLoad = { kind: plainKindOf(error), reason: error instanceof Error ? error.message : String(error) };
+		reportPlain(repoName, sha, morph.epoch, why.reason);
+		return { build: plain, copy: null, plain: why };
+	}
+}
+
+/** A stored copy as made: the copy, or why it was not made (as LoadedFork.plain says it). */
+export type StoredCopyResult = { copy: LoadedCopy; plain: null } | { copy: null; plain: PlainLoad };
+
+/**
+ * The copy Fleet stored for a fork, made at its commit as loading it would
+ * make it (the same build and cache, every guard of storedCopy on) but
+ * started in no isolate: what the live path checks a request to another
+ * commit of the fork against. When the stored state does not make the
+ * verified copy, says why as a load would.
+ */
+export async function buildStoredCopy(deps: RuntimeDeps, repoName: string, state: Pick<MorphState, "epoch" | "sha" | "fingerprint" | "namesHash">): Promise<StoredCopyResult> {
+	const options: LoadOptions = { morph: storedCopy(state) };
+	const made = await makeCopy(deps.env, repoName, state.sha, await buildFor(deps.env, repoName, state.sha, options), options.morph!, options);
+	return made.copy ? { copy: made.copy, plain: null } : { copy: null, plain: made.plain! };
 }
 
 /** Resolves `ref` (branch, tag, or SHA) in `repoName` and returns an RPC handle to its runtime. */
 export async function loadForkRuntime(deps: RuntimeDeps, repoName: string, ref = "main", options: LoadOptions = {}): Promise<LoadedFork> {
 	if (options.extraFiles && !options.variant) throw new Error("loadForkRuntime: extraFiles requires a variant");
+	if (options.commit !== undefined && !isSha(options.commit)) throw new Error(`loadForkRuntime: commit must be a full commit id, got ${JSON.stringify(options.commit)}`);
 	const short = shortRef(ref);
 	let sha: string;
-	{
+	if (options.commit !== undefined) sha = options.commit;
+	else {
 		using repo = await openRepo(deps.env.ARTIFACTS, repoName);
 		sha = await resolveCommit(repo, short);
 	}
-	const id = isolateId(repoName, sha, options.variant, options.useModel === true);
-	const build = await buildFor(deps.env, repoName, sha, options);
+	let build = await buildFor(deps.env, repoName, sha, options);
+	let copy: LoadedCopy | null = null;
+	let plain: PlainLoad | null = { kind: "none", reason: "no copy was asked for" };
+	if (options.morph) ({ build, copy, plain } = await makeCopy(deps.env, repoName, sha, build, options.morph, options));
+	const id = isolateId(repoName, sha, { variant: options.variant, useModel: options.useModel === true, ...(copy ? { copy } : {}) });
 	const env: Record<string, unknown> = { fluidToml: build.fluidToml, forkCommit: sha, data: synthetic };
 	if (options.useModel) env.LLM = deps.exports.LlmHost({ props: { repo: repoName } });
 	const worker = deps.env.LOADER.get(id, async () => ({
@@ -167,7 +355,7 @@ export async function loadForkRuntime(deps: RuntimeDeps, repoName: string, ref =
 		globalOutbound: null,
 	}));
 	const fork = worker.getEntrypoint("Fork") as unknown as ForkEntrypoint;
-	return { repo: repoName, ref: short, sha, isolateId: id, fluidToml: build.fluidToml, fork };
+	return { repo: repoName, ref: short, sha, isolateId: id, fluidToml: build.fluidToml, fork, morph: copy, plain };
 }
 
 export interface AskForkInput {
@@ -180,7 +368,7 @@ export interface AskForkInput {
 export async function askFork(deps: RuntimeDeps, input: AskForkInput): Promise<{ card: AnswerCardLike; sha: string; ref: string }> {
 	const useModel = input.useModel ?? false;
 	const loaded = await loadForkRuntime(deps, input.repo, input.ref ?? "main", { useModel });
-	const card = await withTimeout(askCard(loaded.fork, input.request, { useModel }), FORK_CALL_TIMEOUT_MS, `fork ${input.repo} did not answer`);
+	const card = await withTimeout(askLoaded(loaded, input.request, { useModel }), FORK_CALL_TIMEOUT_MS, `fork ${input.repo} did not answer`);
 	return { card, sha: loaded.sha, ref: loaded.ref };
 }
 
@@ -247,7 +435,20 @@ export function loadE2ERunner(env: Env, key: string, stockFiles: Record<string, 
 	return worker.getEntrypoint("E2ERunner") as unknown as E2ERunnerEntrypoint;
 }
 
-/** Drops cached module maps (tests and admin use). */
+/**
+ * Starts the loader over as a new isolate would (tests and admin use): drops
+ * the module maps, the names hash each copy built with, and the fallback
+ * lines already logged; the copies' plans, upstream lists, and the short
+ * secret report (polymorph/install.ts); the rotations this isolate started
+ * (polymorph/started.ts); the stock suites and release tag commits
+ * (stock/suite.ts); and the file contents read (runtime/repo-files.ts).
+ */
 export function clearRuntimeCache(): void {
 	builds.clear();
+	copyHashes.clear();
+	reportedFallbacks.clear();
+	clearCopyCaches();
+	forgetRotations();
+	clearStockCaches();
+	clearBlobCache();
 }

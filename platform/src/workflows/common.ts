@@ -4,6 +4,9 @@
 // they never land in workflow state.
 import type { Remote } from "../git/ops.ts";
 import type { Json } from "../lib/json.ts";
+import { polymorphSecret } from "../polymorph/install.ts";
+import { rememberRotation, rotationStarted } from "../polymorph/started.ts";
+import type { RotationReason } from "../polymorph/rotate.ts";
 import type { PlatformExports } from "../runtime/loader.ts";
 import { openRepo } from "../runtime/repo-files.ts";
 import type { RunKind, RunStatus, StepStatus } from "../durable/runs.ts";
@@ -146,6 +149,16 @@ export interface HarvestParams {
 	runId: string;
 }
 
+/** Moves forks to their next renamed copy (workflows/rotate.ts). */
+export interface RotateParams {
+	/** The fork to rotate; without one, every fork in the fleet. */
+	repo?: string;
+	/** Why; absent on an instance the schedule starts, which has no params and rotates for "schedule". */
+	reason?: RotationReason;
+	/** The run that logs it; run_<instance id> by default. */
+	runId?: string;
+}
+
 export interface AppExports extends PlatformExports {
 	GateWorkflow: WorkflowBinding<GateParams>;
 	CustomizeWorkflow: WorkflowBinding<CustomizeParams>;
@@ -159,6 +172,7 @@ export interface AppExports extends PlatformExports {
 	ImportWorkflow: WorkflowBinding<ImportParams>;
 	InboxCleanupWorkflow: WorkflowBinding<InboxCleanupParams>;
 	YellowWorkflow: WorkflowBinding<YellowParams>;
+	RotateWorkflow: WorkflowBinding<RotateParams>;
 }
 
 export function appExports(ctx: unknown): AppExports {
@@ -285,6 +299,87 @@ export async function startYellowRun(env: Env, exports: AppExports, input: { rep
 		await parent.step("Yellow: live on main, end-to-end soak", "running", `${input.commit.slice(0, 7)} is live with a yellow badge; the end-to-end suite runs 3 times (${runId})`).catch(() => undefined);
 	}
 	return { runId, created: started.created };
+}
+
+/** The instance id of the rotation of `repo` that `key` names: rot-<fork hash>-<key>. */
+export function rotationId(repo: string, key: string): string {
+	return `rot-${fnv1a(repo)}-${key}`;
+}
+
+/** How long a live-path rotation stands for every request that trips a fork's copy, or finds the stored copy stale. */
+export const LIVE_ROTATION_WINDOW_MS = 10 * 60 * 1000;
+
+const windowOf = (now: number) => Math.floor(now / LIVE_ROTATION_WINDOW_MS).toString(36);
+
+/**
+ * The key of the live path's rotation of a fork for tripwire hits at `now`:
+ * one per fork in each LIVE_ROTATION_WINDOW_MS, whatever copy the fork has.
+ * A rotation that stores a new copy gives the next hit a new copy to trip, so
+ * a key per copy would let a steady flood of hits run one check mode gate
+ * after another. One that skipped (the fork was busy) can start again in the
+ * next window.
+ */
+export function tripKey(now = Date.now()): string {
+	return `t${windowOf(now)}`;
+}
+
+/**
+ * The key of the live path's mismatch rotation of a stored copy at `now`:
+ * however many requests find the copy stale, one rotation starts per copy in
+ * each LIVE_ROTATION_WINDOW_MS, and one that skipped (the fork was busy) can
+ * start again in the next. The epoch names the stored copy (a fork stores
+ * each epoch once), so nothing derived from the fingerprint goes into the
+ * key: anyone who knows a run id can read the run, and the key is part of it.
+ */
+export function copyKey(copy: { epoch: number }, now = Date.now()): string {
+	return `c${copy.epoch}-t${windowOf(now)}`;
+}
+
+/**
+ * The key of a new fork's first rotation, which installs it as a renamed
+ * copy: one per fork, named by when the fleet registered it, so a fork
+ * deleted and created again under the same name installs again rather than
+ * find the earlier fork's rotation.
+ */
+export function installKey(fork: { createdAt: string }): string {
+	return `i${Date.parse(fork.createdAt).toString(36)}`;
+}
+
+/** The key of a commit that landed on main: one rotation per landing, however often its gate run is replayed. */
+export function landedKey(commit: string): string {
+	return `l${commit.slice(0, 16)}`;
+}
+
+/** The key of each fork's rotation that a fleet-wide run starts: one per fork and run, however often its step retries. */
+export function fleetKey(runId: string): string {
+	return `f${fnv1a(runId)}`;
+}
+
+/**
+ * Starts the rotation of one fork that `key` names (see rotationId), with the
+ * run that logs it; an instance that already exists counts as started.
+ * Returns its id, or null when nothing started: a platform without a secret
+ * starts none (it would only skip), and a failure to start is logged, never
+ * thrown, since whatever asked for the rotation (a refused request, a landed
+ * change, a new fork) finishes either way and the schedule rotates every fork
+ * within six hours. A missing binding, which only a deployment mistake leaves,
+ * is thrown.
+ */
+export async function startRotation(env: Env, binding: WorkflowBinding<RotateParams>, input: { repo: string; reason: RotationReason; key: string }): Promise<{ id: string; created: boolean } | null> {
+	if (polymorphSecret(env) === null) return null;
+	// A deployment mistake, not a passing failure: thrown, so no request or workflow carries on with nothing rotating.
+	if (!binding) throw new Error("ctx.exports has no RotateWorkflow binding");
+	const id = rotationId(input.repo, input.key);
+	// Started from this isolate already: the binding would only say it exists.
+	if (rotationStarted(id)) return { id, created: false };
+	try {
+		const started = await startInstance(binding, id, { repo: input.repo, reason: input.reason, runId: `run_${id}` });
+		rememberRotation(id);
+		return started;
+	} catch (error) {
+		console.error(`polymorph: rotation ${id} of ${input.repo} (${input.reason}) did not start: ${errorText(error)}`);
+		return null;
+	}
 }
 
 /** Waiting for a gate or repair run: up to WAIT_ROUNDS event waits of WAIT_EACH each (about 30 minutes). */

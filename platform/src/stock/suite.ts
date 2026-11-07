@@ -29,6 +29,12 @@ const suites = new Map<string, StockSuite>();
 /** Release tags never move, so a tag's commit is cached for the life of the isolate. */
 const tagCommits = new Map<string, string>();
 
+/** Drops the suites and release tag commits this isolate cached (the loader's clearRuntimeCache). */
+export function clearStockCaches(): void {
+	suites.clear();
+	tagCommits.clear();
+}
+
 /** Commit of a published stock release tag. Throws StockTagError for anything else. */
 export async function resolveStockTag(env: Env, tag: unknown): Promise<string> {
 	if (!isReleaseTag(tag)) throw new StockTagError(String(tag), "must name a stock release tag such as v1.2.0 (not a branch or commit)");

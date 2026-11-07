@@ -916,3 +916,38 @@ button.health-badge { cursor: pointer; }
 @media (prefers-reduced-motion: reduce) {
   .health-badge.h-yellow .health-dot, .soak-seg.run, .cell.s-yellow { animation: none; }
 }
+
+/* Polymorph (replay of a recorded run) */
+/* Tiles say their state in words; color only repeats it. The reduced-motion rule under Responsive stops the transitions. */
+.polymorph { display: grid; gap: 16px; }
+.polymorph-intro { display: grid; gap: 6px; max-width: 80ch; }
+.polymorph-fleet { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.polymorph-tile {
+  border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--panel-2); padding: 6px 10px;
+  display: grid; gap: 2px; font-size: var(--fs-xs); transition: background-color 0.3s, border-color 0.3s;
+}
+.polymorph-tile code { font-size: var(--fs-sm); color: var(--ink); overflow-wrap: anywhere; }
+.polymorph-fp { font-family: var(--mono); color: var(--ink-2); }
+.polymorph-note { min-height: 1.5em; font-weight: 600; }
+.polymorph-tile[data-state="compromised"] { border-color: var(--fail); background: var(--fail-bg); box-shadow: inset 3px 0 0 var(--fail); }
+.polymorph-tile[data-state="refused"] { border-color: var(--warn); background: var(--warn-bg); box-shadow: inset 3px 0 0 var(--warn); }
+.polymorph-tile[data-moved="yes"] .polymorph-fp { color: var(--ink); font-weight: 600; }
+table.polymorph-score th { white-space: normal; }
+table.polymorph-score th[scope="row"] { font-weight: 400; color: var(--ink); overflow-wrap: anywhere; }
+/* The counts stay on one line; Sent, the first cell, may wrap. */
+table.polymorph-score td { white-space: nowrap; font-variant-numeric: tabular-nums; }
+table.polymorph-score td:first-of-type { white-space: normal; }
+/* The seven columns need about 800px to leave the attack column room to read. Where the scoreboard is narrower (a
+   phone, or a small window with the rail beside it), the same rows show as one short list per attack. */
+.polymorph-scoreboard { container-type: inline-size; }
+.polymorph-score-narrow { display: none; list-style: none; margin: 0; padding: 0; gap: 10px; }
+.polymorph-score-narrow li { display: grid; gap: 4px; }
+.polymorph-score-narrow li + li { border-top: 1px solid var(--line); padding-top: 10px; }
+.polymorph-score-narrow dl { display: grid; gap: 2px; margin: 0; font-size: var(--fs-sm); }
+.polymorph-score-narrow dl div { display: flex; justify-content: space-between; gap: 12px; }
+.polymorph-score-narrow dt { color: var(--ink-2); }
+.polymorph-score-narrow dd { margin: 0; white-space: nowrap; font-variant-numeric: tabular-nums; }
+@container (max-width: 800px) {
+  .polymorph-score-wide { display: none; }
+  .polymorph-score-narrow { display: grid; }
+}

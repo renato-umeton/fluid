@@ -5,6 +5,11 @@
 export const REPO_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/;
 export const STOCK_REPO = "stock";
 
+/** A fork's own tier 3 tests, which the gate runs. */
+export const USER_MANIFEST_PATH = "tests/user/manifest.json";
+/** A fork's own end-to-end scenarios, which the yellow soak runs as its user tier. */
+export const USER_E2E_PATH = "tests/user/e2e.json";
+
 export function isValidRepoName(name: string): boolean {
 	return typeof name === "string" && REPO_NAME_PATTERN.test(name) && !name.endsWith(".git");
 }

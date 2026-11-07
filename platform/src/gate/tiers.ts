@@ -5,10 +5,13 @@
 // live in stock's runner; this module only summarizes and decides.
 
 import { validateProbe, type Probe } from "../agents/suggester.ts";
+import { clipValue } from "../lib/clip.ts";
+import type { SkippedName } from "../polymorph/list.ts";
+import type { PlainLoad } from "../runtime/loader.ts";
 
 export type TierName = "invariant" | "functional" | "user";
 export const TIER_NAMES: readonly TierName[] = ["invariant", "functional", "user"];
-export const USER_MANIFEST_PATH = "tests/user/manifest.json";
+export { USER_MANIFEST_PATH } from "../lib/names.ts";
 
 export interface RunnerFailure {
 	sample: number;
@@ -59,6 +62,23 @@ export interface GateFailure {
 	actual: unknown;
 }
 
+/** The renamed copy a gate compared with the plain fork (GateInput.morph). */
+export interface GatePolymorph {
+	epoch: number;
+	/** Eight hex characters naming the copy inside the platform (logs, isolate ids); answers show its random variant instead. */
+	fingerprint: string;
+	/** namesHash of the names the copy renamed. */
+	namesHash: string;
+	/** The listed names the copy renamed, sorted: what namesHash hashes. */
+	renamed: string[];
+	/** Probe requests sent to both the plain fork and the copy. */
+	compared: number;
+	/** Requests the two answered differently. */
+	mismatches: number;
+	/** Listed names the copy left as they are, and why. */
+	skipped: SkippedName[];
+}
+
 export interface GateResult {
 	repo: string;
 	ref: string;
@@ -72,20 +92,14 @@ export interface GateResult {
 	durationMs: number;
 	runId?: string;
 	error?: string;
+	/** Only when the gate was asked to check a renamed copy: what it compared, or null when no copy could be made and the fork ran plain. */
+	polymorph?: GatePolymorph | null;
+	/** Only when the gate was asked to check a renamed copy and the fork loaded plain: why, as the loader said (reason clipped). */
+	polymorphPlain?: PlainLoad;
 }
 
 const MAX_FAILURES_PER_PROBE = 3;
 const MAX_FAILURES = 40;
-const MAX_VALUE_CHARS = 400;
-
-/** Keeps failure values small enough for run records and the fleet view. */
-export function clipValue(value: unknown): unknown {
-	if (value === undefined) return null;
-	const text = typeof value === "string" ? value : JSON.stringify(value);
-	if (text === undefined) return String(value);
-	if (text.length <= MAX_VALUE_CHARS) return value;
-	return `${text.slice(0, MAX_VALUE_CHARS)}... (${text.length} chars)`;
-}
 
 /** Turns one runner result into a tier summary plus flat failures (failing probes only). */
 export function summarizeTier(tier: TierName, result: RunnerManifestResult, options: { file?: string; disabled?: { id: string; reason: string }[] } = {}): { summary: TierSummary; failures: GateFailure[] } {

@@ -13,6 +13,11 @@ const BLOB_CACHE_LIMIT = 2000;
 const blobCache = new Map<string, string>();
 const READ_CONCURRENCY = 8;
 
+/** Drops the file contents this isolate cached (the loader's clearRuntimeCache). */
+export function clearBlobCache(): void {
+	blobCache.clear();
+}
+
 export async function openRepo(artifacts: Artifacts, name: string): Promise<ArtifactsRepo> {
 	try {
 		return await artifacts.get(name);

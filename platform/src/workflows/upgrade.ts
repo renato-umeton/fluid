@@ -29,7 +29,7 @@ import { fleetStub, quotaStub } from "../stubs.ts";
 import { landedEarlier } from "../yellow/landing.ts";
 import { findRolledBackUpgrade, reapplyChange } from "../yellow/reapply.ts";
 import { logTiers, persistGate, repairRunId } from "./gate.ts";
-import { appExports, asJson, ensureRun, errorText, GATE_STEP, GIT_STEP, mainBeforePush, recordMainBeforePush, repoRemote, runLog, setFleet, startInstance, startOrRetryInstance, startYellowRun, guarded, steps, type ReleaseParams, type Steps, type UpgradeParams } from "./common.ts";
+import { appExports, asJson, ensureRun, errorText, GATE_STEP, GIT_STEP, landedKey, mainBeforePush, recordMainBeforePush, repoRemote, runLog, setFleet, startInstance, startOrRetryInstance, startRotation, startYellowRun, guarded, steps, type ReleaseParams, type Steps, type UpgradeParams } from "./common.ts";
 
 /** Upgrades created per batch, and the pause between batches. */
 export const FAN_OUT = { batchSize: 20, pause: "2 seconds" };
@@ -489,6 +489,14 @@ export class UpgradeWorkflow extends WorkflowEntrypoint<Env, UpgradeParams> {
 				});
 				return true;
 			});
+			// The upgraded main runs plain until a rotation stores a verified copy of it. The fork shows the
+			// upgrade passed by now, which a rotation does not wait out (it skips only while upgrading or gating).
+			if (applied.landed) {
+				await step.do(`${input.prefix}rotate the new main${suffix}`, async () => {
+					await startRotation(this.env, exports.RotateWorkflow, { repo: p.repo, reason: "landed", key: landedKey(at) });
+					return true;
+				});
+			}
 			return { passed: true, outcome: applied.applied ? "applied" : "ready" };
 		}
 		return { passed: false, gate: gate!, commit };

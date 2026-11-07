@@ -32,7 +32,7 @@ import { headOf, isNotFound, openRepo, readTextFile } from "../runtime/repo-file
 import { parseUiPreferences, UI_PREFERENCES_PATH } from "../ui/preferences.ts";
 import { aggregateCharts, CHART_LIMITS } from "../ui/charts.ts";
 import { DEMO_OVERLAY, demoReleaseFiles, keepFloorTightening } from "../stock/releases.ts";
-import { appExports, ensureRun, mainBeforePush, recordMainBeforePush, repoRemote, startGateInstance, startYellowRun } from "../workflows/common.ts";
+import { appExports, ensureRun, installKey, landedKey, mainBeforePush, recordMainBeforePush, repoRemote, startGateInstance, startRotation, startYellowRun } from "../workflows/common.ts";
 import { rerunTargets, upgradeTargets } from "../workflows/upgrade.ts";
 import { decodeParam, HttpError, json, readJson, requireJsonPost, requireString } from "./http.ts";
 import { askRef, parsePreferences } from "./validate.ts";
@@ -256,8 +256,13 @@ route("POST", "/api/forks", async (rc) => {
 		await takeClientQuota(rc, "fork", LIMITS.forksPerClientPerHour, 3600);
 		await takeQuota(rc.env, "global", "fork", LIMITS.forksGlobalPerHour, 3600);
 	}
+	// None yet, a failed attempt, or an abandoned claim: this request provisions the fork.
+	const provisions = !existing || existing.status === "failed" || existing.status === "provisioning";
 	const info = await provisionFork(rc.env, { userId: session.userId, persona, preferences, maxTotal: LIMITS.forksTotal });
 	forkInfoCache.delete(info.repo);
+	// A new fork installs as a renamed copy: its first rotation verifies one and stores it.
+	const fork = provisions ? await fleetStub(rc.env).get(info.repo) : null;
+	if (fork?.status === "pinned") await startRotation(rc.env, appExports(rc.ctx).RotateWorkflow, { repo: info.repo, reason: "install", key: installKey(fork) });
 	return json(info, 201);
 });
 
@@ -351,7 +356,7 @@ route("POST", "/api/ask", async (rc) => {
 	// A re-ask after an override or an attestation belongs to the question it re-asks (charts count questions).
 	const reaskOf = typeof body.reaskOf === "string" && body.reaskOf ? await ledgerStub(rc.env, session.userId).questionOf(body.reaskOf) : undefined;
 	if (reaskOf === null) throw new HttpError(404, `answer ${body.reaskOf as string} is not in your ledger`);
-	const card = await serveAsk({ env: rc.env, exports: exportsOf(rc.ctx) }, { repo, ref, request, useModel: body.useModel === true, userId: session.userId, fallback: ref === "main", ...(reaskOf ? { reaskOf } : {}) });
+	const card = await serveAsk({ env: rc.env, exports: appExports(rc.ctx) }, { repo, ref, request, useModel: body.useModel === true, userId: session.userId, fallback: ref === "main", ...(reaskOf ? { reaskOf } : {}) });
 	return json(card);
 });
 
@@ -490,6 +495,19 @@ async function baselineFork(rc: RouteContext, repo: string, record: boolean): Pr
 		return { repo, error: scrubText(error instanceof Error ? error.message : String(error)).slice(0, 300) };
 	}
 }
+
+// Moves one fork, or with no repo every fork in the fleet, to its next renamed copy (workflows/rotate.ts).
+// The run exists before this answers, so the caller can poll it at once.
+route("POST", "/api/admin/fleet/rotate", async (rc) => {
+	requireAdmin(rc);
+	const body = await readJson(rc.request);
+	const repo = body.repo === undefined || body.repo === null ? null : repoParam(requireString(body, "repo", 100));
+	if (repo !== null && !(await fleetStub(rc.env).get(repo))) throw new HttpError(404, "fork not found");
+	const runId = newRunId("rotate");
+	await runsStub(rc.env, runId).create({ id: runId, kind: "rotate", repo, status: "running", fields: { reason: "admin" } });
+	await appExports(rc.ctx).RotateWorkflow.create({ id: runId, params: { runId, reason: "admin", ...(repo !== null ? { repo } : {}) } });
+	return json({ runId, ...(repo !== null ? { repo } : {}) }, 202);
+});
 
 // Starts a yellow soak on a fork's current main (re-verifies a fork; with no earlier green commit a failure cannot roll back).
 route("POST", "/api/admin/yellow/:repo", async (rc, { repo }) => {
@@ -746,6 +764,9 @@ route("POST", "/api/forks/:repo/upgrade", async (rc, { repo }) => {
 	// The approved upgrade is live: it soaks in yellow like every other change that lands on main.
 	const yellow = landed ? await startYellowRun(rc.env, appExports(rc.ctx), { repo: name, commit: pending.commit, previous: ff.outcome === "fast-forward" ? previous : ((await mainBeforePush(rc.env, pending.runId, pending.commit)) ?? (await firstParent(ws, pending.commit))), source: "one-tap", parentRunId: pending.runId }) : null;
 	const updated = await fleet.update(name, { status: "passed", pendingUpgrade: null, lastRun });
+	// The approved upgrade runs plain until a rotation stores a verified copy of it; the fork now shows passed,
+	// which a rotation does not wait out.
+	if (landed) await startRotation(rc.env, appExports(rc.ctx).RotateWorkflow, { repo: name, reason: "landed", key: landedKey(pending.commit) });
 	forkInfoCache.delete(name);
 	return json({ repo: name, tag: pending.tag, commit: pending.commit, fork: updated, yellowRunId: yellow?.runId ?? null });
 });

@@ -7,7 +7,7 @@
 
 import { notMatchesIn, regexProblem } from "../gate/regex.ts";
 
-export const USER_E2E_PATH = "tests/user/e2e.json";
+export { USER_E2E_PATH } from "../lib/names.ts";
 export const STOCK_E2E_PATH = "tests/e2e/manifest.json";
 export const STOCK_E2E_RUNNER_PATH = "tests/e2e/runner.ts";
 export const USER_E2E_LIMITS = { maxScenarios: 10 };

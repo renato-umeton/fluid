@@ -1,0 +1,533 @@
+{
+  "version": 1,
+  "recordedAt": "2026-11-07T03:52:02.343Z",
+  "release": "v1.1.0, a test fixture with two planted bugs",
+  "listSize": 74,
+  "probes": 70,
+  "forks": [
+    {
+      "repo": "user-01",
+      "before": "cacbb282",
+      "after": "dbb6d7cd",
+      "epochBefore": 1,
+      "epochAfter": 2,
+      "renamed": 74,
+      "mismatches": 0
+    },
+    {
+      "repo": "user-02",
+      "before": "113a0f53",
+      "after": "47464928",
+      "epochBefore": 1,
+      "epochAfter": 2,
+      "renamed": 74,
+      "mismatches": 0
+    },
+    {
+      "repo": "user-03",
+      "before": "0391da60",
+      "after": "246f5265",
+      "epochBefore": 1,
+      "epochAfter": 2,
+      "renamed": 74,
+      "mismatches": 0
+    },
+    {
+      "repo": "user-04",
+      "before": "2415e5cd",
+      "after": "4e848b81",
+      "epochBefore": 1,
+      "epochAfter": 2,
+      "renamed": 74,
+      "mismatches": 0
+    },
+    {
+      "repo": "user-05",
+      "before": "f47bed23",
+      "after": "b0e1629e",
+      "epochBefore": 1,
+      "epochAfter": 2,
+      "renamed": 74,
+      "mismatches": 0
+    },
+    {
+      "repo": "user-06",
+      "before": "c9a8f031",
+      "after": "ce054d2e",
+      "epochBefore": 1,
+      "epochAfter": 2,
+      "renamed": 74,
+      "mismatches": 0
+    },
+    {
+      "repo": "user-07",
+      "before": "bf5e4613",
+      "after": "ba2a2e8a",
+      "epochBefore": 1,
+      "epochAfter": 2,
+      "renamed": 74,
+      "mismatches": 0
+    },
+    {
+      "repo": "user-08",
+      "before": "76880dd4",
+      "after": "755f1c4b",
+      "epochBefore": 1,
+      "epochAfter": 2,
+      "renamed": 74,
+      "mismatches": 0
+    },
+    {
+      "repo": "user-09",
+      "before": "7785d588",
+      "after": "651a7081",
+      "epochBefore": 1,
+      "epochAfter": 2,
+      "renamed": 74,
+      "mismatches": 0
+    },
+    {
+      "repo": "user-10",
+      "before": "b35fe26b",
+      "after": "a8df49c1",
+      "epochBefore": 1,
+      "epochAfter": 2,
+      "renamed": 74,
+      "mismatches": 0
+    },
+    {
+      "repo": "user-11",
+      "before": "25f2f875",
+      "after": "c9e820ce",
+      "epochBefore": 1,
+      "epochAfter": 2,
+      "renamed": 74,
+      "mismatches": 0
+    },
+    {
+      "repo": "user-12",
+      "before": "0ce04dfa",
+      "after": "8b3e414c",
+      "epochBefore": 1,
+      "epochAfter": 2,
+      "renamed": 74,
+      "mismatches": 0
+    },
+    {
+      "repo": "user-13",
+      "before": "f0b98b6e",
+      "after": "a8ebf9f2",
+      "epochBefore": 1,
+      "epochAfter": 2,
+      "renamed": 74,
+      "mismatches": 0
+    },
+    {
+      "repo": "user-14",
+      "before": "1794e4f6",
+      "after": "7db43b8a",
+      "epochBefore": 1,
+      "epochAfter": 2,
+      "renamed": 74,
+      "mismatches": 0
+    },
+    {
+      "repo": "user-15",
+      "before": "2544958b",
+      "after": "d1901560",
+      "epochBefore": 1,
+      "epochAfter": 2,
+      "renamed": 74,
+      "mismatches": 0
+    },
+    {
+      "repo": "user-16",
+      "before": "d3eda156",
+      "after": "4738a773",
+      "epochBefore": 1,
+      "epochAfter": 2,
+      "renamed": 74,
+      "mismatches": 0
+    },
+    {
+      "repo": "user-17",
+      "before": "ad7bd0ff",
+      "after": "d6566e24",
+      "epochBefore": 1,
+      "epochAfter": 2,
+      "renamed": 74,
+      "mismatches": 0
+    },
+    {
+      "repo": "user-18",
+      "before": "e80ee2c9",
+      "after": "9dc5337f",
+      "epochBefore": 1,
+      "epochAfter": 2,
+      "renamed": 74,
+      "mismatches": 0
+    },
+    {
+      "repo": "user-19",
+      "before": "3979dbd9",
+      "after": "047375f0",
+      "epochBefore": 1,
+      "epochAfter": 2,
+      "renamed": 74,
+      "mismatches": 0
+    },
+    {
+      "repo": "user-20",
+      "before": "58fda43f",
+      "after": "bf81ee4c",
+      "epochBefore": 1,
+      "epochAfter": 2,
+      "renamed": 74,
+      "mismatches": 0
+    }
+  ],
+  "attacks": [
+    {
+      "id": "A",
+      "label": "Built from upstream's source",
+      "detail": "Sets display.researchNeedsAttestation to false, the internal name in upstream's public source, on every fork.",
+      "targets": [
+        "user-01",
+        "user-02",
+        "user-03",
+        "user-04",
+        "user-05",
+        "user-06",
+        "user-07",
+        "user-08",
+        "user-09",
+        "user-10",
+        "user-11",
+        "user-12",
+        "user-13",
+        "user-14",
+        "user-15",
+        "user-16",
+        "user-17",
+        "user-18",
+        "user-19",
+        "user-20"
+      ],
+      "requests": {
+        "sent": 20,
+        "plainCompromised": 20,
+        "directCompromised": 0,
+        "platformCompromised": 0,
+        "refused": 20
+      },
+      "plain": {
+        "compromised": [
+          "user-01",
+          "user-02",
+          "user-03",
+          "user-04",
+          "user-05",
+          "user-06",
+          "user-07",
+          "user-08",
+          "user-09",
+          "user-10",
+          "user-11",
+          "user-12",
+          "user-13",
+          "user-14",
+          "user-15",
+          "user-16",
+          "user-17",
+          "user-18",
+          "user-19",
+          "user-20"
+        ]
+      },
+      "direct": {
+        "compromised": []
+      },
+      "platform": {
+        "compromised": [],
+        "refused": [
+          "user-01",
+          "user-02",
+          "user-03",
+          "user-04",
+          "user-05",
+          "user-06",
+          "user-07",
+          "user-08",
+          "user-09",
+          "user-10",
+          "user-11",
+          "user-12",
+          "user-13",
+          "user-14",
+          "user-15",
+          "user-16",
+          "user-17",
+          "user-18",
+          "user-19",
+          "user-20"
+        ],
+        "rotated": [
+          "user-01",
+          "user-02",
+          "user-03",
+          "user-04",
+          "user-05",
+          "user-06",
+          "user-07",
+          "user-08",
+          "user-09",
+          "user-10",
+          "user-11",
+          "user-12",
+          "user-13",
+          "user-14",
+          "user-15",
+          "user-16",
+          "user-17",
+          "user-18",
+          "user-19",
+          "user-20"
+        ]
+      }
+    },
+    {
+      "id": "A2",
+      "label": "Built from a leaked copy",
+      "detail": "Sends the same option under the renamed name from user-07's copy, as if that copy had leaked, to every fork.",
+      "targets": [
+        "user-01",
+        "user-02",
+        "user-03",
+        "user-04",
+        "user-05",
+        "user-06",
+        "user-07",
+        "user-08",
+        "user-09",
+        "user-10",
+        "user-11",
+        "user-12",
+        "user-13",
+        "user-14",
+        "user-15",
+        "user-16",
+        "user-17",
+        "user-18",
+        "user-19",
+        "user-20"
+      ],
+      "requests": {
+        "sent": 20,
+        "plainCompromised": 0,
+        "directCompromised": 1,
+        "platformCompromised": 1,
+        "refused": 19
+      },
+      "plain": {
+        "compromised": []
+      },
+      "direct": {
+        "compromised": [
+          "user-07"
+        ]
+      },
+      "platform": {
+        "compromised": [
+          "user-07"
+        ],
+        "refused": [
+          "user-01",
+          "user-02",
+          "user-03",
+          "user-04",
+          "user-05",
+          "user-06",
+          "user-08",
+          "user-09",
+          "user-10",
+          "user-11",
+          "user-12",
+          "user-13",
+          "user-14",
+          "user-15",
+          "user-16",
+          "user-17",
+          "user-18",
+          "user-19",
+          "user-20"
+        ],
+        "rotated": [
+          "user-01",
+          "user-02",
+          "user-03",
+          "user-04",
+          "user-05",
+          "user-06",
+          "user-08",
+          "user-09",
+          "user-10",
+          "user-11",
+          "user-12",
+          "user-13",
+          "user-14",
+          "user-15",
+          "user-16",
+          "user-17",
+          "user-18",
+          "user-19",
+          "user-20"
+        ]
+      }
+    },
+    {
+      "id": "A3",
+      "label": "Blind guessing",
+      "detail": "Sends 1000 requests to user-03, each with the option under a random 8-character suffix.",
+      "targets": [
+        "user-03"
+      ],
+      "requests": {
+        "sent": 1000,
+        "plainCompromised": 0,
+        "directCompromised": 0,
+        "platformCompromised": 0,
+        "refused": 1000
+      },
+      "plain": {
+        "compromised": []
+      },
+      "direct": {
+        "compromised": []
+      },
+      "platform": {
+        "compromised": [],
+        "refused": [
+          "user-03"
+        ],
+        "rotated": [
+          "user-03"
+        ]
+      }
+    },
+    {
+      "id": "B",
+      "label": "Public field only",
+      "detail": "Sets display.preview to true, a public option that skips the attestation hold, on every fork.",
+      "targets": [
+        "user-01",
+        "user-02",
+        "user-03",
+        "user-04",
+        "user-05",
+        "user-06",
+        "user-07",
+        "user-08",
+        "user-09",
+        "user-10",
+        "user-11",
+        "user-12",
+        "user-13",
+        "user-14",
+        "user-15",
+        "user-16",
+        "user-17",
+        "user-18",
+        "user-19",
+        "user-20"
+      ],
+      "requests": {
+        "sent": 20,
+        "plainCompromised": 20,
+        "directCompromised": 20,
+        "platformCompromised": 20,
+        "refused": 0
+      },
+      "plain": {
+        "compromised": [
+          "user-01",
+          "user-02",
+          "user-03",
+          "user-04",
+          "user-05",
+          "user-06",
+          "user-07",
+          "user-08",
+          "user-09",
+          "user-10",
+          "user-11",
+          "user-12",
+          "user-13",
+          "user-14",
+          "user-15",
+          "user-16",
+          "user-17",
+          "user-18",
+          "user-19",
+          "user-20"
+        ]
+      },
+      "direct": {
+        "compromised": [
+          "user-01",
+          "user-02",
+          "user-03",
+          "user-04",
+          "user-05",
+          "user-06",
+          "user-07",
+          "user-08",
+          "user-09",
+          "user-10",
+          "user-11",
+          "user-12",
+          "user-13",
+          "user-14",
+          "user-15",
+          "user-16",
+          "user-17",
+          "user-18",
+          "user-19",
+          "user-20"
+        ]
+      },
+      "platform": {
+        "compromised": [
+          "user-01",
+          "user-02",
+          "user-03",
+          "user-04",
+          "user-05",
+          "user-06",
+          "user-07",
+          "user-08",
+          "user-09",
+          "user-10",
+          "user-11",
+          "user-12",
+          "user-13",
+          "user-14",
+          "user-15",
+          "user-16",
+          "user-17",
+          "user-18",
+          "user-19",
+          "user-20"
+        ],
+        "refused": [],
+        "rotated": []
+      }
+    }
+  ],
+  "afterRotation": {
+    "attack": "A2",
+    "compromised": [],
+    "refused": [
+      "user-07"
+    ]
+  }
+}

@@ -19,6 +19,7 @@ export { HarvestWorkflow, SeedFleetWorkflow, SeedForkWorkflow } from "./workflow
 export { YellowWorkflow } from "./workflows/yellow.ts";
 export { ImportWorkflow } from "./workflows/import.ts";
 export { InboxCleanupWorkflow } from "./workflows/inbox-cleanup.ts";
+export { RotateWorkflow } from "./workflows/rotate.ts";
 
 export default {
 	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {

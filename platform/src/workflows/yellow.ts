@@ -21,7 +21,7 @@ import { changeIntents, decideRollback, isOwnRevert, revertMain, rollbackIntent,
 import { runE2E, type E2ERunResult } from "../yellow/run.ts";
 import { passVerdict, SOAK_PASSES, type HealthFailure } from "../yellow/state.ts";
 import { tierLine } from "../yellow/tiers.ts";
-import { appExports, ensureRun, errorText, GATE_STEP, GIT_STEP, repoRemote, runLog, startInstance, steps, type Steps, type YellowParams } from "./common.ts";
+import { appExports, ensureRun, errorText, GATE_STEP, GIT_STEP, landedKey, repoRemote, runLog, startInstance, startRotation, steps, type Steps, type YellowParams } from "./common.ts";
 
 /** Pause between soak passes. */
 export const SOAK_PAUSE = "10 seconds";
@@ -282,6 +282,14 @@ export class YellowWorkflow extends WorkflowEntrypoint<Env, YellowParams> {
 			return this.recordRevert(p, failure, reverted.commit!, relies);
 		});
 		if (rollback.action === "cancel") return this.cancel(step, p, rollback.reason);
+		// main is back on the green tree, in a new commit that runs plain until a rotation stores a verified copy of it.
+		const revertCommit = rollback.revertCommit;
+		if (revertCommit) {
+			await step.do(`${prefix}rotate the rolled back main`, async () => {
+				await startRotation(this.env, appExports(this.ctx).RotateWorkflow, { repo: p.repo, reason: "landed", key: landedKey(revertCommit) });
+				return true;
+			});
+		}
 
 		const repairId = await step.do(`${prefix}open repair`, async () => {
 			const gate = repairGate({ repo: p.repo, commit: p.commit, stockTag: result.stockTag, result, browser, runId: p.runId });

@@ -13,7 +13,9 @@ export class WorkerEntrypoint<E = unknown, P = unknown> {
 }
 
 export class WorkflowEntrypoint<E = unknown, P = unknown> {
-	protected ctx!: ExecutionContext;
-	protected env!: E;
+	constructor(
+		protected ctx: ExecutionContext,
+		protected env: E,
+	) {}
 	declare readonly params?: P;
 }

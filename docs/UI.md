@@ -77,3 +77,28 @@ A Fluid fork is a list of wishes and the tests that prove them. On every release
 - **Fleet counts.** Under the status bar, a line counts the forks that took the latest release by intent replay and by merge (`upgradePathCounts` in `js/fleet-summary.js`), with a button that opens a replayed fork that would have conflicted under merge. The event stream adds "N of N wishes replayed" to a replayed fork's line.
 - **Intent records.** Each record says whether it replays ("a framing wish, granted again on fresh stock at each release") or is a model change that upgrades by merge.
 - **Mock mode.** A mock release (`?mock=1`, Fleet, "Tag release and upgrade the fleet") upgrades forks whose wishes are all replayable (REDCap, plainer framing wording, raised tau, a crimson look with a chart tab) by replay on `replay/<tag>`, and the rest by merge as before (`js/mock-replay.js` mirrors the platform's rule). The plainer wording rewords the same card line the release rewords, so those forks would have conflicted under a merge. Their run shows the replay step, the three tiers, and main moving.
+
+## Polymorphic installation
+
+**Polymorph** in the rail replays a recorded run of the polymorphic installation end-to-end test. The view is `js/views/polymorph.js`; the checks, the text, and the replay itself are in `js/polymorph-replay.js`. It shows one tile per fork with the fingerprint of its copy, a button per attack, and a switch. The switch plays the attack on the plain fleet or through the platform, where forks refuse it and move to a new copy. Each tile says its state in words, and with reduced motion the tiles change at once. Once an attack has played, a status line counts the forks it compromised, the forks that refused it, and the forks that moved to a new copy. For attack A3 it reads "0 of 20 forks compromised, 1 fork refused it, and 1 fork moved to a new copy". A scoreboard lists what each attack did, then what the leaked copy's names did once its fork moved, then the equivalence check. It uses only the numbers in the recording. The recording is `platform/public/data/polymorph-demo.json`, written by `cd platform && npm run polymorph:record`. Mock and live mode read it the same way. When it is missing, the page says no run has been recorded yet. When it fails `validateDemo`, the page says the run cannot be shown, and the console says why. Both messages give the record command.
+
+The recording is one JSON object:
+
+- `version` is 1, and `recordedAt` is when the run was recorded, as an ISO time.
+- `release` names the release the forks ran: "v1.1.0, a test fixture with two planted bugs". `listSize` is the number of names on upstream's list, and `probes` the number of probe requests each copy's equivalence check compared.
+- `forks` holds one entry per fork: its `repo`, the fingerprint of its copy `before` and `after` one rotation, `epochBefore`, and `epochAfter`. `renamed` counts the listed names its copy renamed, at most `listSize`. `mismatches` counts the probe answers its copy gave differently from the plain fork.
+- `attacks` holds each attack's `id` (A, A2, A3, or B), `label`, `detail`, and the forks it `targets`. Its `requests` count the requests `sent`, those that compromised a fork on the plain fleet (`plainCompromised`), on renamed copies with the platform scan bypassed (`directCompromised`), and through the platform (`platformCompromised`), and those the platform `refused`. The forks behind each count are in `plain.compromised`, `direct.compromised`, `platform.compromised`, and `platform.refused`, and the forks that moved to a new copy in `platform.rotated`.
+- `afterRotation` names the leaked copy's attack, `"A2"`, and holds the forks the leaked copy's names compromised, and those that refused them, once its fork moved to a new copy.
+
+`validateDemo` checks every field except the epochs, which the page does not show. Each request count must be a whole number, no more than the requests sent, and in line with its list of forks: at least one request for each fork listed, and none when no fork is.
+
+The page's scoreboard has one row per attack. Its columns come from `SCORE_COLUMNS`:
+
+- the requests sent;
+- the requests that compromised a fork on the plain fleet;
+- the requests that compromised a renamed copy with the platform scan bypassed;
+- the requests that compromised a fork through the platform;
+- the requests the platform refused;
+- the attacked forks moved to a new copy.
+
+The compromised and refused columns count requests out of those sent, and the last column counts attacked forks. `SCORE_NOTE` says so under its heading. `npm run polymorph:demo` prints the same scoreboard in the terminal, with a column per attack, built from the same `scoreRows`, `SCORE_COLUMNS`, and `SCORE_NOTE`. The status line counts forks, so for attack A3 the scoreboard shows 1000 of 1000 requests refused, and the status line 1 fork that refused it.

@@ -6,7 +6,7 @@
 // touch platform state (the ledger, overrides) act for a synthetic test user
 // scoped to the run, so they never write to the real user's ledger.
 import stockSource from "../generated/stock-source.json";
-import { serveAsk } from "../api/ask.ts";
+import { serveAskAsBuilt } from "../api/ask.ts";
 import { readIntents } from "../forks/provision.ts";
 import { fnv1a } from "../events/filter.ts";
 import { testUserId } from "../lib/session.ts";
@@ -176,7 +176,8 @@ async function hostOperation(deps: RuntimeDeps, scope: { repo: string; commit: s
 	switch (op) {
 		case "ask": {
 			const request = args.request as Record<string, unknown>;
-			const card = await serveAsk(deps, { repo: scope.repo, ref: scope.commit, request, useModel: false, userId: scope.testUser, fallback: false });
+			// As built: the soak checks the commit that landed, not a renamed copy (see serveAskAsBuilt).
+			const card = await serveAskAsBuilt(deps, { repo: scope.repo, ref: scope.commit, request, useModel: false, userId: scope.testUser });
 			return JSON.parse(JSON.stringify(card));
 		}
 		case "override": {

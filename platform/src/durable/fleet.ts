@@ -2,6 +2,7 @@
 // last run, plus the published stock tags. One instance ("global"). Status
 // changes are broadcast to Server-Sent Events subscribers (the fleet view).
 import { DurableObject } from "cloudflare:workers";
+import { clipValue } from "../lib/clip.ts";
 import type { Json } from "../lib/json.ts";
 import { upsertWishNote, wishNotesKey, type WishNote } from "../contest/wishes.ts";
 import { contestKey, joinDecision, type ContestState } from "../contest/plan.ts";
@@ -77,6 +78,54 @@ export interface FleetFork {
 	baseline: BaselineRecord | null;
 }
 
+/** The renamed copy a fork serves, as a check mode gate verified it (polymorph/). Never part of FleetFork, which the public stream carries. */
+export interface MorphState {
+	epoch: number;
+	/** The commit the copy was verified at: only that commit runs renamed. */
+	sha: string;
+	/** Eight hex characters naming the copy, derived from its seed: for the platform only (logs, isolate ids, security events). */
+	fingerprint: string;
+	/** namesHash of the names the verified copy renamed. */
+	namesHash: string;
+	/**
+	 * The listed names the verified copy renamed: what namesHash hashes, and as
+	 * public as upstream's list. The live path scans requests with them when the
+	 * copy no longer builds, until a rotation clears the copy or replaces it.
+	 * Empty for a copy stored before Fleet kept them, so such a copy, once
+	 * stale, guards nothing.
+	 */
+	names: string[];
+	/**
+	 * Eight random hex characters drawn when the copy was stored: what answers
+	 * and the ledger name the copy by. Nothing derives it from the secret, so
+	 * it gives no way to test a guess of the secret. Null for a copy stored
+	 * before Fleet kept one, whose answers name none.
+	 */
+	variant: string | null;
+	/** When it was stored. */
+	at: string;
+}
+
+/** What the ask path needs to know about a fork, in one call. */
+export interface AskState {
+	fallback: SafetyFallback | null;
+	morph: MorphState | null;
+}
+
+export const SECURITY_EVENT_KINDS = ["tripwire", "rotated", "rotation_refused", "copy_cleared"] as const;
+/**
+ * A request tripped a wire of a renamed copy, a rotation moved a fork to a new
+ * copy or was refused, or a stored copy that no longer builds was cleared.
+ */
+export type SecurityEventKind = (typeof SECURITY_EVENT_KINDS)[number];
+
+export interface SecurityEvent {
+	kind: SecurityEventKind;
+	at: string;
+	/** For admins only, never broadcast: which wire a request tripped, at what path, the copy's fingerprint and epoch. */
+	detail?: Record<string, Json>;
+}
+
 export interface FleetSnapshot {
 	stockTags: string[];
 	releases: ReleaseRecord[];
@@ -90,10 +139,25 @@ export type FleetEvent =
 	| { type: "fork"; fork: FleetFork }
 	| { type: "removed"; repo: string }
 	| { type: "stockTags"; stockTags: string[] }
-	| ({ type: "release"; at: string } & ReleaseRecord);
+	| ({ type: "release"; at: string } & ReleaseRecord)
+	// The stream is public: a security event says that something happened to a fork, never what was named or which copy.
+	| { type: "security"; repo: string; kind: SecurityEventKind; at: string };
 
 const GATES_PER_REPO = 20;
 const HEALTH_HISTORY_PER_REPO = 50;
+export const SECURITY_EVENTS_PER_REPO = 100;
+/**
+ * A fork's security events reach the public stream at most once per kind in
+ * this window, so a flood of tripwire hits is one line on the fleet view (and
+ * shows an onlooker nothing about each request); every event is recorded.
+ */
+export const SECURITY_BROADCAST_WINDOW_MS = 10_000;
+/**
+ * Kinds recorded but never broadcast: a refused rotation changes nothing a
+ * fork serves, and a cleared copy only ends what no broadcast ever showed.
+ */
+const QUIET_SECURITY_KINDS: ReadonlySet<SecurityEventKind> = new Set(["rotation_refused", "copy_cleared"]);
+const SECURITY_BROADCAST_KEYS_LIMIT = 1000;
 
 const encoder = new TextEncoder();
 const HEARTBEAT_MS = 25_000;
@@ -118,6 +182,8 @@ interface Subscriber {
 export class Fleet extends DurableObject<Env> {
 	private subscribers = new Set<Subscriber>();
 	private heartbeat: ReturnType<typeof setInterval> | null = null;
+	/** When each repo:kind last reached the stream. */
+	private securityBroadcasts = new Map<string, number>();
 
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
@@ -130,19 +196,31 @@ export class Fleet extends DurableObject<Env> {
 		if (!columns.includes("pending_upgrade")) sql.exec("ALTER TABLE forks ADD COLUMN pending_upgrade TEXT");
 		if (!columns.includes("health")) sql.exec("ALTER TABLE forks ADD COLUMN health TEXT");
 		if (!columns.includes("baseline")) sql.exec("ALTER TABLE forks ADD COLUMN baseline TEXT");
+		if (!columns.includes("morph_epoch")) sql.exec("ALTER TABLE forks ADD COLUMN morph_epoch INTEGER");
+		if (!columns.includes("morph_sha")) sql.exec("ALTER TABLE forks ADD COLUMN morph_sha TEXT");
+		if (!columns.includes("morph_fp")) sql.exec("ALTER TABLE forks ADD COLUMN morph_fp TEXT");
+		if (!columns.includes("morph_names_hash")) sql.exec("ALTER TABLE forks ADD COLUMN morph_names_hash TEXT");
+		if (!columns.includes("morph_at")) sql.exec("ALTER TABLE forks ADD COLUMN morph_at TEXT");
+		if (!columns.includes("morph_names")) sql.exec("ALTER TABLE forks ADD COLUMN morph_names TEXT");
+		if (!columns.includes("morph_variant")) sql.exec("ALTER TABLE forks ADD COLUMN morph_variant TEXT");
 		sql.exec("CREATE TABLE IF NOT EXISTS health_history (seq INTEGER PRIMARY KEY AUTOINCREMENT, repo TEXT NOT NULL, event TEXT NOT NULL)");
 		sql.exec("CREATE INDEX IF NOT EXISTS health_history_repo ON health_history (repo, seq)");
+		sql.exec("CREATE TABLE IF NOT EXISTS security_events (seq INTEGER PRIMARY KEY AUTOINCREMENT, repo TEXT NOT NULL, event TEXT NOT NULL)");
+		sql.exec("CREATE INDEX IF NOT EXISTS security_events_repo ON security_events (repo, seq)");
 		sql.exec("CREATE TABLE IF NOT EXISTS stock_tags (tag TEXT PRIMARY KEY, published_at TEXT NOT NULL)");
 		sql.exec("CREATE TABLE IF NOT EXISTS releases (tag TEXT PRIMARY KEY, record TEXT NOT NULL)");
 		sql.exec("CREATE TABLE IF NOT EXISTS gates (seq INTEGER PRIMARY KEY AUTOINCREMENT, repo TEXT NOT NULL, at TEXT NOT NULL, result TEXT NOT NULL)");
 		sql.exec("CREATE INDEX IF NOT EXISTS gates_repo ON gates (repo, seq)");
 		sql.exec("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL)");
+		// The latest copy epoch of each removed fork, which a fork created again under the same name starts from.
+		sql.exec("CREATE TABLE IF NOT EXISTS morph_epochs (repo TEXT PRIMARY KEY, epoch INTEGER NOT NULL)");
 	}
 
 	register(input: { repo: string; userId: string; persona: string; pinnedTag: string; status?: ForkStatusInput; seeded?: boolean }, at = Date.now()): FleetFork {
 		const now = new Date(at).toISOString();
+		// A new row starts at the latest epoch a removed fork of the same name reached (morphEpoch), so no copy comes back.
 		this.ctx.storage.sql.exec(
-			"INSERT INTO forks (repo, user_id, persona, pinned_tag, status, seeded, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(repo) DO UPDATE SET persona = excluded.persona, pinned_tag = excluded.pinned_tag, status = excluded.status, updated_at = excluded.updated_at",
+			"INSERT INTO forks (repo, user_id, persona, pinned_tag, status, seeded, created_at, updated_at, morph_epoch) VALUES (?, ?, ?, ?, ?, ?, ?, ?, (SELECT epoch FROM morph_epochs WHERE repo = ?)) ON CONFLICT(repo) DO UPDATE SET persona = excluded.persona, pinned_tag = excluded.pinned_tag, status = excluded.status, updated_at = excluded.updated_at",
 			input.repo,
 			input.userId,
 			input.persona,
@@ -151,6 +229,7 @@ export class Fleet extends DurableObject<Env> {
 			input.seeded ? 1 : 0,
 			now,
 			now,
+			input.repo,
 		);
 		const fork = this.get(input.repo)!;
 		this.broadcast({ type: "fork", fork });
@@ -275,8 +354,98 @@ export class Fleet extends DurableObject<Env> {
 		return { state: result.state, stale: result.stale === true };
 	}
 
+	// Polymorphic copies
+
+	/** The verified renamed copy a fork serves, or null: then it runs plain. */
+	morphState(repo: string): MorphState | null {
+		const row = this.ctx.storage.sql.exec("SELECT morph_epoch, morph_sha, morph_fp, morph_names_hash, morph_names, morph_variant, morph_at FROM forks WHERE repo = ?", repo).toArray()[0];
+		// A cleared copy leaves its epoch behind (see setMorph), so the copy is there only while its commit is.
+		if (!row || row.morph_sha === null || row.morph_sha === undefined) return null;
+		const names = typeof row.morph_names === "string" ? (JSON.parse(row.morph_names) as string[]) : [];
+		const variant = typeof row.morph_variant === "string" ? row.morph_variant : null;
+		return { epoch: row.morph_epoch as number, sha: row.morph_sha as string, fingerprint: row.morph_fp as string, namesHash: row.morph_names_hash as string, names, variant, at: row.morph_at as string };
+	}
+
+	/**
+	 * The latest epoch a copy of this fork was stored at, kept when the copy
+	 * is cleared and when the fork is removed and created again under the same
+	 * name, or null when no fork of that name ever had one (or it is not in
+	 * the fleet). A rotation numbers its copy one above it and stores the copy
+	 * over it, so no epoch is used twice: the seed is the fork, the commit,
+	 * and the epoch, and a reused epoch on an unmoved main would bring a
+	 * retired copy back, names and all.
+	 */
+	morphEpoch(repo: string): number | null {
+		const row = this.ctx.storage.sql.exec("SELECT morph_epoch FROM forks WHERE repo = ?", repo).toArray()[0];
+		return row && typeof row.morph_epoch === "number" ? row.morph_epoch : null;
+	}
+
+	/**
+	 * Stores the copy a gate verified for a fork, but only while the fork's
+	 * epoch (morphEpoch) is still `from`, the one the caller read before its
+	 * gate ran. A rotation that took longer than another then stores nothing,
+	 * rather than bring back a copy the other one retired. With null, clears
+	 * the stored copy, again only over `from`, and keeps its epoch, so no later
+	 * copy reuses it. False when nothing changed: the epoch moved, there was no
+	 * copy to clear, or the fork is not in the fleet. Nothing is broadcast:
+	 * which copy a fork runs is the platform's own business.
+	 */
+	setMorph(repo: string, state: Omit<MorphState, "at"> | null, expected: { from: number | null }, at = Date.now()): boolean {
+		const sql = this.ctx.storage.sql;
+		if (state === null) {
+			return sql.exec("UPDATE forks SET morph_sha = NULL, morph_fp = NULL, morph_names_hash = NULL, morph_names = NULL, morph_variant = NULL, morph_at = NULL WHERE repo = ? AND morph_epoch IS ? AND morph_sha IS NOT NULL RETURNING repo", repo, expected.from).toArray().length > 0;
+		}
+		checkMorphState(state);
+		const values = [state.epoch, state.sha, state.fingerprint, state.namesHash, JSON.stringify(state.names), state.variant, new Date(at).toISOString()];
+		return sql.exec("UPDATE forks SET morph_epoch = ?, morph_sha = ?, morph_fp = ?, morph_names_hash = ?, morph_names = ?, morph_variant = ?, morph_at = ? WHERE repo = ? AND morph_epoch IS ? RETURNING repo", ...values, repo, expected.from).toArray().length > 0;
+	}
+
+	/**
+	 * Records a security event for a fork, its detail values clipped, keeping
+	 * the latest SECURITY_EVENTS_PER_REPO, and tells stream subscribers only
+	 * that one happened: the repo, the kind, and the time, at most once per
+	 * fork and kind every SECURITY_BROADCAST_WINDOW_MS, and never for a refused
+	 * rotation. Null when the fork is not in the fleet.
+	 */
+	recordSecurityEvent(repo: string, input: { kind: SecurityEventKind; detail?: Record<string, Json> }, at = Date.now()): SecurityEvent | null {
+		if (!SECURITY_EVENT_KINDS.includes(input.kind)) throw new Error(`recordSecurityEvent: unknown kind ${JSON.stringify(input.kind)}; kinds are ${SECURITY_EVENT_KINDS.join(", ")}`);
+		if (!this.get(repo)) return null;
+		// Detail can hold request text (a tripwire path): each value is clipped, as gate failures are, so one event stays small.
+		const detail = input.detail ? Object.fromEntries(Object.entries(input.detail).map(([key, value]) => [key, clipValue(value) as Json])) : undefined;
+		const event: SecurityEvent = { kind: input.kind, at: new Date(at).toISOString(), ...(detail ? { detail } : {}) };
+		const sql = this.ctx.storage.sql;
+		sql.exec("INSERT INTO security_events (repo, event) VALUES (?, ?)", repo, JSON.stringify(event));
+		sql.exec("DELETE FROM security_events WHERE repo = ? AND seq NOT IN (SELECT seq FROM security_events WHERE repo = ? ORDER BY seq DESC LIMIT ?)", repo, repo, SECURITY_EVENTS_PER_REPO);
+		if (this.securityBroadcastDue(repo, event.kind, at)) this.broadcast({ type: "security", repo, kind: event.kind, at: event.at });
+		return event;
+	}
+
+	/** Whether an event of this kind for this fork goes to the stream now: not a quiet kind, and none went in the last window. */
+	private securityBroadcastDue(repo: string, kind: SecurityEventKind, at: number): boolean {
+		if (QUIET_SECURITY_KINDS.has(kind)) return false;
+		const key = `${repo}:${kind}`;
+		const last = this.securityBroadcasts.get(key);
+		if (last !== undefined && at - last < SECURITY_BROADCAST_WINDOW_MS) return false;
+		if (this.securityBroadcasts.size >= SECURITY_BROADCAST_KEYS_LIMIT) {
+			for (const [seen, time] of this.securityBroadcasts) if (at - time >= SECURITY_BROADCAST_WINDOW_MS) this.securityBroadcasts.delete(seen);
+		}
+		this.securityBroadcasts.set(key, at);
+		return true;
+	}
+
+	/** A fork's security events, newest first. */
+	securityEvents(repo: string, limit = SECURITY_EVENTS_PER_REPO): SecurityEvent[] {
+		return this.ctx.storage.sql.exec("SELECT event FROM security_events WHERE repo = ? ORDER BY seq DESC LIMIT ?", repo, limit).toArray().map((r) => JSON.parse(r.event as string) as SecurityEvent);
+	}
+
+	/** Removes a fork and its records, keeping only its latest copy epoch (morphEpoch). */
 	remove(repo: string): boolean {
+		this.ctx.storage.sql.exec(
+			"INSERT INTO morph_epochs (repo, epoch) SELECT repo, morph_epoch FROM forks WHERE repo = ? AND morph_epoch IS NOT NULL ON CONFLICT(repo) DO UPDATE SET epoch = max(epoch, excluded.epoch)",
+			repo,
+		);
 		this.ctx.storage.sql.exec("DELETE FROM health_history WHERE repo = ?", repo);
+		this.ctx.storage.sql.exec("DELETE FROM security_events WHERE repo = ?", repo);
 		this.ctx.storage.sql.exec("DELETE FROM gates WHERE repo = ?", repo);
 		this.ctx.storage.sql.exec("DELETE FROM kv WHERE k = ?", importLogKey(repo));
 		const removed = this.ctx.storage.sql.exec("DELETE FROM forks WHERE repo = ? RETURNING repo", repo).toArray().length > 0;
@@ -328,6 +497,15 @@ export class Fleet extends DurableObject<Env> {
 		if (!latest || compareTagsAsc(fork.pinnedTag, latest.tag) >= 0) return null;
 		if (fork.pendingUpgrade && compareTagsAsc(fork.pendingUpgrade.tag, latest.tag) >= 0) return null;
 		return { tag: latest.tag, from: fork.pinnedTag, graceUntil: latest.graceUntil! };
+	}
+
+	/**
+	 * What the ask path needs to know about a fork, in one call: the stock
+	 * release that answers for it once a safety grace period is over
+	 * (safetyFallback), and the verified renamed copy it serves (morphState).
+	 */
+	askState(repo: string, now = Date.now()): AskState {
+		return { fallback: this.safetyFallback(repo, now), morph: this.morphState(repo) };
 	}
 
 	/** Stores a gate result for GET /api/gates/:repo, keeping the most recent per repo. */
@@ -570,6 +748,24 @@ export function compareTagsAsc(a: string, b: string): number {
 	const pb = b.replace(/^v/, "").split(/[.-]/).map((x) => Number(x) || 0);
 	for (let i = 0; i < 3; i++) if (pa[i] !== pb[i]) return (pa[i] ?? 0) - (pb[i] ?? 0);
 	return 0;
+}
+
+const COMMIT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+const HEX8 = /^[0-9a-f]{8}$/;
+/** A name upstream's list can hold (polymorph/list.ts). */
+const LISTED_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** A stored copy must name one: the live path seeds it from the epoch and commit and compares the hash. */
+function checkMorphState(state: Omit<MorphState, "at">): void {
+	if (!Number.isSafeInteger(state.epoch) || state.epoch < 0) throw new Error(`setMorph: epoch must be a non-negative integer, got ${JSON.stringify(state.epoch)}`);
+	if (typeof state.sha !== "string" || !COMMIT_ID.test(state.sha)) throw new Error(`setMorph: sha must be a full lowercase commit id, got ${JSON.stringify(state.sha)}`);
+	if (typeof state.fingerprint !== "string" || !HEX8.test(state.fingerprint)) throw new Error("setMorph: fingerprint must be eight lowercase hex characters");
+	if (typeof state.namesHash !== "string" || !HEX8.test(state.namesHash)) throw new Error("setMorph: namesHash must be eight lowercase hex characters");
+	if (typeof state.variant !== "string" || !HEX8.test(state.variant)) throw new Error("setMorph: variant must be eight lowercase hex characters");
+	const names = state.names as unknown;
+	if (!Array.isArray(names) || !names.every((name) => typeof name === "string" && LISTED_NAME.test(name)) || new Set(names).size !== names.length) {
+		throw new Error("setMorph: names must be a list of distinct plain identifiers, the names the copy renamed");
+	}
 }
 
 export function sse(event: string, data: unknown): string {

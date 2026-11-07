@@ -3,8 +3,10 @@
 // stock files at the pinned tag and reaches the fork through an ask callback
 // that the platform time-boxes. Used by the Gate, Upgrade, and Repair
 // workflows and by the admin suite route.
+import { clipValue } from "../lib/clip.ts";
 import { parseToml } from "../lib/toml.ts";
-import { askCard, FORK_CALL_TIMEOUT_MS, loadForkRuntime, loadRunner, withTimeout, type RuntimeDeps } from "../runtime/loader.ts";
+import { equivalenceCheck, type EquivalenceReport } from "../polymorph/equivalence.ts";
+import { askLoaded, FORK_CALL_TIMEOUT_MS, loadForkRuntime, loadRunner, withTimeout, type LoadedCopy, type LoadedFork, type PlainLoad, type RuntimeDeps } from "../runtime/loader.ts";
 import { resolveCommit, shortRef } from "../runtime/refs.ts";
 import { headOf, openRepo, readTextFile } from "../runtime/repo-files.ts";
 import { pinnedTagOf } from "../stock/releases.ts";
@@ -25,6 +27,7 @@ import {
 	USER_MANIFEST_PATH,
 	verdict,
 	type GateFailure,
+	type GatePolymorph,
 	type GateResult,
 	type RunnerManifestResult,
 	type TierName,
@@ -48,7 +51,20 @@ export interface GateInput {
 	intentViolations?: string[];
 	/** Records a change from outside the platform adds that claim a platform agent's name. */
 	platformClaims?: string[];
+	/**
+	 * Also check the renamed copy for this epoch: every probe request goes to
+	 * the plain fork and to the copy, the runner sees the copy's answers, and
+	 * any difference between the two fails tier 1 as "polymorph-equivalence".
+	 * When no copy can be made the gate runs as without it and reports
+	 * polymorph: null.
+	 */
+	morph?: { epoch: number };
 }
+
+/** The probe id of the equivalence check between a fork and its renamed copy. */
+export const EQUIVALENCE_PROBE = "polymorph-equivalence";
+/** Differences recorded as failures per gate run; when there were more, the last one says how many requests differed in all. */
+const MAX_EQUIVALENCE_FAILURES = 10;
 
 /** Isolate variant for one gate run: the gate never shares an isolate (or its module state) with production or another gate. */
 export function gateVariant(): string {
@@ -92,6 +108,10 @@ async function gateCore(deps: RuntimeDeps, input: GateInput, observe: ObserveOpt
 	let commit = input.commit ?? ref;
 	const tiers: Record<TierName, TierSummary | null> = { invariant: null, functional: null, user: null };
 	const failures: GateFailure[] = [];
+	// Set once the renamed copy was compared with the plain fork.
+	let polymorph: GatePolymorph | null = null;
+	// Set when a copy was asked for and the fork loaded plain.
+	let plainCopy: PlainLoad | null = null;
 	const finish = (stockTag: string | null, stockCommit: string | null, error?: string): { gate: GateResult } => {
 		const result: GateResult = {
 			repo: input.repo,
@@ -106,6 +126,8 @@ async function gateCore(deps: RuntimeDeps, input: GateInput, observe: ObserveOpt
 			durationMs: Date.now() - started,
 		};
 		if (error) result.error = error;
+		if (input.morph) result.polymorph = polymorph;
+		if (input.morph && polymorph === null && plainCopy) result.polymorphPlain = { kind: plainCopy.kind, reason: String(clipValue(plainCopy.reason)) };
 		return { gate: result };
 	};
 	const record = (tier: TierName, part: { summary: TierSummary; failures: GateFailure[] }) => {
@@ -155,11 +177,25 @@ async function gateCore(deps: RuntimeDeps, input: GateInput, observe: ObserveOpt
 
 	let ask: (request: unknown) => Promise<unknown>;
 	let cards: Map<string, unknown> | null = null;
+	let equivalence: { copy: LoadedCopy; report(): EquivalenceReport } | null = null;
 	// Filled once the manifests are known, before the runner sends any request.
 	const recorded = new Set<string>();
 	try {
-		const loaded = await loadForkRuntime(deps, input.repo, commit, { variant: gateVariant() });
-		ask = (request) => withTimeout(askCard(loaded.fork, request, { useModel: false }), FORK_CALL_TIMEOUT_MS, "fork did not answer");
+		const variant = gateVariant();
+		const askOf = (loaded: LoadedFork) => (request: unknown) => withTimeout(askLoaded(loaded, request, { useModel: false }), FORK_CALL_TIMEOUT_MS, "fork did not answer");
+		const loaded = await loadForkRuntime(deps, input.repo, commit, { variant });
+		ask = askOf(loaded);
+		if (input.morph) {
+			// The copy shares the gate's variant, so it runs apart from production too, and its build, so this checks the code production would run.
+			const renamed = await loadForkRuntime(deps, input.repo, commit, { variant, morph: { epoch: input.morph.epoch, onlyAt: commit } });
+			if (renamed.morph) {
+				const check = equivalenceCheck(ask, askOf(renamed), MAX_EQUIVALENCE_FAILURES);
+				ask = check.ask;
+				equivalence = { copy: renamed.morph, report: check.report };
+			} else {
+				plainCopy = renamed.plain;
+			}
+		}
 		if (observe) {
 			const recorder = cardRecorder(ask, recorded);
 			ask = recorder.ask;
@@ -205,6 +241,7 @@ async function gateCore(deps: RuntimeDeps, input: GateInput, observe: ObserveOpt
 		if (user.dropped) tiers.user!.note = `${user.dropped} probe(s) past the limit of ${USER_LIMITS.maxProbes} were not run`;
 	}
 	addUiInvariant(tiers, failures, uiInvariant(uiText));
+	if (equivalence) polymorph = addEquivalence(tiers, failures, equivalence.copy, equivalence.report());
 	if (pin && !pin.ok) addPinFailure(tiers, failures, pin.reason, pinned, pin.floor);
 	if (input.intentViolations?.length) addAppendOnlyFailure(tiers, failures, input.intentViolations);
 	if (input.platformClaims?.length) addPlatformClaimFailure(tiers, failures, input.platformClaims);
@@ -245,6 +282,51 @@ function addIntentFailure(tiers: Record<TierName, TierSummary | null>, failures:
 	const t = tiers.invariant;
 	const probe = { id, passed: false, samples: 1, passedSamples: 0 };
 	tiers.invariant = t ? { ...t, passed: false, total: t.total + 1, failed: t.failed + 1, probes: [probe, ...t.probes] } : { tier: "invariant", passed: false, total: 1, failed: 1, probes: [probe] };
+}
+
+/**
+ * A renamed copy must answer every probe request exactly like the plain fork.
+ * Each difference fails tier 1 as probe "polymorph-equivalence" (the first
+ * MAX_EQUIVALENCE_FAILURES, the last saying how many requests differed in
+ * all when there were more), ahead
+ * of whatever the suites found on the copy's answers. A copy no request
+ * reached fails too: nothing showed it answers like the fork. Returns the
+ * gate's report of the copy.
+ */
+export function addEquivalence(tiers: Record<TierName, TierSummary | null>, failures: GateFailure[], copy: LoadedCopy, report: EquivalenceReport): GatePolymorph {
+	// The text never names the copy: a failure is kept on runs that anyone who knows the run id can read.
+	const recorded: GateFailure[] = report.findings.map(({ request, difference }) => ({
+		tier: "invariant",
+		probe: EQUIVALENCE_PROBE,
+		description: `The renamed copy answered ${requestLabel(request)} differently from the plain fork.`,
+		sample: 1,
+		samples: 1,
+		path: difference.path,
+		op: "equals",
+		expected: clipValue(difference.plain),
+		actual: clipValue(difference.morphed),
+	}));
+	// cardDifferences stops at 20 differences per answer, so only the count of requests is exact.
+	const last = recorded[recorded.length - 1];
+	if (last && report.truncated) last.description += ` In all, ${report.mismatches} of ${report.compared} requests were answered differently; only the first ${recorded.length} differences are shown.`;
+	if (report.compared === 0) {
+		recorded.push({ tier: "invariant", probe: EQUIVALENCE_PROBE, description: "No probe request reached the renamed copy, so nothing showed it answers like the plain fork.", sample: 1, samples: 1, path: "", op: "compared", expected: "at least one request", actual: 0 });
+	}
+	failures.unshift(...recorded);
+	const probe = { id: EQUIVALENCE_PROBE, passed: recorded.length === 0, samples: report.compared, passedSamples: report.compared - report.mismatches };
+	const t = tiers.invariant;
+	tiers.invariant = t
+		? { ...t, passed: t.passed && probe.passed, total: t.total + 1, failed: t.failed + (probe.passed ? 0 : 1), probes: [...t.probes, probe] }
+		: { tier: "invariant", passed: probe.passed, total: 1, failed: probe.passed ? 0 : 1, probes: [probe] };
+	const skipped = copy.skipped.map(({ name, reason }) => ({ name, reason: String(clipValue(reason)) }));
+	return { epoch: copy.epoch, fingerprint: copy.fingerprint, namesHash: copy.namesHash, renamed: [...copy.names.keys()].sort(), compared: report.compared, mismatches: report.mismatches, skipped };
+}
+
+/** A request as a failure names it: its question, or its JSON when it has none, quoted and cut short. */
+function requestLabel(request: unknown): string {
+	const question = (request as { question?: unknown } | null)?.question;
+	const text = typeof question === "string" ? question : (JSON.stringify(request) ?? String(request));
+	return JSON.stringify(text.length > 120 ? `${text.slice(0, 120)}...` : text);
 }
 
 /** A pin that moves backward fails tier 1 as probe "pin-monotonic", next to whatever the suite found. */
