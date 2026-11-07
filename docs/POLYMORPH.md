@@ -161,7 +161,9 @@ Polymorphic installation is optional. It needs one secret, `POLYMORPH_SECRET`, o
 
 Without it, or with one shorter than 16 characters, every fork runs plain: no copies, no scan, no rotation. The schedule still starts a `fluid-rotate` instance every 6 hours, which records a rotate run marked `cancelled` ("Skipped: POLYMORPH_SECRET is not set or is shorter than 16 characters"). `POST /api/admin/fleet/rotate` still starts runs, which skip the same way. A secret that is set but shorter than 16 characters also logs one warning per isolate.
 
-Copies also need the stock release that a fork pins to publish `polymorph.json`. On a deployment whose stock tags were published before the list existed, every rotation skips (`stock <tag> publishes no polymorph.json`) until its forks pin a release that has the list. [DEPLOY.md](DEPLOY.md#polymorphic-installation-on-an-existing-deployment) shows how to publish one and move the fleet to it. Once the secret is set and the pinned release has the list, each fork gets its first copy at its next rotation. To give every fork one now, send `POST /api/admin/fleet/rotate` with body `{}`. A new secret makes new copies: a stored copy made with the old one no longer matches, so its fork answers plain and starts a rotation on its next request.
+Copies also need the stock release that a fork pins to publish `polymorph.json`. On a deployment whose stock tags were published before the list existed, every rotation skips (`stock <tag> publishes no polymorph.json`) until its forks pin a release that has the list. [DEPLOY.md](DEPLOY.md#polymorphic-installation-on-an-existing-deployment) shows how to publish one and move the fleet to it.
+
+Once the secret is set and the pinned release has the list, each fork gets its first copy at its next rotation. To give every fork one now, send `POST /api/admin/fleet/rotate` with body `{}`. A new secret makes new copies: a stored copy made with the old one no longer matches, so its fork answers plain and starts a rotation on its next request.
 
 ## Run the experiment
 
@@ -221,7 +223,7 @@ The recording is `platform/public/data/polymorph-demo.json`.
 - **A fork's own fields.** When a fork reads a request field of its own whose name is on the list, that field stays plain only when the fork's tests (`tests/user/manifest.json`, `tests/user/e2e.json`), its `fluid.toml`, or its modules' text name it. Otherwise the copy renames the code that reads the field, so the copy answers differently, and a request that sends the field under its original name is refused as a decoy. Naming the field in the fork's own tests fixes it.
 - **Rotation needs a pass.** A rotation needs the whole check mode gate to pass. A fork whose `main` fails a tier keeps the copy it has, or stays plain.
 - **After a change lands.** Until the landed commit's rotation stores a copy of it, `main` answers plain, behind the stored copy's scan.
-- **Runtime upgrades.** A runtime upgrade can cost a name: a name the new runtime builds in is skipped from then on. The stored copy then no longer matches, so the fork answers plain until it rotates, and a rotation that stores no new copy clears the old one.
+- **Runtime upgrades.** A runtime upgrade can cost a name: a name the new runtime builds in is skipped from then on. The stored copy then no longer matches, so the fork answers plain until it rotates, and a `mismatch` rotation that stores no new copy clears the old one.
 - **Cost.** Each rotation is a check mode gate that asks every probe twice, and the schedule runs one per fork every 6 hours.
 - **Tests share one process.** Tests simulate isolates in one Node process. The experiment checks that no attack changed a built-in the isolates share.
 - **Not on the live site yet.** Nothing has run on the deployed site yet.
