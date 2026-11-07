@@ -69,7 +69,7 @@ Seeds and renamed copies never leave the platform. Everything a renamed copy sen
 
 ### 7. Rotation
 
-A new workflow, `fluid-rotate`, moves every fork to its next epoch every 6 hours, starts a rotation of one fork at once after a tripwire hit, and moves a fork right after a change lands on its `main`. It runs the equivalence check first and keeps the old copy when the new one fails. Hits on one fork start at most one rotation in each 10-minute window, whatever copy they trip, so a flood of hits costs one gate run per window. Whatever an attacker learned about a copy goes stale at the next rotation.
+A new workflow, `fluid-rotate`, moves every fork to its next epoch every 6 hours, starts a rotation of one fork at once after a tripwire hit, and moves a fork right after a change lands on its `main`. It runs the equivalence check first and keeps the old copy when the new one fails. Hits on one fork start at most one rotation in each 10-minute window, whatever copy they trip. Whatever an attacker learned about a copy goes stale at the next rotation.
 
 ## The proof of concept
 
@@ -112,7 +112,7 @@ So for this bug class the answer to the issue is yes: one exploit built from ups
 - **Every ref is guarded.** Requests to any ref of a fork with a stored copy are scanned with that copy's names. The copy itself answers only at its commit. Any other commit, including `main` after a change lands and before its rotation, answers plain behind that scan.
 - **Model off.** A copy always answers with the model off: `useModel` comes from the request body, so honoring it would let any request bypass the copy.
 - **Reads fail closed.** When a read that the stored copy needs fails in Artifacts, the plain fork never answers the request unscanned. A failed read of upstream's list or of the fork's own tests gets a retryable 503. A failed read of the fork's own code fails the ask as it does for any fork (500, or 404 when the repo cannot be opened).
-- **When rotations start.** Tripwire hits start one rotation per fork in each 10-minute window, even when that rotation stores a new copy that the next hits trip. So a sustained flood on one fork runs at most one check mode gate every 10 minutes. Rotations also start for new forks, landed upgrades, one-tap approvals, yellow rollbacks, and stored copies that no longer build as verified.
+- **When rotations start.** Tripwire hits start one rotation per fork in each 10-minute window, even when that rotation stores a new copy that the next hits trip. So a sustained flood of hits on one fork starts at most one tripwire rotation in each 10-minute window. Rotations also start for new forks, landed upgrades, one-tap approvals, yellow rollbacks, and stored copies that no longer build as verified.
 - **Stale copies.** A stored copy that no longer builds as verified starts a `mismatch` rotation. Meanwhile the plain fork answers behind a scan with the names Fleet stored for the old copy, in which every suffix is foreign. A try of that rotation that stores no new copy, even a try that found the fork busy, builds the old copy again, and clears it when it still does not build. The fork then answers unscanned until a rotation stores a copy. Fleet keeps a cleared copy's epoch, and a deleted fork's latest epoch for a fork created again under the same name. The next copy is numbered above it. So a fork's epochs never repeat, and no retired copy comes back.
 
 ## Limits and open questions
@@ -128,7 +128,7 @@ So for this bug class the answer to the issue is yes: one exploit built from ups
 - **After a change lands.** Between a landed change and its rotation, the fork answers plain behind the stored copy's scan.
 - **Runtime upgrades.** A runtime upgrade can cost a name: a name the new runtime builds in is skipped from then on.
 - **Hand-curated list.** A wrong entry leaves the fork less protected, in one of three ways. The platform may refuse the whole list, and then every fork on that release runs plain. A copy may skip the name, which is then neither renamed nor a tripwire. Only the gate's result says why, and no run or route shows it yet. A copy may fail the gate, and then the fork keeps the copy it has, or stays plain.
-- **Cost.** Each rotation is a check mode gate that asks every probe twice. The schedule runs one per fork every 6 hours, and landed changes, new forks, tripwire hits, and stale copies add more. Tripwire hits add at most one per fork every 10 minutes, however long a flood of decoys lasts.
+- **Cost.** Each rotation is a check mode gate that asks every probe twice. The schedule runs one per fork every 6 hours, and landed changes, new forks, tripwire hits, and stale copies add more. Tripwire hits add at most one per fork in each 10-minute window, however long a flood of decoys lasts.
 - **Tests share one process.** In tests, isolates are simulated in one Node process. The experiment uses a bug class that leaves no shared state, and it checks that no attack changed a built-in the isolates share.
 - **Not on the live site yet.** Nothing has run on the deployed site yet.
 

@@ -239,7 +239,7 @@ The recording is `platform/public/data/polymorph-demo.json`.
 - **Rotation needs a pass.** A rotation needs the whole check mode gate to pass. A fork whose `main` fails a tier keeps the copy it has, or stays plain.
 - **After a change lands.** Until the landed commit's rotation stores a copy of it, `main` answers plain, behind the stored copy's scan.
 - **Runtime upgrades.** A runtime upgrade can cost a name: a name the new runtime builds in is skipped from then on. The stored copy then no longer matches, so the fork answers plain, behind a scan with the stored copy's names, and starts a `mismatch` rotation. A try of that rotation that stores no new copy clears the old one, and the fork then answers unscanned until a rotation stores one.
-- **Cost.** Each rotation is a check mode gate that asks every probe twice. The schedule runs one per fork every 6 hours, and landed changes, new forks, tripwire hits, and stale copies add more. Tripwire hits add at most one per fork every 10 minutes, however long a flood of decoys lasts.
+- **Cost.** Each rotation is a check mode gate that asks every probe twice. The schedule runs one per fork every 6 hours, and landed changes, new forks, tripwire hits, and stale copies add more. Tripwire hits add at most one per fork in each 10-minute window, however long a flood of decoys lasts.
 - **Tests share one process.** Tests simulate isolates in one Node process. The experiment checks that no attack changed a built-in the isolates share.
 - **Not on the live site yet.** Nothing has run on the deployed site yet.
 
