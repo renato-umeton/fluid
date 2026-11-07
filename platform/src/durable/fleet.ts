@@ -333,7 +333,7 @@ export class Fleet extends DurableObject<Env> {
 		return { state: result.state, stale: result.stale === true };
 	}
 
-	// ---------- polymorphic copies ----------
+	// Polymorphic copies
 
 	/** The verified renamed copy a fork serves, or null: then it runs plain. */
 	morphState(repo: string): MorphState | null {

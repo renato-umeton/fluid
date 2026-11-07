@@ -917,7 +917,7 @@ button.health-badge { cursor: pointer; }
   .health-badge.h-yellow .health-dot, .soak-seg.run, .cell.s-yellow { animation: none; }
 }
 
-/* ---------- Polymorph (replay of a recorded run) ---------- */
+/* Polymorph (replay of a recorded run) */
 /* Tiles say their state in words; color only repeats it. The reduced-motion rule under Responsive stops the transitions. */
 .polymorph { display: grid; gap: 16px; }
 .polymorph-intro { display: grid; gap: 6px; max-width: 80ch; }
