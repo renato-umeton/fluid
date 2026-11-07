@@ -29,8 +29,8 @@ const BUSY_WAIT = "1 minute";
 
 /**
  * A rotation's result as its run shows it. cleared stays set once any try
- * cleared the stored copy: a try that clears it and then waits for a busy
- * fork leaves the next try no copy to clear, whatever that try ends with.
+ * cleared the stored copy, whatever a later try ends with. A try that finds
+ * the fork busy clears nothing, so the flag comes from a try on the free fork.
  */
 type RunResult = RotationResult & { cleared?: true };
 

@@ -35,12 +35,15 @@ beforeAll(() => {
 		"user-outgrown": { ...PUBLISHED, "app/big.js": `// ${"x".repeat(SCAN_LIMITS.moduleChars)}\nexport const outgrown = 1;\n` },
 		"user-outgrown-2": { ...PUBLISHED, "app/big.js": `// ${"x".repeat(SCAN_LIMITS.moduleChars)}\nexport const outgrown = 2;\n` },
 		"user-stale-busy": { ...PUBLISHED, "app/stale.ts": "export const stale = 1;\n" },
+		"user-stale-wait": { ...PUBLISHED, "app/stale.ts": "export const stale = 2;\n" },
 		"user-retired": { ...PUBLISHED, "app/retired.ts": "export const retired = 1;\n" },
 		"user-resecret-2": { ...PUBLISHED, "app/resecret.ts": "export const resecret = 2;\n" },
-		"user-unread": { ...PUBLISHED, "app/unread.ts": "export const unread = 1;\n" },
 		"user-again": { ...PUBLISHED, "app/again.ts": "export const again = 1;\n" },
 		"user-variant": { ...PUBLISHED, "app/variant.ts": "export const variant = 1;\n" },
 	});
+	// A fork whose main moved on to code the renamer refuses, after its copy of the commit before was stored.
+	const unread = { ...PUBLISHED, "app/unread.ts": "export const unread = 1;\n" };
+	p.heads["user-unread"] = p.t.artifacts.seed("user-unread", { commits: [unread, { ...unread, "app/big.js": `// ${"x".repeat(SCAN_LIMITS.moduleChars)}\nexport const unread = 2;\n` }] }).commits[1]!;
 	for (const repo of Object.keys(p.heads)) p.t.fleet.register({ repo, userId: repo.replace(/^user-/, ""), persona: "p", pinnedTag: TAG, status: "pinned" });
 });
 
@@ -259,9 +262,9 @@ describe("rotateFork", () => {
 		SLOW_MS,
 	);
 
-	/** The copy a rotation would have stored for a fork at epoch 1, stored as if a gate had verified it. */
-	async function storeVerified(repo: string) {
-		const state = { epoch: 1, sha: p.heads[repo]!, fingerprint: await printOf(repo, 1), namesHash: await namesHash(LISTED), names: [...LISTED].sort(), variant: "5eed0001" };
+	/** The copy a rotation would have stored for a fork at epoch 1, of main's commit unless told otherwise, stored as if a gate had verified it. */
+	async function storeVerified(repo: string, sha = p.heads[repo]!) {
+		const state = { epoch: 1, sha, fingerprint: await fingerprint(await deriveSeed(POLYMORPH_TEST_SECRET, repo, sha, 1)), namesHash: await namesHash(LISTED), names: [...LISTED].sort(), variant: "5eed0001" };
 		if (!p.t.fleet.setMorph(repo, state, { from: null }, t0)) throw new Error(`${repo}: no copy stored`);
 		return state;
 	}
@@ -309,6 +312,23 @@ describe("rotateFork", () => {
 		SLOW_MS,
 	);
 
+	it(
+		"keeps a stored copy that no longer builds while a mismatch rotation finds the fork busy, and rotates the fork once it is free",
+		async () => {
+			const repo = "user-stale-wait";
+			// Stored under another secret: the seed makes another fingerprint now, as after POLYMORPH_SECRET was replaced.
+			const stale = { ...(await storeVerified(repo)), fingerprint: "00000000" };
+			p.t.fleet.setMorph(repo, stale, { from: 1 }, t0);
+			p.t.fleet.update(repo, { status: "gating" });
+			expect(await rotateFork(p.deps, repo, "mismatch")).toEqual({ outcome: "skipped", repo, reason: "mismatch", why: "the fork is gating", busy: true });
+			expect(p.t.fleet.morphState(repo)).toEqual({ ...stale, at: iso(t0) });
+			expect(p.t.fleet.securityEvents(repo)).toEqual([]);
+			p.t.fleet.update(repo, { status: "pinned" });
+			expect(await rotateFork(p.deps, repo, "mismatch")).toMatchObject({ outcome: "rotated", repo, reason: "mismatch", epoch: 2, fingerprint: await printOf(repo, 2) });
+		},
+		SLOW_MS,
+	);
+
 	const printsOf = (...results: RotationResult[]) => results.map((result) => (result.outcome === "rotated" ? result.fingerprint : result.outcome));
 
 	it(
@@ -346,12 +366,22 @@ describe("rotateFork", () => {
 			const repo = "user-resecret-2";
 			const first = await rotateFork(p.deps, repo, "schedule");
 			const second = await rotateFork(p.deps, repo, "schedule");
-			// Under another secret the stored copy is not the one the seed makes; the fork is gating, so the mismatch rotation only clears it.
+			// Under another secret the stored copy is not the one the seed makes. The renamer's limits change as well, so the
+			// gate makes no new copy, and the mismatch rotation only clears the stored one.
 			const otherSecret = { ...p.deps, env: { ...p.t.env, POLYMORPH_SECRET: "another-platform-secret-for-a-while" } as unknown as Env };
-			p.t.fleet.update(repo, { status: "gating" });
-			expect(await rotateFork(otherSecret, repo, "mismatch")).toMatchObject({ outcome: "skipped", busy: true, cleared: true });
+			const limits = SCAN_LIMITS as { moduleChars: number };
+			const limit = limits.moduleChars;
+			try {
+				limits.moduleChars = 1000;
+				clearRuntimeCache();
+				expect(await rotateFork(otherSecret, repo, "mismatch")).toMatchObject({ outcome: "skipped", cleared: true });
+			} finally {
+				limits.moduleChars = limit;
+				clearRuntimeCache();
+			}
+			// The secret is what made the stored copy stale: the seed makes another fingerprint.
+			expect(p.t.fleet.securityEvents(repo)[0]).toMatchObject({ kind: "copy_cleared", detail: { epoch: 2, cause: "mismatch" } });
 			// The first secret is back.
-			p.t.fleet.update(repo, { status: "pinned" });
 			const third = await rotateFork(p.deps, repo, "schedule");
 			expect(third).toMatchObject({ outcome: "rotated", epoch: 3 });
 			expect(printsOf(first, second)).not.toContain(printsOf(third)[0]);
@@ -364,16 +394,18 @@ describe("rotateFork", () => {
 		async () => {
 			vi.spyOn(console, "warn").mockImplementation(() => undefined);
 			const repo = "user-unread";
-			const state = await storeVerified(repo);
-			p.t.fleet.update(repo, { status: "gating" });
 			const git = p.t.artifacts.repos.get(repo)!.git;
+			// The stored copy is of the commit before main. The gate makes no copy of main, so the rotation checks the stored copy, and that read fails.
+			const before = git.commits[0]!;
+			const state = await storeVerified(repo, before);
 			const read = git.readFile.bind(git);
-			vi.spyOn(git, "readFile").mockImplementation(async (args: { ref: string; path: string }) => {
-				if (args.path === "tests/user/manifest.json") throw new Error("Artifacts: 503 service unavailable");
+			const readFile = vi.spyOn(git, "readFile").mockImplementation(async (args: { ref: string; path: string }) => {
+				if (args.ref === before && args.path === "tests/user/manifest.json") throw new Error("Artifacts: 503 service unavailable");
 				return read(args);
 			});
 			const result = await rotateFork(p.deps, repo, "mismatch");
-			expect(result).toMatchObject({ outcome: "skipped", busy: true });
+			expect(readFile).toHaveBeenCalledWith({ ref: before, path: "tests/user/manifest.json" });
+			expect(result).toMatchObject({ outcome: "skipped", why: expect.stringMatching(/^the gate made no renamed copy of main: app\/big\.js: /) });
 			expect(result).not.toHaveProperty("cleared");
 			expect(p.t.fleet.morphState(repo)).toEqual({ ...state, at: iso(t0) });
 			expect(p.t.fleet.securityEvents(repo)).toEqual([]);

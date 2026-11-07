@@ -101,6 +101,7 @@ beforeAll(() => {
 		"user-stale-print": { ...PUBLISHED, "app/stale.ts": "export const stale = 1;\n" },
 		"user-stale-names": { ...PUBLISHED, "app/stale.ts": "export const stale = 2;\n" },
 		"user-stale-code": { ...PUBLISHED, "app/big.js": `// ${"x".repeat(SCAN_LIMITS.moduleChars)}\nexport const stale = 3;\n` },
+		"user-stale-wait": { ...PUBLISHED, "app/stale.ts": "export const stale = 4;\n" },
 	});
 	p.heads["user-moved"] = p.t.artifacts.seed("user-moved", { commits: MOVED }).commits[1]!;
 	// A merged work branch still at main's commit, and a branch one commit ahead of main.
@@ -773,6 +774,26 @@ describe("a stored copy that no longer builds", () => {
 			expect(after.fork).toEqual({ repo: "user-gone", ref: "main", commit: p.heads["user-gone"] });
 			expect((await ask("user-gone", naming("researchNeedsAttestation"))).mode).toBe("research");
 			expect(rotationsOf("user-gone")).toHaveLength(1);
+		},
+		SLOW_MS,
+	);
+
+	it(
+		"is kept by a try that finds its fork busy, so its names still refuse a decoy, until a try on the free fork rotates it",
+		async () => {
+			vi.spyOn(console, "warn").mockImplementation(() => undefined);
+			const repo = "user-stale-wait";
+			// Stored under another secret: the seed makes another fingerprint now, as after POLYMORPH_SECRET was replaced.
+			const stale = { ...(await storeCopy(repo, 1)), fingerprint: "00000000" };
+			p.t.fleet.setMorph(repo, stale, { from: 1 }, t0);
+			p.t.fleet.update(repo, { status: "gating" });
+			expect(await rotateFork(p.deps, repo, "mismatch")).toEqual({ outcome: "skipped", repo, reason: "mismatch", why: "the fork is gating", busy: true });
+			expect(p.t.fleet.morphState(repo)).toEqual({ ...stale, at: new Date(t0).toISOString() });
+			expect(await refusal(ask(repo, naming("researchNeedsAttestation")))).toEqual({ status: 403, message: TRIPWIRE_REFUSAL, extra: {}, headers: {} });
+			expect(p.t.fleet.securityEvents(repo).map((event) => [event.kind, event.detail?.hit, event.detail?.epoch])).toEqual([["tripwire", "decoy", 1]]);
+			p.t.fleet.update(repo, { status: "pinned" });
+			expect(await rotateFork(p.deps, repo, "mismatch")).toMatchObject({ outcome: "rotated", epoch: 2 });
+			expect((await ask(repo, requests.administrative)).fork).toEqual({ repo, ref: "main", commit: p.heads[repo], variant: p.t.fleet.morphState(repo)!.variant });
 		},
 		SLOW_MS,
 	);

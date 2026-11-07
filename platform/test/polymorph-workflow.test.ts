@@ -11,6 +11,7 @@ import * as entry from "../src/index.ts";
 import { forkRepoName } from "../src/lib/names.ts";
 import { runsStub } from "../src/stubs.ts";
 import { deriveSeed, fingerprint } from "../src/polymorph/names.ts";
+import { SCAN_LIMITS } from "../src/polymorph/tokens.ts";
 import { copyKey, fleetKey, GATE_STEP, installKey, landedKey, LIVE_ROTATION_WINDOW_MS, rotationId, startRotation, tripKey, type RotateParams } from "../src/workflows/common.ts";
 import { SeedForkWorkflow } from "../src/workflows/fleet.ts";
 import { GateWorkflow } from "../src/workflows/gate.ts";
@@ -58,6 +59,8 @@ beforeAll(() => {
 		"user-always-busy": { ...PUBLISHED, "app/busy.ts": "export const busy = 1;\n" },
 		"user-stale": { ...PUBLISHED, "app/stale.ts": "export const stale = 1;\n" },
 		"user-stale-busy": { ...PUBLISHED, "app/stale.ts": "export const stale = 2;\n" },
+		// More JavaScript in one module than the renamer reads: no new copy of it can be made.
+		"user-stale-outgrown": { ...PUBLISHED, "app/big.js": `// ${"x".repeat(SCAN_LIMITS.moduleChars)}\nexport const stale = 3;\n` },
 	});
 	for (const repo of Object.keys(p.heads)) p.t.fleet.register({ repo, userId: repo.replace(/^user-/, ""), persona: "p", pinnedTag: TAG, status: "pinned" });
 });
@@ -156,35 +159,69 @@ describe("RotateWorkflow with a repo", () => {
 		expect(await runsStub(p.t.env, "run_rotate_busy").get()).toMatchObject({ status: "cancelled", cancelReason: "the fork is gating" });
 	});
 
-	/** Stores a copy made under another secret, which the platform's seed no longer makes, and marks the fork busy. */
+	/** Stores a copy made under another secret, which the platform's seed no longer makes, marks the fork busy, and returns the copy. */
 	function staleCopyOnBusyFork(repo: string) {
 		vi.spyOn(console, "warn").mockImplementation(() => undefined);
-		if (!p.t.fleet.setMorph(repo, { epoch: 1, sha: p.heads[repo]!, fingerprint: "a1b2c3d4", namesHash: "0badc0de", names: ["researchNeedsAttestation"], variant: "5eed0001" }, { from: null })) throw new Error(`${repo}: no copy stored`);
+		const stale = { epoch: 1, sha: p.heads[repo]!, fingerprint: "a1b2c3d4", namesHash: "0badc0de", names: ["researchNeedsAttestation"], variant: "5eed0001" };
+		if (!p.t.fleet.setMorph(repo, stale, { from: null })) throw new Error(`${repo}: no copy stored`);
 		p.t.fleet.update(repo, { status: "gating" });
+		return stale;
 	}
 
 	it(
-		"still says it cleared the stale copy when the try that cleared it waited for the busy fork and a later try rotated it",
+		"keeps the stale copy while it waits for the busy fork, and rotates the fork once it is free",
 		async () => {
 			const repo = "user-stale";
-			staleCopyOnBusyFork(repo);
-			const steps = fakeSteps({ onSleep: () => p.t.fleet.update(repo, { status: "pinned" }) });
+			const stale = staleCopyOnBusyFork(repo);
+			const kept: unknown[] = [];
+			const steps = fakeSteps({
+				onSleep: () => {
+					kept.push(p.t.fleet.morphState(repo));
+					p.t.fleet.update(repo, { status: "pinned" });
+				},
+			});
 			const { output } = await runRotate(p.t.env, { repo, reason: "mismatch", runId: "run_rotate_stale" }, "rot-stale", fakeWorkflows(NO_MODEL), steps);
-			expect(output).toMatchObject({ outcome: "rotated", repo, epoch: 2, cleared: true });
+			expect(kept).toEqual([expect.objectContaining(stale)]);
+			expect(output).toMatchObject({ outcome: "rotated", repo, epoch: 2 });
+			expect(output).not.toHaveProperty("cleared");
 			const run = (await runsStub(p.t.env, "run_rotate_stale").get())!;
-			expect(run).toMatchObject({ status: "passed", outcome: "rotated", epoch: 2, cleared: true });
-			expect(run.steps.at(-1)!.detail).toMatch(/serves it now; the copy it replaces no longer built, so an earlier try cleared it$/);
+			expect(run).toMatchObject({ status: "passed", outcome: "rotated", epoch: 2 });
+			expect(run).not.toHaveProperty("cleared");
+			expect(run.steps.at(-1)!.detail).toMatch(/and the fork serves it now$/);
+			expect(p.t.fleet.securityEvents(repo).map((event) => event.kind)).toEqual(["rotated"]);
 		},
 		SLOW_MS,
 	);
 
-	it("still says it cleared the stale copy when the fork stays busy after the try that cleared it", async () => {
+	it("keeps the stale copy through every try while the fork stays busy, and says nothing was cleared", async () => {
 		const repo = "user-stale-busy";
-		staleCopyOnBusyFork(repo);
+		const stale = staleCopyOnBusyFork(repo);
 		const { output } = await runRotate(p.t.env, { repo, reason: "mismatch", runId: "run_rotate_stale_busy" }, "rot-stale-busy");
-		expect(output).toEqual({ outcome: "skipped", repo, reason: "mismatch", why: "the fork is gating", busy: true, cleared: true });
-		expect(await runsStub(p.t.env, "run_rotate_stale_busy").get()).toMatchObject({ status: "cancelled", cancelReason: "the fork is gating", cleared: true });
+		expect(output).toEqual({ outcome: "skipped", repo, reason: "mismatch", why: "the fork is gating", busy: true });
+		expect(p.t.fleet.morphState(repo)).toMatchObject(stale);
+		const run = (await runsStub(p.t.env, "run_rotate_stale_busy").get())!;
+		expect(run).toMatchObject({ status: "cancelled", cancelReason: "the fork is gating" });
+		expect(run).not.toHaveProperty("cleared");
+		expect(p.t.fleet.securityEvents(repo)).toEqual([]);
 	});
+
+	it(
+		"clears the stale copy when the try on the free fork after a busy wait stores no new copy, and says so on the run",
+		async () => {
+			const repo = "user-stale-outgrown";
+			staleCopyOnBusyFork(repo);
+			const steps = fakeSteps({ onSleep: () => p.t.fleet.update(repo, { status: "pinned" }) });
+			const { output } = await runRotate(p.t.env, { repo, reason: "mismatch", runId: "run_rotate_stale_outgrown" }, "rot-stale-outgrown", fakeWorkflows(NO_MODEL), steps);
+			expect(steps.slept).toEqual(["wait while busy 1"]);
+			expect(output).toMatchObject({ outcome: "skipped", repo, reason: "mismatch", why: expect.stringMatching(/^the gate made no renamed copy of main: /), cleared: true });
+			expect(output).not.toHaveProperty("busy");
+			expect(p.t.fleet.morphState(repo)).toBeNull();
+			const run = (await runsStub(p.t.env, "run_rotate_stale_outgrown").get())!;
+			expect(run).toMatchObject({ status: "cancelled", outcome: "skipped", cleared: true });
+			expect(run.steps.at(-1)!.detail).toMatch(/; the stored copy no longer builds, so it was cleared and the fork answers as one with no copy$/);
+		},
+		SLOW_MS,
+	);
 
 	it("logs a skipped rotation as cancelled, saying why", async () => {
 		const runId = "run_rotate_skipped";

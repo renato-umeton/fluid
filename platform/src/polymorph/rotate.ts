@@ -1,9 +1,10 @@
 // Rotation: moves a fork to its next renamed copy, and only once a check mode
 // gate shows the new copy answers every probe like the plain fork. Whatever an
 // attacker learned about the old copy goes stale; a copy that fails the check
-// never goes live, and the fork keeps the copy it has. A gate that could make
-// no copy changes nothing, except that a stored copy the live path found
-// stale and that no longer builds at all is cleared.
+// never goes live, and the fork keeps the copy it has. A busy fork runs no
+// gate and keeps its copy, stale or not. A gate that could make no copy
+// changes nothing, except that a stored copy the live path found stale and
+// that no longer builds at all is cleared.
 import type { MorphState } from "../durable/fleet.ts";
 import { runGate } from "../gate/run.ts";
 import type { GateFailure, GateResult } from "../gate/tiers.ts";
@@ -31,8 +32,9 @@ export type RotationResult =
 	| { outcome: "refused"; repo: string; reason: RotationReason; epoch: number; sha: string; failures: GateFailure[]; more: number; cleared?: true }
 	/**
 	 * Nothing ran or nothing changed, and why. busy: the fork was being
-	 * provisioned, upgraded, or gated, so a later try may rotate it. cleared:
-	 * the stored copy no longer builds, so it was cleared.
+	 * provisioned, upgraded, or gated, so a later try may rotate it, and it
+	 * keeps its stored copy, stale or not. cleared: a try on a free fork found
+	 * that the stored copy no longer builds, so it was cleared.
 	 */
 	| { outcome: "skipped"; repo: string; reason: RotationReason; why: string; busy?: true; cleared?: true };
 
@@ -50,7 +52,8 @@ const MAX_REFUSAL_FAILURES = 10;
  * ran, or another rotation stored a copy first. Throws, like runGate, when
  * reading what the copy needs failed (PolymorphTransientError), so a workflow
  * step retries the rotation rather than skip it. A "mismatch" rotation that
- * ends without a new copy then checks the stored copy (clearUnbuildable).
+ * finds the fork free and ends without a new copy then checks the stored
+ * copy (clearUnbuildable).
  */
 export async function rotateFork(deps: RuntimeDeps, repo: string, reason: RotationReason): Promise<RotationResult> {
 	const skipped = (why: string): RotationResult => ({ outcome: "skipped", repo, reason, why });
@@ -59,10 +62,12 @@ export async function rotateFork(deps: RuntimeDeps, repo: string, reason: Rotati
 	const fleet = fleetStub(deps.env);
 	const fork = await fleet.get(repo);
 	if (!fork) return skipped("the fork is not in the fleet");
+	// A busy fork keeps the copy it has, even a stale one: the live path goes on scanning with its names.
+	if (BUSY.has(fork.status)) return { outcome: "skipped", repo, reason, why: `the fork is ${fork.status}`, busy: true };
 	const current = await fleet.morphState(repo);
 	// A cleared copy keeps its epoch: the next copy is numbered above it, never at an epoch a retired copy had.
 	const epochBefore = current?.epoch ?? (await fleet.morphEpoch(repo));
-	const result: RotationResult = BUSY.has(fork.status) ? { outcome: "skipped", repo, reason, why: `the fork is ${fork.status}`, busy: true } : await nextCopy(deps, repo, reason, epochBefore);
+	const result = await nextCopy(deps, repo, reason, epochBefore);
 	if (reason !== "mismatch" || result.outcome === "rotated" || current === null) return result;
 	return (await clearUnbuildable(deps, repo, current)) ? { ...result, cleared: true } : result;
 }
