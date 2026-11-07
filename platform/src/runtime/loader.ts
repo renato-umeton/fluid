@@ -126,8 +126,9 @@ export interface LoadOptions {
 	 * when the ref resolves to that commit; with fingerprint, only when the
 	 * seed makes that copy (a changed secret does not); with namesHash, only
 	 * when the copy renames exactly the names the gate verified. Otherwise the
-	 * plain fork loads (morph: null, plain says why) and one log line per
-	 * reason (per fork commit and epoch) says why: this never fails a load.
+	 * plain fork loads (morph: null, plain says why) and a log line says why,
+	 * once per reason, fork commit, and epoch every ten minutes: this never
+	 * fails a load.
 	 */
 	morph?: { epoch: number; onlyAt?: string; fingerprint?: string; namesHash?: string };
 }
