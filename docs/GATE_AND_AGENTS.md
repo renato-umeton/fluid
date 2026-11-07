@@ -160,7 +160,7 @@ The mothership owns it. Stock ships the core suite in `tests/e2e/manifest.json` 
 | `platform` | `PLATFORM_SCENARIOS` in `platform/src/yellow/tiers.ts` | Runs instead of the stock tier when the pinned tag predates the suite (an empty stock suite). The runner then comes from the stock source bundled into the platform. |
 | `user` | `tests/user/e2e.json` in the fork at the yellow commit | Extra scenarios from the user or the test suggester. A scenario cannot reuse a stock or platform id (it is rejected and logged); `"disabled": true` skips it and logs its `disabledReason`; at most 10 run. |
 
-Steps that touch platform state act for a synthetic test user scoped to the run (`e2e-<run id>`): asks go through the platform's own ask path at the yellow commit, as built (`serveAskAsBuilt`: the same dose backstop users get, with no renamed copy and no tripwire scan), and overrides and ledger reads use that user's own ledger. The real user's ledger never sees a soak.
+Steps that touch platform state act for a synthetic test user scoped to the run (`e2e-<run id>`). Asks go through the platform's own ask path at the yellow commit, as built (`serveAskAsBuilt`), with the same dose backstop users get and no renamed copy or tripwire scan. Overrides and ledger reads use that user's own ledger. The real user's ledger never sees a soak.
 
 ### Scenario format
 
