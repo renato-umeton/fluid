@@ -544,8 +544,10 @@ function recordingOf(forks: Fork[], runs: AttackRun[], afterRotation: AfterRotat
 describe(`a fleet of ${FLEET} forks on a release with a planted zero-day`, () => {
 	it(
 		"installs a renamed copy per fork, then measures four exploits on the plain fleet, on the copies, and through the platform",
-		async () => {
+		async ({ task }) => {
+			const n = FLEET;
 			const forks = await install();
+			expect.soft(forks.map((fork) => [fork.repo, fork.mismatches]), "probe answers that differ between each copy and its plain fork").toEqual(forks.map((fork) => [fork.repo, 0]));
 			const everyFork = (request: Record<string, unknown>) => forks.map((fork) => ({ repo: fork.repo, request }));
 
 			// Control: without display options the answer is held everywhere, and with attestation the same question gets its dose.
@@ -561,11 +563,14 @@ describe(`a fleet of ${FLEET} forks on a release with a planted zero-day`, () =>
 			// Taken once the control has run every path, so what a first request sets up for good (a global made on first use) is in it.
 			const before = builtInsSnapshot();
 
+			// Each attack's checks are soft, so one failing attack does not hide what the others measured.
 			const a = await attack(
 				forks,
 				{ id: "A", label: "Built from upstream's source", detail: `Sets display.${FLAG} to false, the internal name in upstream's public source, on every fork.`, sends: everyFork(withDisplay({ [FLAG]: false })) },
 				before,
 			);
+			expect.soft(requestCounts(a), "attack A").toEqual({ sent: n, plain: n, direct: 0, compromised: 0, refused: n, moved: n });
+			expect.soft(wiresTripped(a.outcomes), "attack A: wires tripped").toEqual({ decoy: n });
 
 			// A disclosure of the copy one fork was installed with: the 4th fork's, or the 7th's in a fleet of 7 or more.
 			const leaked = forks[FLEET < 7 ? 3 : 6]!;
@@ -575,6 +580,10 @@ describe(`a fleet of ${FLEET} forks on a release with a planted zero-day`, () =>
 				{ id: "A2", label: "Built from a leaked copy", detail: `Sends the same option under the renamed name from ${leaked.repo}'s copy, as if that copy had leaked, to every fork.`, sends: everyFork(leakedRequest) },
 				before,
 			);
+			expect.soft(requestCounts(a2), "attack A2").toEqual({ sent: n, plain: 0, direct: 1, compromised: 1, refused: n - 1, moved: n - 1 });
+			expect.soft([a2.recorded.direct.compromised, a2.recorded.platform.compromised], "attack A2: forks compromised directly, then through the platform").toEqual([[leaked.repo], [leaked.repo]]);
+			expect.soft(wiresTripped(a2.outcomes), "attack A2: wires tripped").toEqual({ foreign: n - 1 });
+
 			// The schedule moves the leaked fork to its next copy, where the leaked name is another copy's name.
 			recordRotation(leaked, await rotateFork(platform.deps, leaked.repo, "schedule"));
 			const replay = await send([{ repo: leaked.repo, request: leakedRequest }]);
@@ -584,6 +593,10 @@ describe(`a fleet of ${FLEET} forks on a release with a planted zero-day`, () =>
 				refused: reposWhere(replay.outcomes, (outcome) => outcome.platform === "refused"),
 			};
 			expect(builtInsChangedSince(before), "built-ins changed by the leaked copy's replay").toEqual([]);
+			expect.soft(afterRotation, "the leaked name after its fork moved").toEqual({ attack: "A2", compromised: [], refused: [leaked.repo] });
+			expect.soft(wiresTripped(replay.outcomes), "the leaked name after its fork moved: wires tripped").toEqual({ foreign: 1 });
+			expect.soft(replay.outcomes.map((outcome) => [outcome.plain, outcome.direct]), "the leaked name on its fork, asked directly: plain fork, then new copy").toEqual([["held", "held"]]);
+			expect.soft(replay.rotations.map((params) => params.repo), "rotations the replay started").toEqual([leaked.repo]);
 
 			const third = forks[2]!;
 			const guesses = blindGuesses(GUESSES);
@@ -597,33 +610,22 @@ describe(`a fleet of ${FLEET} forks on a release with a planted zero-day`, () =>
 				},
 				before,
 			);
+			// Why no guess compromised the copy: one in 36^8 (about 2.8 trillion) guesses finds its real suffix, so 1000 find it about once in 2.8 billion runs.
+			const own = (await installedNames(third)).get(FLAG)!.slice(FLAG.length + 1);
+			expect.soft(guesses, `no guess is ${third.repo}'s real suffix (odds of a hit: ${GUESSES} in 36^8)`).not.toContain(own);
+			expect.soft(requestCounts(a3), "attack A3").toEqual({ sent: GUESSES, plain: 0, direct: 0, compromised: 0, refused: GUESSES, moved: 1 });
+			expect.soft(wiresTripped(a3.outcomes), "attack A3: wires tripped").toEqual({ foreign: GUESSES });
 
 			const b = await attack(forks, { id: "B", label: "Public field only", detail: "Sets display.preview to true, a public option that skips the attestation hold, on every fork.", sends: everyFork(withDisplay({ preview: true })) }, before);
+			expect.soft(requestCounts(b), "attack B").toEqual({ sent: n, plain: n, direct: n, compromised: n, refused: 0, moved: 0 });
 
 			const runs = [a, a2, a3, b];
 			const recording = recordingOf(forks, runs, afterRotation);
 			expect(validateDemo(recording)).toEqual([]);
+			// Printed after every check, failed or not, so the scoreboard always shows what this run measured.
 			if (DEMO) console.log(scoreboard(forks, runs, recording));
-
-			const n = FLEET;
-			expect(forks.map((fork) => [fork.repo, fork.mismatches])).toEqual(forks.map((fork) => [fork.repo, 0]));
-			expect(requestCounts(a)).toEqual({ sent: n, plain: n, direct: 0, compromised: 0, refused: n, moved: n });
-			expect(wiresTripped(a.outcomes)).toEqual({ decoy: n });
-			expect(requestCounts(a2)).toEqual({ sent: n, plain: 0, direct: 1, compromised: 1, refused: n - 1, moved: n - 1 });
-			expect([a2.recorded.direct.compromised, a2.recorded.platform.compromised]).toEqual([[leaked.repo], [leaked.repo]]);
-			expect(wiresTripped(a2.outcomes)).toEqual({ foreign: n - 1 });
-			expect(afterRotation).toEqual({ attack: "A2", compromised: [], refused: [leaked.repo] });
-			expect(wiresTripped(replay.outcomes)).toEqual({ foreign: 1 });
-			expect(replay.outcomes.map((outcome) => [outcome.plain, outcome.direct]), "the leaked name on its fork, asked directly: plain fork, then new copy").toEqual([["held", "held"]]);
-			expect(replay.rotations.map((params) => params.repo), "rotations the replay started").toEqual([leaked.repo]);
-			expect(requestCounts(a3)).toEqual({ sent: GUESSES, plain: 0, direct: 0, compromised: 0, refused: GUESSES, moved: 1 });
-			expect(wiresTripped(a3.outcomes)).toEqual({ foreign: GUESSES });
-			// Why no guess compromised the copy: one in 36^8 (about 2.8 trillion) guesses finds its real suffix, so 1000 find it about once in 2.8 billion runs.
-			const own = (await installedNames(third)).get(FLAG)!.slice(FLAG.length + 1);
-			expect(guesses, `no guess is ${third.repo}'s real suffix (odds of a hit: ${GUESSES} in 36^8)`).not.toContain(own);
-			expect(requestCounts(b)).toEqual({ sent: n, plain: n, direct: n, compromised: n, refused: 0, moved: 0 });
-
-			if (RECORD_PATH) {
+			// A run with a failed check writes no recording, so the page never replays one.
+			if (RECORD_PATH && task.result?.state !== "fail") {
 				const path = resolve(RECORD_PATH);
 				mkdirSync(dirname(path), { recursive: true });
 				writeFileSync(path, `${JSON.stringify(recording, null, 2)}\n`);
