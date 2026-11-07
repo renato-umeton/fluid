@@ -113,6 +113,7 @@ So for this bug class the answer to the issue is yes: one exploit built from ups
 - **Model off.** A copy always answers with the model off: `useModel` comes from the request body, so honoring it would let any request bypass the copy.
 - **Reads fail closed.** When a read that the stored copy needs fails in Artifacts, the request gets a retryable 503, so the plain fork never answers it unscanned.
 - **When rotations start.** One rotation per copy in each 10-minute window after tripwire hits, and also for new forks, landed upgrades, one-tap approvals, yellow rollbacks, and stored copies that no longer build as verified.
+- **Stale copies.** A stored copy that no longer builds as verified starts a `mismatch` rotation. When that rotation stores no new copy and the old one still does not build, it clears the old one. Fleet keeps a cleared copy's epoch, and the next copy is numbered above it. So a fork's epochs never repeat, and no retired copy comes back.
 
 ## Limits and open questions
 
@@ -126,6 +127,7 @@ So for this bug class the answer to the issue is yes: one exploit built from ups
 - **Rotation needs a pass.** A rotation needs the whole check mode gate to pass. A fork whose `main` fails a tier keeps the copy it has, or stays plain.
 - **After a change lands.** Between a landed change and its rotation, the fork answers plain behind the stored copy's scan.
 - **Runtime upgrades.** A runtime upgrade can cost a name: a name the new runtime builds in is skipped from then on.
+- **A fork created again.** Deleting a fork drops its epoch. A fork created again under the same name starts at epoch 1, so at the same commit it can get the old fork's seeds.
 - **Hand-curated list.** A wrong entry leaves the fork less protected, in one of three ways. The platform may refuse the whole list, and then every fork on that release runs plain. A copy may skip the name, which is then neither renamed nor a tripwire, and the gate reports why. A copy may fail the gate, and then the fork keeps the copy it has, or stays plain.
 - **Cost.** Each rotation is a check mode gate that asks every probe twice, and the schedule runs one per fork every 6 hours.
 - **Tests share one process.** In tests, isolates are simulated in one Node process. The experiment uses a bug class that leaves no shared state, and it checks that no attack changed a built-in the isolates share.
