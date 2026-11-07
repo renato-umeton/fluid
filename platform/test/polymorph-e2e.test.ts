@@ -47,7 +47,7 @@ const DEMO = process.env.POLYMORPH_DEMO === "1";
 const RECORD_PATH = process.env.POLYMORPH_DEMO_RECORD;
 /** The recording the deployed Polymorph view replays (polymorph:record writes it). */
 const COMMITTED_RECORDING = resolve(dirname(fileURLToPath(import.meta.url)), "../public/data/polymorph-demo.json");
-/** A run takes under a second per fork on a quiet machine (about 15 seconds for 20 forks); this leaves room for a loaded one. */
+/** A run takes about a second per fork on a quiet machine (about 20 seconds for 20 forks); this leaves room for a loaded one. */
 const EXPERIMENT_MS = FLEET * 30_000;
 /** The platform secret that seeds every copy. */
 const SECRET = process.env.POLYMORPH_TEST_SECRET ?? POLYMORPH_TEST_SECRET;
@@ -100,7 +100,7 @@ interface Fork {
 	after: { epoch: number; fingerprint: string } | null;
 }
 
-/** A research answer held for attestation, or released with a computed dose: the exploit worked. */
+/** A research answer held for attestation, or released with a computed dose, which means the exploit worked. */
 type ResearchAnswer = "held" | "released";
 
 /**
