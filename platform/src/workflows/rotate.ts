@@ -10,7 +10,7 @@
 // (common.ts).
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import type { RunStatus, StepStatus } from "../durable/runs.ts";
-import { polymorphSecret } from "../polymorph/install.ts";
+import { NO_SECRET_REASON, polymorphSecret } from "../polymorph/install.ts";
 import { rotateFork, type RotationReason, type RotationResult } from "../polymorph/rotate.ts";
 import { fleetStub } from "../stubs.ts";
 import { appExports, ensureRun, fleetKey, GATE_STEP, GIT_STEP, guarded, rotationId, runLog, startInstance, steps, type RotateParams, type Steps } from "./common.ts";
@@ -18,7 +18,6 @@ import { FAN_OUT } from "./upgrade.ts";
 
 const ROTATE_STEP = "Rotate to the next renamed copy";
 const FLEET_STEP = "Rotate every fork";
-const NO_SECRET = "POLYMORPH_SECRET is not set or is shorter than 16 characters";
 /**
  * How many times, and how long apart, a rotation of one fork waits for the
  * fork to stop being busy (a gate, an upgrade, provisioning) before it leaves
@@ -82,7 +81,7 @@ export class RotateWorkflow extends WorkflowEntrypoint<Env, RotateParams> {
 		const plan = await step.do("list forks", async () => {
 			await ensureRun(this.env, { id: runId, kind: "rotate", fields: { reason } });
 			// Every child would only skip.
-			if (polymorphSecret(this.env) === null) return { repos: [] as string[], skip: NO_SECRET as string | null };
+			if (polymorphSecret(this.env) === null) return { repos: [] as string[], skip: NO_SECRET_REASON as string | null };
 			const repos = (await fleetStub(this.env).list()).filter((fork) => fork.status !== "provisioning").map((fork) => fork.repo);
 			await log.step(FLEET_STEP, "running", `Starting one rotation for each of ${repos.length} forks (${reason}); forks still being provisioned are left out`);
 			return { repos, skip: null as string | null };

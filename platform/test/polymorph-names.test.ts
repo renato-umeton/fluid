@@ -115,6 +115,7 @@ describe("deriveSeed", () => {
 
 	it.each<[string, string, string, string, number, RegExp]>([
 		["a short secret", "too-short", "user-ada", SHA, 0, /secret/],
+		["a secret of 31 characters", "a-31-character-secret-for-tests", "user-ada", SHA, 0, /polymorph secret must be at least 32 characters/],
 		["an empty fork", SECRET, "", SHA, 0, /repo/],
 		["a colon in the fork, which would make two seeds collide", SECRET, "user:ada", SHA, 0, /repo/],
 		["an empty commit", SECRET, "user-ada", "", 0, /sha/],

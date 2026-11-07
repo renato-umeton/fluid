@@ -11,7 +11,7 @@ import { buildStoredCopy, type RuntimeDeps } from "../runtime/loader.ts";
 import { headOf, openRepo } from "../runtime/repo-files.ts";
 import { fleetStub } from "../stubs.ts";
 import { PolymorphTransientError } from "./errors.ts";
-import { polymorphSecret } from "./install.ts";
+import { NO_SECRET_REASON, polymorphSecret } from "./install.ts";
 
 /**
  * Why a rotation runs: the schedule, a tripwire hit, a change landing on
@@ -55,7 +55,7 @@ const MAX_REFUSAL_FAILURES = 10;
 export async function rotateFork(deps: RuntimeDeps, repo: string, reason: RotationReason): Promise<RotationResult> {
 	const skipped = (why: string): RotationResult => ({ outcome: "skipped", repo, reason, why });
 	// polymorphSecret treats a short secret as none, so the reason names both.
-	if (polymorphSecret(deps.env) === null) return skipped("POLYMORPH_SECRET is not set or is shorter than 16 characters");
+	if (polymorphSecret(deps.env) === null) return skipped(NO_SECRET_REASON);
 	const fleet = fleetStub(deps.env);
 	const fork = await fleet.get(repo);
 	if (!fork) return skipped("the fork is not in the fleet");

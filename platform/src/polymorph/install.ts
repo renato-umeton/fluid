@@ -15,7 +15,7 @@ import { resolveStockTag } from "../stock/suite.ts";
 import { POLYMORPH_LIST_PATH, parsePolymorphList, type ContractTexts, type SkippedName } from "./list.ts";
 import { morphFork, unmorphText } from "./morph.ts";
 import { PolymorphOffError, PolymorphTransientError, PolymorphUnavailableError } from "./errors.ts";
-import { deriveSeed, fingerprint, namesHash, variantNames } from "./names.ts";
+import { deriveSeed, fingerprint, MIN_SECRET_CHARS, namesHash, variantNames } from "./names.ts";
 
 // Defined with the other reasons a copy cannot be made (errors.ts); exported here too, where they were first.
 export { PolymorphOffError, PolymorphTransientError };
@@ -69,16 +69,18 @@ async function transient<T>(read: () => Promise<T>, keep: (error: unknown) => bo
 	}
 }
 
-/** Shorter secrets are too easy to guess; deriveSeed refuses them too. */
-const MIN_SECRET_CHARS = 16;
 let reportedShortSecret = false;
+
+/** Why a rotation skips on a platform where polymorphSecret is null. */
+export const NO_SECRET_REASON = `POLYMORPH_SECRET is not set or is shorter than ${MIN_SECRET_CHARS} characters`;
 
 /**
  * The platform secret that seeds every copy, or null when it is not set. It
  * is read by name rather than declared as a binding, because a declared
  * secret is required at deploy: a platform without one runs every fork plain,
- * exactly as before. A secret shorter than 16 characters counts as not set,
- * and the first read says so once per isolate (never the secret itself).
+ * exactly as before. A secret shorter than MIN_SECRET_CHARS (32) counts as
+ * not set, since deriveSeed refuses it, and the first read says so once per
+ * isolate (never the secret itself).
  */
 export function polymorphSecret(env: Env): string | null {
 	const secret = (env as unknown as { POLYMORPH_SECRET?: unknown }).POLYMORPH_SECRET;

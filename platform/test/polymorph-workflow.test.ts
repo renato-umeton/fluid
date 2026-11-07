@@ -249,7 +249,7 @@ describe("RotateWorkflow without a repo", () => {
 		const { output, workflows } = await runRotate(t.env, undefined, "sched-2");
 		expect(workflows.created).toEqual([]);
 		expect(output).toEqual({ started: 0 });
-		expect(await runsStub(t.env, "run_sched-2").get()).toMatchObject({ status: "cancelled", cancelReason: "POLYMORPH_SECRET is not set or is shorter than 16 characters" });
+		expect(await runsStub(t.env, "run_sched-2").get()).toMatchObject({ status: "cancelled", cancelReason: "POLYMORPH_SECRET is not set or is shorter than 32 characters" });
 	});
 });
 

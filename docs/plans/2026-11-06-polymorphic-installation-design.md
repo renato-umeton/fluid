@@ -49,7 +49,7 @@ Limits, stated plainly: a transform that keeps behavior also keeps every bug tha
 
 ### 2. A secret seed per fork, commit, and epoch
 
-`seed = HMAC-SHA256(POLYMORPH_SECRET, "polymorph:v1:<repo>:<commit>:<epoch>")`. Each listed name gets its own suffix from `HMAC-SHA256(seed, name)`, 8 base36 characters, about 41 bits: `researchNeedsAttestation` becomes `researchNeedsAttestation$k3f9q2xa`. Learning one suffix tells nothing about the others. A fingerprint (8 hex characters), also derived from the seed, names the copy in logs. Answers and the ledger name it by a random variant, so they give no way to test a guess of the secret. A new commit or a new epoch gives a new copy.
+`seed = HMAC-SHA256(POLYMORPH_SECRET, "polymorph:v1:<repo>:<commit>:<epoch>")`. Each listed name gets its own suffix from `HMAC-SHA256(seed, name)`, 8 base36 characters, about 41 bits: `researchNeedsAttestation` becomes `researchNeedsAttestation$k3f9q2xa`. Learning one suffix tells nothing about the others. A fingerprint (8 hex characters), also derived from the seed, names the copy in logs. Answers and the ledger name it by a random variant, which gives no way to test a guess of the secret. A fork's own code can still read its copy's renamed names, so the secret must be random. A new commit or a new epoch gives a new copy.
 
 ### 3. The rename happens when the platform installs the fork
 

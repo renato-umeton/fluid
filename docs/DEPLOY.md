@@ -94,7 +94,7 @@ umask 077
 
 The first deploy of a new Worker fails until its secrets exist, so pass the file to the first deploy. Later deploys keep the secrets.
 
-One more secret is optional. `POLYMORPH_SECRET` turns on polymorphic installation: each fork runs its own renamed copy of upstream's code, and this secret seeds the new names (see `docs/POLYMORPH.md`). It must be at least 16 characters. It is deliberately not declared in `platform/cloudflare.config.ts`, because a declared secret must exist at deploy time, and Fluid runs without this one. To turn it on, add it to the same file:
+One more secret is optional. `POLYMORPH_SECRET` turns on polymorphic installation: each fork runs its own renamed copy of upstream's code, and this secret seeds the new names (see `docs/POLYMORPH.md`). It must be random and at least 32 characters long. A fork's own code can read its copy's renamed names, and with them the fork's owner can test guesses of the secret offline. The command below makes such a secret. It is deliberately not declared in `platform/cloudflare.config.ts`, because a declared secret must exist at deploy time, and Fluid runs without this one. To turn it on, add it to the same file:
 
 ```sh
 umask 077
@@ -105,7 +105,7 @@ Then pass the file to the next deploy (step 7). The deploy uploads every secret 
 
 Each rotation is a check mode gate that asks every probe twice, and the schedule runs one per fork every 6 hours. On a 200-fork fleet the schedule alone adds 800 gate runs a day; landed changes, new forks, tripwire hits, and stale copies add more. Tripwire hits add at most one per fork every 10 minutes.
 
-Without `POLYMORPH_SECRET`, or with one shorter than 16 characters, every fork runs plain: no renamed copies, no tripwire scan, and no rotation. The `fluid-rotate` schedule still starts an instance every 6 hours, which records a rotate run marked `cancelled` ("Skipped: POLYMORPH_SECRET is not set or is shorter than 16 characters"). `POST /api/admin/fleet/rotate` still starts runs, which skip the same way. A secret that is set but too short also logs one warning per isolate.
+Without `POLYMORPH_SECRET`, or with one shorter than 32 characters, every fork runs plain: no renamed copies, no tripwire scan, and no rotation. The `fluid-rotate` schedule still starts an instance every 6 hours, which records a rotate run marked `cancelled` ("Skipped: POLYMORPH_SECRET is not set or is shorter than 32 characters"). `POST /api/admin/fleet/rotate` still starts runs, which skip the same way. A secret that is set but too short also logs one warning per isolate.
 
 ## 7. Deploy
 

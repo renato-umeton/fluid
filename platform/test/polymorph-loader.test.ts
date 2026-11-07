@@ -432,16 +432,19 @@ describe("a fork whose own contract uses a listed name", () => {
 
 describe("polymorphSecret", () => {
 	it(
-		"treats a secret shorter than 16 characters as not set, saying so once and never showing it",
+		"treats a secret shorter than 32 characters as not set, saying so once and never showing it",
 		async () => {
 			const warn = warnings();
-			const shortDeps: RuntimeDeps = { ...deps, env: { ...deps.env, POLYMORPH_SECRET: "too-short-01" } as unknown as Env };
+			// One character short of the floor.
+			const short = "a-31-character-secret-for-tests";
+			const shortDeps: RuntimeDeps = { ...deps, env: { ...deps.env, POLYMORPH_SECRET: short } as unknown as Env };
 			expect([polymorphSecret(shortDeps.env), polymorphSecret(shortDeps.env)]).toEqual([null, null]);
 			const loaded = await loadForkRuntime(shortDeps, "user-1", "main", { morph: { epoch: 9 } });
 			expect([loaded.morph, loaded.isolateId]).toEqual([null, `user-1:${heads["user-1"]}`]);
 			const lines = warn.mock.calls.map(([line]) => String(line));
-			expect(lines.filter((line) => line.includes("shorter than 16 characters"))).toEqual(["polymorph: POLYMORPH_SECRET is shorter than 16 characters, so it counts as not set and every fork runs plain"]);
-			expect(lines.join("\n")).not.toContain("too-short-01");
+			expect(lines.filter((line) => line.includes("shorter than 32 characters"))).toEqual(["polymorph: POLYMORPH_SECRET is shorter than 32 characters, so it counts as not set and every fork runs plain"]);
+			expect(lines.join("\n")).not.toContain(short);
+			expect(polymorphSecret({ ...deps.env, POLYMORPH_SECRET: `${short}x` } as unknown as Env)).toBe(`${short}x`);
 			expect(polymorphSecret(deps.env)).toBe(SECRET);
 		},
 		SLOW_MS,
@@ -454,7 +457,7 @@ describe("clearRuntimeCache", () => {
 		async () => {
 			const warn = warnings();
 			const shortDeps: RuntimeDeps = { ...deps, env: { ...deps.env, POLYMORPH_SECRET: "too-short-03" } as unknown as Env };
-			const reported = () => warn.mock.calls.filter(([line]) => String(line).includes("shorter than 16 characters")).length;
+			const reported = () => warn.mock.calls.filter(([line]) => String(line).includes("shorter than 32 characters")).length;
 			// Reported by now, by this call or an earlier test's; it is reported once per isolate.
 			polymorphSecret(shortDeps.env);
 			const before = reported();

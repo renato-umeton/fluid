@@ -31,6 +31,7 @@ import type { MorphState } from "../src/durable/fleet.ts";
 import { runGate } from "../src/gate/run.ts";
 import { forkRepoName, userIdFromForkRepo } from "../src/lib/names.ts";
 import { POLYMORPH_LIST_PATH, parsePolymorphList } from "../src/polymorph/list.ts";
+import { MIN_SECRET_CHARS } from "../src/polymorph/names.ts";
 import { rotateFork, type RotationResult } from "../src/polymorph/rotate.ts";
 import { askLoaded, clearRuntimeCache, loadForkRuntime, storedCopy, type AnswerCardLike, type LoadedFork } from "../src/runtime/loader.ts";
 import { ledgerStub } from "../src/stubs.ts";
@@ -58,7 +59,7 @@ const RESULT_DOCS = ["README.md", "docs/POLYMORPH.md", "docs/plans/2026-11-06-po
 const EXPERIMENT_MS = FLEET * 30_000;
 /** The platform secret that seeds every copy. */
 const SECRET = process.env.POLYMORPH_TEST_SECRET ?? POLYMORPH_TEST_SECRET;
-if (SECRET.length < 16) throw new Error("POLYMORPH_TEST_SECRET must have at least 16 characters: the platform treats a shorter secret as none");
+if (SECRET.length < MIN_SECRET_CHARS) throw new Error(`POLYMORPH_TEST_SECRET must have at least ${MIN_SECRET_CHARS} characters: the platform treats a shorter secret as none`);
 const GUESSES = 1000;
 const DEFAULT_GUESS_SEED = 20_261_106;
 /** Seeds the blind guesses. */

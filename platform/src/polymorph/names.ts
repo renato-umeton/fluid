@@ -14,9 +14,17 @@ const SUFFIX_SPACE = 36 ** 8;
 /** A renamed name: a listed name, "$", and eight base36 characters. Groups: the listed name, the suffix. */
 export const VARIANT_PATTERN = /^([A-Za-z_][A-Za-z0-9_]*)\$([0-9a-z]{8})$/;
 
+/**
+ * The shortest platform secret that counts. A fork's own code can read its
+ * copy's renamed names, so the fork's owner can test guesses of the secret
+ * offline against them: the secret must be random, and too long to guess.
+ * 32 characters are 16 random bytes in hex.
+ */
+export const MIN_SECRET_CHARS = 32;
+
 /** The secret seed of one copy: hex HMAC-SHA256 of "polymorph:v1:<repo>:<sha>:<epoch>" under the platform secret. */
 export async function deriveSeed(secret: string, repo: string, sha: string, epoch: number): Promise<string> {
-	if (typeof secret !== "string" || secret.length < 16) throw new Error("polymorph secret must be at least 16 characters");
+	if (typeof secret !== "string" || secret.length < MIN_SECRET_CHARS) throw new Error(`polymorph secret must be at least ${MIN_SECRET_CHARS} characters`);
 	// A colon in the repo would let two different (repo, sha) pairs share one message, and so one seed; a hex sha has none.
 	if (typeof repo !== "string" || repo === "" || repo.includes(":")) throw new Error(`polymorph seed: repo must be a non-empty string without ":", got ${JSON.stringify(repo)}`);
 	if (typeof sha !== "string" || !COMMIT_PATTERN.test(sha)) throw new Error(`polymorph seed: sha must be a lowercase hex commit id of 40 or 64 characters, got ${JSON.stringify(sha)}`);
