@@ -249,7 +249,7 @@ The recording is `platform/public/data/polymorph-demo.json`.
 - Trace a foreign suffix back to the fork that leaked it, and rotate that fork too.
 - Let a fork raise its rotation rate in `fluid.toml`, a preference that only moves toward safety.
 - Derive the list from the contract automatically.
-- Add model wording for renamed copies.
+- Let renamed copies reword research and administrative cards with the model, as plain forks can.
 - Add a route that shows a fork's security events to admins.
 - Run polymorphic installation on the deployed site.
 
