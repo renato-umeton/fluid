@@ -103,7 +103,7 @@ echo "POLYMORPH_SECRET=$(openssl rand -hex 32)" >> ~/.config/fluid/secrets.env
 
 Then pass the file to the next deploy (step 7). The deploy uploads every secret in the file, declared or not, and later deploys keep it. A renamed copy also needs `polymorph.json` in the stock release that its fork pins. When `stock` is new, step 8 publishes such a release, and each fork gets its first renamed copy at its first rotation. When `stock` already has releases from before the list existed, see [Polymorphic installation on an existing deployment](#polymorphic-installation-on-an-existing-deployment).
 
-Each rotation is a check mode gate that asks every probe twice, and the schedule runs one per fork every 6 hours. A 200-fork fleet adds 800 gate runs a day.
+Each rotation is a check mode gate that asks every probe twice, and the schedule runs one per fork every 6 hours. On a 200-fork fleet the schedule alone adds 800 gate runs a day; landed changes, new forks, tripwire hits, and stale copies add more. Tripwire hits add at most one per fork every 10 minutes.
 
 Without `POLYMORPH_SECRET`, or with one shorter than 16 characters, every fork runs plain: no renamed copies, no tripwire scan, and no rotation. The `fluid-rotate` schedule still starts an instance every 6 hours, which records a rotate run marked `cancelled` ("Skipped: POLYMORPH_SECRET is not set or is shorter than 16 characters"). `POST /api/admin/fleet/rotate` still starts runs, which skip the same way. A secret that is set but too short also logs one warning per isolate.
 
