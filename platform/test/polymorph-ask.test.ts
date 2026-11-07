@@ -6,11 +6,12 @@
 // machine.
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import worker from "../src/index.ts";
-import { serveAsk, TRIPWIRE_REFUSAL, UNSCANNABLE_REFUSAL, type ServeAskInput, type ServedCard } from "../src/api/ask.ts";
+import { COPY_RETRY, serveAsk, TRIPWIRE_REFUSAL, UNSCANNABLE_REFUSAL, type ServeAskInput, type ServedCard } from "../src/api/ask.ts";
 import { HttpError } from "../src/api/http.ts";
 import { cardDifferences } from "../src/polymorph/equivalence.ts";
 import { deriveSeed, fingerprint, namesHash, variantNames } from "../src/polymorph/names.ts";
 import { rotateFork } from "../src/polymorph/rotate.ts";
+import { SCAN_LIMITS } from "../src/polymorph/tokens.ts";
 import { askLoaded, loadForkRuntime, type RuntimeDeps } from "../src/runtime/loader.ts";
 import { ledgerStub } from "../src/stubs.ts";
 import { copyKey, rotationId } from "../src/workflows/rotate.ts";
@@ -58,6 +59,11 @@ beforeAll(() => {
 		"user-flood": { ...PUBLISHED, "app/flood.ts": "export const flood = 1;\n" },
 		"user-deep": { ...PUBLISHED, "app/deep.ts": "export const deep = 1;\n" },
 		"user-route": { ...PUBLISHED, "app/route.ts": "export const route = 1;\n" },
+		"user-flaky": { ...PUBLISHED, "app/flaky.ts": "export const flaky = 1;\n" },
+		"user-resecret": { ...PUBLISHED, "app/resecret.ts": "export const resecret = 1;\n" },
+		"user-renames": { ...PUBLISHED, "app/renames.ts": "export const renames = 1;\n" },
+		// More JavaScript in one module than the renamer reads: no copy of it can be built.
+		"user-unreadable": { ...PUBLISHED, "app/big.js": `// ${"x".repeat(SCAN_LIMITS.moduleChars)}\nexport const big = 1;\n` },
 	});
 	p.heads["user-moved"] = p.t.artifacts.seed("user-moved", { commits: MOVED }).commits[1]!;
 	for (const repo of Object.keys(p.heads)) p.t.fleet.register({ repo, userId: repo.slice(5), persona: "p", pinnedTag: TAG, status: "pinned" });
@@ -291,6 +297,62 @@ describe("serveAsk and a copy's tripwires", () => {
 			expect(response.status).toBe(403);
 			expect(await response.json()).toEqual({ error: TRIPWIRE_REFUSAL, requestId: expect.any(String) });
 			expect(rotationsOf("user-route")).toHaveLength(1);
+		},
+		SLOW_MS,
+	);
+});
+
+describe("serveAsk when main's verified copy does not load", () => {
+	const rotationsOf = (repo: string) => workflows.of("RotateWorkflow").filter((instance) => (instance.params as { repo: string }).repo === repo);
+
+	it(
+		"refuses as retryable when Artifacts fails to read what the copy needs, rather than let the plain fork answer, and serves the copy once it reads again",
+		async () => {
+			vi.spyOn(console, "warn").mockImplementation(() => undefined);
+			const state = await storeCopy("user-flaky", 1);
+			const git = p.t.artifacts.repos.get("user-flaky")!.git;
+			const read = git.readFile.bind(git);
+			let failures = 0;
+			vi.spyOn(git, "readFile").mockImplementation(async (args: { ref: string; path: string }) => {
+				if (args.path === "tests/user/manifest.json" && failures++ === 0) throw new Error("Artifacts: 503 service unavailable");
+				return read(args);
+			});
+			const error = await ask("user-flaky", requests.administrative).catch((thrown: unknown) => thrown);
+			expect(error).toBeInstanceOf(HttpError);
+			expect([(error as HttpError).status, (error as HttpError).message, (error as HttpError).headers]).toEqual([503, COPY_RETRY, { "retry-after": "10" }]);
+			expect(COPY_RETRY).toBe("The fork's renamed copy could not be loaded; retry shortly.");
+			expect(await ledgerOf("user-flaky")).toEqual([]);
+			expect(rotationsOf("user-flaky")).toEqual([]);
+			expect(p.t.fleet.securityEvents("user-flaky")).toEqual([]);
+			expect((await ask("user-flaky", requests.administrative)).fork).toMatchObject({ variant: state.fingerprint });
+		},
+		SLOW_MS,
+	);
+
+	const stale: [string, string, (state: Awaited<ReturnType<typeof storeCopy>>) => Partial<Awaited<ReturnType<typeof storeCopy>>>][] = [
+		["the secret makes another fingerprint now", "user-resecret", () => ({ fingerprint: "00000000" })],
+		["the copy would rename other names now", "user-renames", () => ({ namesHash: "00000000" })],
+		["no copy of the fork's code can be built now", "user-unreadable", () => ({})],
+	];
+
+	it.each(stale)(
+		"answers plain, with the model off as the copy would, and starts one rotation, when %s",
+		async (_case, repo, change) => {
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+			const verified = await storeCopy(repo, 4);
+			const stored = { ...verified, ...change(verified) };
+			p.t.fleet.setMorph(repo, stored, { from: 4 }, t0);
+			const calls = modelCalls.length;
+			for (let i = 0; i < 3; i++) {
+				const served = await ask(repo, requests.administrative, { useModel: true });
+				expect(served.fork).toEqual({ repo, ref: "main", commit: p.heads[repo] });
+				expect(served.signals).not.toContain(MODEL_WORDING);
+			}
+			expect(modelCalls.length).toBe(calls);
+			const id = rotationId(repo, copyKey(stored));
+			expect(rotationsOf(repo)).toEqual([{ workflow: "RotateWorkflow", id, params: { repo, reason: "mismatch", runId: `run_${id}` } }]);
+			expect((await ledgerOf(repo)).map((record) => "variant" in record)).toEqual([false, false, false]);
+			expect(warn).toHaveBeenCalledTimes(1);
 		},
 		SLOW_MS,
 	);

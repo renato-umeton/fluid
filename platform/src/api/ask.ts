@@ -9,7 +9,7 @@ import { currentStockTag } from "../forks/provision.ts";
 import { STOCK_REPO } from "../lib/names.ts";
 import { polymorphSecret } from "../polymorph/install.ts";
 import { scanRequest, type TripwireHit } from "../polymorph/tripwire.ts";
-import { askFork, askLoaded, FORK_CALL_TIMEOUT_MS, loadForkRuntime, storedCopy, withTimeout, type AnswerCardLike, type LoadedCopy, type RuntimeDeps } from "../runtime/loader.ts";
+import { askFork, askLoaded, FORK_CALL_TIMEOUT_MS, loadForkRuntime, storedCopy, withTimeout, type AnswerCardLike, type LoadedCopy, type PlainLoad, type RuntimeDeps } from "../runtime/loader.ts";
 import { resolveCommit, shortRef } from "../runtime/refs.ts";
 import { openRepo } from "../runtime/repo-files.ts";
 import type { RunTimeRecord } from "../durable/user-ledger.ts";
@@ -28,6 +28,9 @@ export interface AskDeps extends RuntimeDeps {
 export const TRIPWIRE_REFUSAL = "Request refused by a security check.";
 /** What a request too deep or too wide for the tripwire scan gets: it is refused rather than scanned in part. */
 export const UNSCANNABLE_REFUSAL = "Request too large or too deeply nested.";
+/** What a request gets while a read that main's verified copy needs fails: Artifacts errors pass, so it can ask again. */
+export const COPY_RETRY = "The fork's renamed copy could not be loaded; retry shortly.";
+const COPY_RETRY_AFTER_SECONDS = 10;
 
 export interface ServeAskInput {
 	repo: string;
@@ -87,10 +90,10 @@ export async function serveAsk(deps: AskDeps, input: ServeAskInput): Promise<Ser
  * ref is at, that copy answers, with the model off, once the request passes
  * its tripwires: useModel comes from the request, so serving the plain fork
  * for it would let any request bypass the copy, and the gate verified the
- * copy with the model off. Otherwise the plain fork answers as before, model
- * and all: no copy stored, no platform secret, or a copy of an older commit
- * (main moved, and the landed rotation has not stored the new commit's copy
- * yet).
+ * copy with the model off. If that copy does not load, see copyDidNotLoad.
+ * Otherwise the plain fork answers as before, model and all: no copy stored,
+ * no platform secret, or a copy of an older commit (main moved, and the
+ * landed rotation has not stored the new commit's copy yet).
  */
 async function askOwnFork(deps: AskDeps, input: { repo: string; ref: string; request: Record<string, unknown>; useModel: boolean; copy: MorphState | null }): Promise<Answer> {
 	const { repo, ref, request, copy } = input;
@@ -100,8 +103,23 @@ async function askOwnFork(deps: AskDeps, input: { repo: string; ref: string; req
 	// Loaded at the commit just checked, so a push landing now cannot slip another commit under the copy.
 	const loaded = await loadForkRuntime(deps, repo, copy.sha, { useModel: false, morph: storedCopy(copy) });
 	if (loaded.morph) await checkTripwires(deps, repo, request, loaded.morph);
+	else await copyDidNotLoad(deps, repo, copy, loaded.plain);
 	const card = await withTimeout(askLoaded(loaded, request, { useModel: false }), FORK_CALL_TIMEOUT_MS, `fork ${repo} did not answer`);
 	return { card, sha: loaded.sha, ref: shortRef(ref), variant: loaded.morph?.fingerprint ?? null };
+}
+
+/**
+ * Main's verified copy did not load. When a read failed (Artifacts), the
+ * request is refused as retryable: the plain fork answering instead would let
+ * a request reach the original names whenever Artifacts errs. Any other
+ * reason will not pass by itself (the secret changed, the copy would rename
+ * other names, the renamer refuses the code now), so the plain fork answers,
+ * with the model off as the copy would, and one rotation of the stored copy
+ * brings back a verified one.
+ */
+async function copyDidNotLoad(deps: AskDeps, repo: string, copy: MorphState, plain: PlainLoad | null): Promise<void> {
+	if (plain?.kind === "transient") throw new HttpError(503, COPY_RETRY, {}, { "retry-after": String(COPY_RETRY_AFTER_SECONDS) });
+	await startRotation(deps.env, deps.exports.RotateWorkflow, { repo, reason: "mismatch", key: copyKey(copy) });
 }
 
 /**
