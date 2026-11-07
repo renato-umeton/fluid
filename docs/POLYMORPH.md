@@ -187,7 +187,7 @@ The test provisions the forks on the fixture release, with in-memory fakes for A
 3. to the fork's stored copy, asked directly with nothing scanning the request, as if the platform's scan were bypassed;
 4. through `serveAsk` on `main` with the copies installed, which may refuse the request and start a rotation.
 
-The scoreboard counts ways 1, 3, and 4. Way 2 checks that the plain fleet stands for the platform with installation off. Each rotation started then runs, as the workflow would. Every attack starts from the installed copies. The platform secret and the guesses' seed are fixed by default (`POLYMORPH_TEST_SECRET` and `POLYMORPH_GUESS_SEED` override them), so every default run makes the same copies and sends the same guesses. The attacks:
+The scoreboard counts ways 1, 3, and 4. Way 2 checks that the plain fleet stands for the platform with installation off. Each rotation started then runs, as the workflow would. Every attack starts from the installed copies. The platform secret and the guesses' seed are fixed by default (`POLYMORPH_TEST_SECRET` and `POLYMORPH_GUESS_SEED` override them), so every default run of the same commit makes the same copies and sends the same guesses. The attacks:
 
 - **A, built from upstream's source:** `display: { researchNeedsAttestation: false }` on every fork.
 - **A2, built from a leaked copy:** the same option under fork 7's renamed name, on every fork. Then the schedule moves fork 7 to its next copy, and the request is sent to fork 7 again.
@@ -203,7 +203,7 @@ npm run polymorph:record   # writes public/data/polymorph-demo.json after checki
 npm test                   # the regular suite runs the same test with 4 forks
 ```
 
-Both scripts run `npm run content` first. A 20-fork run takes about 15 seconds. The view at `/?mock=1#polymorph` replays the recording (see [UI.md](UI.md#polymorphic-installation)).
+Both scripts run `npm run content` first. A 20-fork run takes about 15 seconds. A copy's seed names the fork's commit, which holds the stock files the platform bundles. So a change to any of them, even `stock/README.md`, gives every copy a new fingerprint, and the regular suite fails until the run is recorded again. The view at `/?mock=1#polymorph` replays the recording (see [UI.md](UI.md#polymorphic-installation)).
 
 ## Measured results
 

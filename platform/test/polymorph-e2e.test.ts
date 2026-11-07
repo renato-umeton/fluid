@@ -16,9 +16,9 @@
 // POLYMORPH_DEMO=1 prints the scoreboard, and POLYMORPH_DEMO_RECORD=<path>
 // writes the recording the Polymorph view replays, checked with the view's own
 // validateDemo (package.json: polymorph:demo, polymorph:record). The platform
-// secret and the seed of the blind guesses are fixed, so every run makes the
-// same copies and sends the same requests; POLYMORPH_TEST_SECRET and
-// POLYMORPH_GUESS_SEED replace them.
+// secret and the seed of the blind guesses are fixed, so every run of the same
+// commit makes the same copies and sends the same requests;
+// POLYMORPH_TEST_SECRET and POLYMORPH_GUESS_SEED replace them.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -563,13 +563,20 @@ const readCommitted = () => JSON.parse(readFileSync(COMMITTED_RECORDING, "utf8")
 /**
  * Checks the committed recording, which the deployed page replays, against
  * this run: it passes the view's checks, has this run's release, list size,
- * and probes, and shows the outcome every run must record for its fleet. Each
- * failure says how to record it again.
+ * and probes, and shows the outcome every run must record for its fleet.
+ * With the default secret, the copies it shows for this run's forks must be
+ * the ones this run made: a copy's seed names the fork's commit, which holds
+ * the stock files, so any change to them makes other copies. Each failure
+ * says how to record it again.
  */
 function expectCommittedRecording(committed: Recording, recording: Recording): void {
 	expect(validateDemo(committed), `problems in the committed recording; ${RECORD_AGAIN}`).toEqual([]);
 	expect([committed.release, committed.listSize, committed.probes], `the committed recording's release, list size, and probes, against this run's; ${RECORD_AGAIN}`).toEqual([recording.release, recording.listSize, recording.probes]);
 	expect(outcomeOf(committed), `the committed recording's outcome; ${RECORD_AGAIN}`).toEqual(expectedOutcome(committed.forks.map((fork) => fork.repo)));
+	if (SECRET === POLYMORPH_TEST_SECRET) {
+		const mine = new Set(recording.forks.map((fork) => fork.repo));
+		expect(committed.forks.filter((fork) => mine.has(fork.repo)), `the committed recording's copies of this run's forks; ${RECORD_AGAIN}`).toEqual(recording.forks);
+	}
 }
 
 /** A row of the Polymorph view's scoreboard (scoreRows): the attack, and a cell for each of SCORE_COLUMNS. */
@@ -727,6 +734,7 @@ describe("the check of the committed recording", () => {
 		["has a list of another size", (r) => Object.assign(r, { listSize: r.listSize + 1 })],
 		["compared another number of probes", (r) => Object.assign(r, { probes: r.probes + 1 })],
 		["shows another outcome", (r) => Object.assign(r.forks[0]!, { mismatches: 1 })],
+		["has another copy for a fork", (r) => Object.assign(r.forks[0]!, { before: "00000000" })],
 	])("tells the reader to record it again when it %s", (_what, edit) => {
 		const stale = readCommitted();
 		edit(stale);
