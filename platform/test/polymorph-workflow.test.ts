@@ -196,16 +196,16 @@ describe("startRotation", () => {
 	it("starts one rotation per fork and key, however often it is asked", async () => {
 		const workflows = fakeWorkflows();
 		const binding = workflows.exports.RotateWorkflow as never;
-		const first = await startRotation(p.t.env, binding, { repo: "user-1", reason: "tripwire", key: "c2-a1b2c3d4" });
-		const again = await startRotation(p.t.env, binding, { repo: "user-1", reason: "tripwire", key: "c2-a1b2c3d4" });
+		const first = await startRotation(p.t.env, binding, { repo: "user-1", reason: "tripwire", key: "k1" });
+		const again = await startRotation(p.t.env, binding, { repo: "user-1", reason: "tripwire", key: "k1" });
 		await startRotation(p.t.env, binding, { repo: "user-1", reason: "landed", key: "l0123456789abcdef" });
-		const id = rotationId("user-1", "c2-a1b2c3d4");
+		const id = rotationId("user-1", "k1");
 		expect([first, again]).toEqual([{ id, created: true }, { id, created: false }]);
 		expect(workflows.of("RotateWorkflow")).toEqual([
 			{ workflow: "RotateWorkflow", id, params: { repo: "user-1", reason: "tripwire", runId: `run_${id}` } },
 			{ workflow: "RotateWorkflow", id: rotationId("user-1", "l0123456789abcdef"), params: { repo: "user-1", reason: "landed", runId: `run_${rotationId("user-1", "l0123456789abcdef")}` } },
 		]);
-		expect(id).toMatch(/^rot-[0-9a-f]{8}-c2-a1b2c3d4$/);
+		expect(id).toMatch(/^rot-[0-9a-f]{8}-k1$/);
 	});
 
 	it("starts nothing without a secret, since the rotation would only skip", async () => {
