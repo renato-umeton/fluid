@@ -12,7 +12,9 @@
 // that trips a copy's wires and starts one rotation of that fork. Each
 // rotation started then runs, as the rotate workflow would.
 //
-// POLYMORPH_FLEET sets the number of forks (default 4, at least 4).
+// POLYMORPH_FLEET sets the number of forks (default 20, the committed
+// recording's fleet, so every run measures the numbers the docs show; at
+// least 4).
 // POLYMORPH_DEMO=1 prints the scoreboard, and POLYMORPH_DEMO_RECORD=<path>
 // writes the recording the Polymorph view replays, checked with the view's own
 // validateDemo (package.json: polymorph:demo, polymorph:record). The platform
@@ -39,7 +41,7 @@ import { zeroDayRelease } from "./fixtures/zero-day.ts";
 import { POLYMORPH_TEST_SECRET, PUBLISHED, TAG, polymorphPlatform, type PolymorphPlatform } from "./helpers/polymorph-platform.ts";
 import { fakeWorkflows } from "./helpers/workflows.ts";
 
-const FLEET = Number(process.env.POLYMORPH_FLEET ?? 4);
+const FLEET = Number(process.env.POLYMORPH_FLEET ?? 20);
 if (!Number.isInteger(FLEET) || FLEET < 4) {
 	throw new Error(`POLYMORPH_FLEET must be a whole number of at least 4 (attack A2 leaks the 4th fork's copy), got ${JSON.stringify(process.env.POLYMORPH_FLEET)}`);
 }
@@ -55,8 +57,9 @@ const EXPERIMENT_MS = FLEET * 30_000;
 const SECRET = process.env.POLYMORPH_TEST_SECRET ?? POLYMORPH_TEST_SECRET;
 if (SECRET.length < 16) throw new Error("POLYMORPH_TEST_SECRET must have at least 16 characters: the platform treats a shorter secret as none");
 const GUESSES = 1000;
+const DEFAULT_GUESS_SEED = 20_261_106;
 /** Seeds the blind guesses. */
-const GUESS_SEED = Number(process.env.POLYMORPH_GUESS_SEED ?? 20_261_106);
+const GUESS_SEED = Number(process.env.POLYMORPH_GUESS_SEED ?? DEFAULT_GUESS_SEED);
 if (!Number.isSafeInteger(GUESS_SEED)) throw new Error(`POLYMORPH_GUESS_SEED must be a whole number, got ${JSON.stringify(process.env.POLYMORPH_GUESS_SEED)}`);
 const BASE36 = "0123456789abcdefghijklmnopqrstuvwxyz";
 
@@ -566,8 +569,10 @@ const readCommitted = () => JSON.parse(readFileSync(COMMITTED_RECORDING, "utf8")
  * and probes, and shows the outcome every run must record for its fleet.
  * With the default secret, the copies it shows for this run's forks must be
  * the ones this run made: a copy's seed names the fork's commit, which holds
- * the stock files, so any change to them makes other copies. Each failure
- * says how to record it again.
+ * the stock files, so any change to them makes other copies. A run of the
+ * recording's fleet with the default secret and guesses must have recorded
+ * exactly what it holds, apart from when. Each failure says how to record it
+ * again.
  */
 function expectCommittedRecording(committed: Recording, recording: Recording): void {
 	expect(validateDemo(committed), `problems in the committed recording; ${RECORD_AGAIN}`).toEqual([]);
@@ -576,6 +581,9 @@ function expectCommittedRecording(committed: Recording, recording: Recording): v
 	if (SECRET === POLYMORPH_TEST_SECRET) {
 		const mine = new Set(recording.forks.map((fork) => fork.repo));
 		expect(committed.forks.filter((fork) => mine.has(fork.repo)), `the committed recording's copies of this run's forks; ${RECORD_AGAIN}`).toEqual(recording.forks);
+	}
+	if (committed.forks.length === recording.forks.length && SECRET === POLYMORPH_TEST_SECRET && GUESS_SEED === DEFAULT_GUESS_SEED) {
+		expect({ ...committed, recordedAt: "" }, `the committed recording, against this run's; ${RECORD_AGAIN}`).toEqual({ ...recording, recordedAt: "" });
 	}
 }
 
@@ -735,6 +743,7 @@ describe("the check of the committed recording", () => {
 		["compared another number of probes", (r) => Object.assign(r, { probes: r.probes + 1 })],
 		["shows another outcome", (r) => Object.assign(r.forks[0]!, { mismatches: 1 })],
 		["has another copy for a fork", (r) => Object.assign(r.forks[0]!, { before: "00000000" })],
+		["describes an attack otherwise", (r) => Object.assign(r.attacks[0]!, { detail: "Sets another option." })],
 	])("tells the reader to record it again when it %s", (_what, edit) => {
 		const stale = readCommitted();
 		edit(stale);

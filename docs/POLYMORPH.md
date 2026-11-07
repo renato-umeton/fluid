@@ -200,7 +200,7 @@ It needs Node 22.18 or later, a git clone (the content step bundles stock from `
 cd platform
 npm run polymorph:demo     # prints the scoreboard for 20 forks
 npm run polymorph:record   # writes public/data/polymorph-demo.json after checking it with the view's validateDemo
-npm test                   # the regular suite runs the same test with 4 forks
+npm test                   # the regular suite runs the same 20-fork test and checks the recording against it
 ```
 
 Both scripts run `npm run content` first. A 20-fork run takes about 15 seconds. A copy's seed names the fork's commit, which holds the stock files the platform bundles. So a change to any of them, even `stock/README.md`, gives every copy a new fingerprint, and the regular suite fails until the run is recorded again. The view at `/?mock=1#polymorph` replays the recording (see [UI.md](UI.md#polymorphic-installation)).
