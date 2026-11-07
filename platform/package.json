@@ -11,6 +11,8 @@
 		"build": "cf build",
 		"pretest": "npm run content",
 		"test": "vitest run",
+		"polymorph:demo": "npm run content && POLYMORPH_DEMO=1 POLYMORPH_FLEET=20 vitest run --reporter=default test/polymorph-e2e.test.ts",
+		"polymorph:record": "npm run content && POLYMORPH_FLEET=20 POLYMORPH_DEMO_RECORD=public/data/polymorph-demo.json vitest run test/polymorph-e2e.test.ts",
 		"pretypecheck": "npm run content",
 		"typecheck": "cf workers types && tsc",
 		"publish-stock": "node scripts/publish-stock.mjs",
