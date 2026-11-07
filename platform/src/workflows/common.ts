@@ -350,6 +350,11 @@ export function landedKey(commit: string): string {
 	return `l${commit.slice(0, 16)}`;
 }
 
+/** The key of each fork's rotation that a fleet-wide run starts: one per fork and run, however often its step retries. */
+export function fleetKey(runId: string): string {
+	return `f${fnv1a(runId)}`;
+}
+
 /**
  * Starts the rotation of one fork that `key` names (see rotationId), with the
  * run that logs it; an instance that already exists counts as started.

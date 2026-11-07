@@ -11,7 +11,7 @@ import * as entry from "../src/index.ts";
 import { forkRepoName } from "../src/lib/names.ts";
 import { runsStub } from "../src/stubs.ts";
 import { deriveSeed, fingerprint } from "../src/polymorph/names.ts";
-import { copyKey, GATE_STEP, installKey, LIVE_ROTATION_WINDOW_MS, rotationId, startRotation, tripKey, type RotateParams } from "../src/workflows/common.ts";
+import { copyKey, fleetKey, GATE_STEP, installKey, landedKey, LIVE_ROTATION_WINDOW_MS, rotationId, startRotation, tripKey, type RotateParams } from "../src/workflows/common.ts";
 import { SeedForkWorkflow } from "../src/workflows/fleet.ts";
 import { GateWorkflow } from "../src/workflows/gate.ts";
 import { RotateWorkflow } from "../src/workflows/rotate.ts";
@@ -261,7 +261,8 @@ describe("tripKey", () => {
 		expect(tripKey(at + 2 * 60_000)).toBe(`t${window}`);
 		expect(tripKey(at + 3 * 60_000)).not.toBe(`t${window}`);
 		// No other key starts with "t", so a tripwire rotation never shares an instance with another kind.
-		expect([copyKey({ epoch: 3 }, at), installKey({ createdAt: new Date(at).toISOString() })].map((key) => key[0])).toEqual(["c", "i"]);
+		const others = [copyKey({ epoch: 3 }, at), installKey({ createdAt: new Date(at).toISOString() }), landedKey("0123456789abcdef0123"), fleetKey("run_sched-1")];
+		expect(others.map((key) => key[0])).toEqual(["c", "i", "l", "f"]);
 	});
 });
 

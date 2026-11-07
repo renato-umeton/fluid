@@ -9,11 +9,10 @@
 // one with startRotation (common.ts).
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import type { RunStatus, StepStatus } from "../durable/runs.ts";
-import { fnv1a } from "../events/filter.ts";
 import { polymorphSecret } from "../polymorph/install.ts";
 import { rotateFork, type RotationReason, type RotationResult } from "../polymorph/rotate.ts";
 import { fleetStub } from "../stubs.ts";
-import { appExports, ensureRun, GATE_STEP, GIT_STEP, guarded, rotationId, runLog, startInstance, steps, type RotateParams, type Steps } from "./common.ts";
+import { appExports, ensureRun, fleetKey, GATE_STEP, GIT_STEP, guarded, rotationId, runLog, startInstance, steps, type RotateParams, type Steps } from "./common.ts";
 import { FAN_OUT } from "./upgrade.ts";
 
 const ROTATE_STEP = "Rotate to the next renamed copy";
@@ -97,7 +96,7 @@ export class RotateWorkflow extends WorkflowEntrypoint<Env, RotateParams> {
 			return { started: 0 };
 		}
 		const exports = appExports(this.ctx);
-		const key = `f${fnv1a(runId)}`;
+		const key = fleetKey(runId);
 		for (let i = 0; i < plan.repos.length; i += FAN_OUT.batchSize) {
 			await step.do(`fan out ${i}`, GIT_STEP, async () => {
 				const items = plan.repos.slice(i, i + FAN_OUT.batchSize).map((repo) => {
