@@ -351,7 +351,7 @@ route("POST", "/api/ask", async (rc) => {
 	// A re-ask after an override or an attestation belongs to the question it re-asks (charts count questions).
 	const reaskOf = typeof body.reaskOf === "string" && body.reaskOf ? await ledgerStub(rc.env, session.userId).questionOf(body.reaskOf) : undefined;
 	if (reaskOf === null) throw new HttpError(404, `answer ${body.reaskOf as string} is not in your ledger`);
-	const card = await serveAsk({ env: rc.env, exports: exportsOf(rc.ctx) }, { repo, ref, request, useModel: body.useModel === true, userId: session.userId, fallback: ref === "main", ...(reaskOf ? { reaskOf } : {}) });
+	const card = await serveAsk({ env: rc.env, exports: appExports(rc.ctx) }, { repo, ref, request, useModel: body.useModel === true, userId: session.userId, fallback: ref === "main", ...(reaskOf ? { reaskOf } : {}) });
 	return json(card);
 });
 

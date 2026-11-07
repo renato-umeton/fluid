@@ -5,12 +5,16 @@
 // repos and a fake Worker Loader, so the timeouts leave room for a loaded
 // machine.
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { serveAsk, type ServeAskInput, type ServedCard } from "../src/api/ask.ts";
+import worker from "../src/index.ts";
+import { serveAsk, TRIPWIRE_REFUSAL, UNSCANNABLE_REFUSAL, type ServeAskInput, type ServedCard } from "../src/api/ask.ts";
+import { HttpError } from "../src/api/http.ts";
 import { cardDifferences } from "../src/polymorph/equivalence.ts";
-import { deriveSeed, fingerprint, namesHash } from "../src/polymorph/names.ts";
+import { deriveSeed, fingerprint, namesHash, variantNames } from "../src/polymorph/names.ts";
 import { rotateFork } from "../src/polymorph/rotate.ts";
 import { askLoaded, loadForkRuntime, type RuntimeDeps } from "../src/runtime/loader.ts";
 import { ledgerStub } from "../src/stubs.ts";
+import { copyKey, rotationId } from "../src/workflows/rotate.ts";
+import { cookieFor, post } from "./helpers/api-env.ts";
 import { LISTED, POLYMORPH_TEST_SECRET, PUBLISHED, TAG, polymorphPlatform, type PolymorphPlatform } from "./helpers/polymorph-platform.ts";
 import { fakeWorkflows } from "./helpers/workflows.ts";
 
@@ -50,6 +54,10 @@ beforeAll(() => {
 		"user-model": { ...PUBLISHED, "app/model.ts": "export const model = 1;\n" },
 		"user-nosecret": { ...PUBLISHED, "app/nosecret.ts": "export const nosecret = 1;\n" },
 		"user-safety": { ...PUBLISHED, "app/safety.ts": "export const safety = 1;\n" },
+		"user-trip": { ...PUBLISHED, "app/trip.ts": "export const trip = 1;\n" },
+		"user-flood": { ...PUBLISHED, "app/flood.ts": "export const flood = 1;\n" },
+		"user-deep": { ...PUBLISHED, "app/deep.ts": "export const deep = 1;\n" },
+		"user-route": { ...PUBLISHED, "app/route.ts": "export const route = 1;\n" },
 	});
 	p.heads["user-moved"] = p.t.artifacts.seed("user-moved", { commits: MOVED }).commits[1]!;
 	for (const repo of Object.keys(p.heads)) p.t.fleet.register({ repo, userId: repo.slice(5), persona: "p", pinnedTag: TAG, status: "pinned" });
@@ -187,6 +195,102 @@ describe("serveAsk without a copy to serve", () => {
 			const served = await ask("user-safety", requests.administrative);
 			expect(served.fork).toMatchObject({ repo: "user-safety", servedBy: { repo: "stock", ref: TAG } });
 			expect(served.fork).not.toHaveProperty("variant");
+		},
+		SLOW_MS,
+	);
+});
+
+describe("serveAsk and a copy's tripwires", () => {
+	/** A research question whose display options set a key: an original listed name, or a renamed one. */
+	const naming = (key: string) => ({ ...requests.research, context: { ...requests.research.context, display: { [key]: false } } });
+	/** A renamed researchNeedsAttestation that is not this copy's own: another copy's name. */
+	async function foreignName(repo: string, epoch: number): Promise<string> {
+		const own = (await variantNames(await deriveSeed(POLYMORPH_TEST_SECRET, repo, p.heads[repo]!, epoch), LISTED)).get("researchNeedsAttestation")!;
+		return own.endsWith("$zzzzzzzz") ? "researchNeedsAttestation$yyyyyyyy" : "researchNeedsAttestation$zzzzzzzz";
+	}
+	const refusal = async (pending: Promise<unknown>) => {
+		const error = await pending.then(
+			() => null,
+			(thrown: unknown) => thrown,
+		);
+		if (!(error instanceof HttpError)) throw new Error(`expected a refusal, got ${String(error)}`);
+		return { status: error.status, message: error.message, extra: error.extra, headers: error.headers };
+	};
+	const rotationsOf = (repo: string) => workflows.of("RotateWorkflow").filter((instance) => (instance.params as { repo: string }).repo === repo);
+
+	it(
+		"refuses an original name and another copy's name with one and the same 403, records each, and neither asks the fork nor writes the ledger",
+		async () => {
+			const state = await storeCopy("user-trip", 3);
+			const decoy = await refusal(ask("user-trip", naming("researchNeedsAttestation")));
+			const foreign = await refusal(ask("user-trip", naming(await foreignName("user-trip", 3))));
+			expect(decoy).toEqual({ status: 403, message: TRIPWIRE_REFUSAL, extra: {}, headers: {} });
+			expect(foreign).toEqual(decoy);
+			expect(TRIPWIRE_REFUSAL).toBe("Request refused by a security check.");
+			const events = p.t.fleet.securityEvents("user-trip");
+			expect(events.map((event) => [event.kind, event.detail?.hit])).toEqual([
+				["tripwire", "foreign"],
+				["tripwire", "decoy"],
+			]);
+			expect(events[1]!.detail).toEqual({ hit: "decoy", name: "researchNeedsAttestation", path: "context.display.researchNeedsAttestation", epoch: 3, fingerprint: state.fingerprint });
+			expect(await ledgerOf("user-trip")).toEqual([]);
+			// The copy's isolate starts on the first call into it: none was made.
+			expect(p.loader.built.filter((id) => id.startsWith("user-trip:"))).toEqual([]);
+		},
+		SLOW_MS,
+	);
+
+	it(
+		"starts exactly one rotation of the copy, named by its epoch and fingerprint, however many requests trip it",
+		async () => {
+			const state = await storeCopy("user-flood", 2);
+			for (let i = 0; i < 5; i++) await refusal(ask("user-flood", naming("researchNeedsAttestation")));
+			await refusal(ask("user-flood", naming(await foreignName("user-flood", 2))));
+			const id = rotationId("user-flood", copyKey(state));
+			expect(id).toContain(`c${state.epoch}-${state.fingerprint}`);
+			expect(rotationsOf("user-flood")).toEqual([{ workflow: "RotateWorkflow", id, params: { repo: "user-flood", reason: "tripwire", runId: `run_${id}` } }]);
+			expect(p.t.fleet.securityEvents("user-flood")).toHaveLength(6);
+		},
+		SLOW_MS,
+	);
+
+	it(
+		"refuses a request too deep or too wide to scan with a 400, recording nothing and starting nothing",
+		async () => {
+			await storeCopy("user-deep", 1);
+			let deep: Record<string, unknown> = { leaf: true };
+			for (let i = 0; i < 40; i++) deep = { inner: deep };
+			const wide = Object.fromEntries(Array.from({ length: 10_001 }, (_, i) => [`k${i}`, i]));
+			for (const context of [deep, wide]) {
+				expect(await refusal(ask("user-deep", { question: "Is Morphinex on formulary?", context }))).toEqual({ status: 400, message: UNSCANNABLE_REFUSAL, extra: {}, headers: {} });
+			}
+			expect(UNSCANNABLE_REFUSAL).toBe("Request too large or too deeply nested.");
+			expect(p.t.fleet.securityEvents("user-deep")).toEqual([]);
+			expect(rotationsOf("user-deep")).toEqual([]);
+			expect(await ledgerOf("user-deep")).toEqual([]);
+		},
+		SLOW_MS,
+	);
+
+	it(
+		"leaves the original names alone on a fork with no copy, where they are live",
+		async () => {
+			const served = await ask("user-plain", naming("researchNeedsAttestation"));
+			expect(served.mode).toBe("research");
+			expect(p.t.fleet.securityEvents("user-plain")).toEqual([]);
+		},
+		SLOW_MS,
+	);
+
+	it(
+		"answers POST /api/ask with the same 403 and the refusal's words only",
+		async () => {
+			await storeCopy("user-route", 1);
+			const cookie = await cookieFor({ userId: "route" });
+			const response = await worker.fetch(post("/api/ask", { cookie }, { question: requests.research.question, context: naming("researchNeedsAttestation").context }), p.t.env, workflows.ctx);
+			expect(response.status).toBe(403);
+			expect(await response.json()).toEqual({ error: TRIPWIRE_REFUSAL, requestId: expect.any(String) });
+			expect(rotationsOf("user-route")).toHaveLength(1);
 		},
 		SLOW_MS,
 	);

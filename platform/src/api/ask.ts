@@ -2,17 +2,32 @@
 // end-to-end host: ask the fork (or stock after a safety grace period), refuse
 // any clinical card with a computed dose, and append the answer's run-time
 // record to the given user's ledger. On production main, a fork whose main
-// has a verified renamed copy (see polymorph/) answers from that copy.
+// has a verified renamed copy (see polymorph/) answers from that copy, behind
+// its tripwires.
 import type { MorphState } from "../durable/fleet.ts";
 import { currentStockTag } from "../forks/provision.ts";
 import { STOCK_REPO } from "../lib/names.ts";
 import { polymorphSecret } from "../polymorph/install.ts";
-import { askFork, askLoaded, FORK_CALL_TIMEOUT_MS, loadForkRuntime, storedCopy, withTimeout, type AnswerCardLike, type RuntimeDeps } from "../runtime/loader.ts";
+import { scanRequest, type TripwireHit } from "../polymorph/tripwire.ts";
+import { askFork, askLoaded, FORK_CALL_TIMEOUT_MS, loadForkRuntime, storedCopy, withTimeout, type AnswerCardLike, type LoadedCopy, type RuntimeDeps } from "../runtime/loader.ts";
 import { resolveCommit, shortRef } from "../runtime/refs.ts";
 import { openRepo } from "../runtime/repo-files.ts";
 import type { RunTimeRecord } from "../durable/user-ledger.ts";
 import { fleetStub, ledgerStub } from "../stubs.ts";
+import { errorText, type RotateParams, type WorkflowBinding } from "../workflows/common.ts";
+import { copyKey, startRotation } from "../workflows/rotate.ts";
+import { HttpError } from "./http.ts";
 import { hasClinicalDose, markSafety, SAFETY_SIGNALS } from "./safety.ts";
+
+/** The runtime, plus on production main the rotate workflow that a request tripping a copy's wire starts. */
+export interface AskDeps extends RuntimeDeps {
+	exports: RuntimeDeps["exports"] & { RotateWorkflow?: WorkflowBinding<RotateParams> };
+}
+
+/** What every request that trips a copy's wire gets, whichever wire it was, so a sender learns nothing about the copy. */
+export const TRIPWIRE_REFUSAL = "Request refused by a security check.";
+/** What a request too deep or too wide for the tripwire scan gets: it is refused rather than scanned in part. */
+export const UNSCANNABLE_REFUSAL = "Request too large or too deeply nested.";
 
 export interface ServeAskInput {
 	repo: string;
@@ -37,7 +52,7 @@ interface Answer {
 	variant: string | null;
 }
 
-export async function serveAsk(deps: RuntimeDeps, input: ServeAskInput): Promise<ServedCard> {
+export async function serveAsk(deps: AskDeps, input: ServeAskInput): Promise<ServedCard> {
 	const { env } = deps;
 	const { repo, ref, request, useModel } = input;
 	const fleet = fleetStub(env);
@@ -69,22 +84,50 @@ export async function serveAsk(deps: RuntimeDeps, input: ServeAskInput): Promise
 
 /**
  * Asks the fork itself. When Fleet holds a verified copy of the commit the
- * ref is at, that copy answers, with the model off: useModel comes from the
- * request, so serving the plain fork for it would let any request bypass the
- * copy, and the gate verified the copy with the model off. Otherwise the plain
- * fork answers as before, model and all: no copy stored, no platform secret,
- * or a copy of an older commit (main moved, and the landed rotation has not
- * stored the new commit's copy yet).
+ * ref is at, that copy answers, with the model off, once the request passes
+ * its tripwires: useModel comes from the request, so serving the plain fork
+ * for it would let any request bypass the copy, and the gate verified the
+ * copy with the model off. Otherwise the plain fork answers as before, model
+ * and all: no copy stored, no platform secret, or a copy of an older commit
+ * (main moved, and the landed rotation has not stored the new commit's copy
+ * yet).
  */
-async function askOwnFork(deps: RuntimeDeps, input: { repo: string; ref: string; request: Record<string, unknown>; useModel: boolean; copy: MorphState | null }): Promise<Answer> {
+async function askOwnFork(deps: AskDeps, input: { repo: string; ref: string; request: Record<string, unknown>; useModel: boolean; copy: MorphState | null }): Promise<Answer> {
 	const { repo, ref, request, copy } = input;
 	if (copy === null || polymorphSecret(deps.env) === null || (await commitOf(deps.env, repo, ref)) !== copy.sha) {
 		return { ...(await askFork(deps, { repo, ref, request, useModel: input.useModel })), variant: null };
 	}
 	// Loaded at the commit just checked, so a push landing now cannot slip another commit under the copy.
 	const loaded = await loadForkRuntime(deps, repo, copy.sha, { useModel: false, morph: storedCopy(copy) });
+	if (loaded.morph) await checkTripwires(deps, repo, request, loaded.morph);
 	const card = await withTimeout(askLoaded(loaded, request, { useModel: false }), FORK_CALL_TIMEOUT_MS, `fork ${repo} did not answer`);
 	return { card, sha: loaded.sha, ref: shortRef(ref), variant: loaded.morph?.fingerprint ?? null };
+}
+
+/**
+ * Refuses, before the copy sees it, a request that names one of the copy's
+ * dead original names or another copy's renamed one (polymorph/tripwire.ts).
+ * The hit is recorded as a security event and starts one rotation of this
+ * copy, however many requests trip it; the fork keeps serving. A request too
+ * deep or too wide to scan is refused too, and records and starts nothing.
+ */
+async function checkTripwires(deps: AskDeps, repo: string, request: Record<string, unknown>, copy: LoadedCopy): Promise<void> {
+	let hit: TripwireHit | null;
+	try {
+		hit = scanRequest(request, copy.names);
+	} catch (error) {
+		if (error instanceof RangeError) throw new HttpError(400, UNSCANNABLE_REFUSAL);
+		throw error;
+	}
+	if (hit === null) return;
+	try {
+		await fleetStub(deps.env).recordSecurityEvent(repo, { kind: "tripwire", detail: { hit: hit.kind, name: hit.name, path: hit.path, epoch: copy.epoch, fingerprint: copy.fingerprint } });
+	} catch (error) {
+		// The refusal stands either way: the event is for admins, and a failure here must not answer differently.
+		console.error(`polymorph: a tripwire hit on ${repo} was not recorded: ${errorText(error)}`);
+	}
+	await startRotation(deps.env, deps.exports.RotateWorkflow, { repo, reason: "tripwire", key: copyKey(copy) });
+	throw new HttpError(403, TRIPWIRE_REFUSAL);
 }
 
 async function commitOf(env: Env, repo: string, ref: string): Promise<string> {
