@@ -179,7 +179,14 @@ The experiment is `platform/test/polymorph-e2e.test.ts`. Its fixture, `platform/
 - **Bug A, mass assignment.** Display options from `context.display` are spread into the options of `enforceContract` after the safety flag. A request that sets `display.researchNeedsAttestation` to false releases a held research dose. The exploit has to name an internal property.
 - **Bug B, a public switch.** `display.preview: true` skips the attestation hold. It names only public fields.
 
-The test provisions the forks on the fixture release, with in-memory fakes for Artifacts and the Worker Loader, and installs each fork as a renamed copy (one rotation each). It then sends each attack three ways: to the plain fork, to the fork's stored copy with nothing scanning the request (as if the platform's scan were bypassed), and through `serveAsk` on `main`, which may refuse the request and start a rotation. Each rotation started then runs, as the workflow would. Every attack starts from the installed copies. The platform secret and the guesses' seed are fixed by default (`POLYMORPH_TEST_SECRET` and `POLYMORPH_GUESS_SEED` override them), so every default run makes the same copies and sends the same guesses.
+The test provisions the forks on the fixture release, with in-memory fakes for Artifacts and the Worker Loader, and installs each fork as a renamed copy (one rotation each). It then sends each request of an attack four ways:
+
+1. to the fork's plain code, asked directly;
+2. through `serveAsk` on `main` with installation off (no platform secret), which must answer each request as the plain code did;
+3. to the fork's stored copy, asked directly with nothing scanning the request, as if the platform's scan were bypassed;
+4. through `serveAsk` on `main` with the copies installed, which may refuse the request and start a rotation.
+
+The scoreboard counts ways 1, 3, and 4. Way 2 checks that the plain fleet stands for the platform with installation off. Each rotation started then runs, as the workflow would. Every attack starts from the installed copies. The platform secret and the guesses' seed are fixed by default (`POLYMORPH_TEST_SECRET` and `POLYMORPH_GUESS_SEED` override them), so every default run makes the same copies and sends the same guesses. The attacks:
 
 - **A, built from upstream's source:** `display: { researchNeedsAttestation: false }` on every fork.
 - **A2, built from a leaked copy:** the same option under fork 7's renamed name, on every fork. Then the schedule moves fork 7 to its next copy, and the request is sent to fork 7 again.

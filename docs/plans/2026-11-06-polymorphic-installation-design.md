@@ -86,7 +86,7 @@ A fixture release changes one line in `app/cards.ts`: display options from `cont
 
 ### Fleet experiment
 
-Twenty forks on the fixture release, run through the real loader, gate, and ask path with in-memory fakes for Artifacts and the Worker Loader. The test measures compromise for a plain fleet and a polymorphic fleet, what the platform refuses, which rotations start, and the equivalence check for every copy. `npm run polymorph:demo` prints the scoreboard, and these are its results. The Polymorph view replays a recording of this experiment, `platform/public/data/polymorph-demo.json`.
+Twenty forks on the fixture release, run through the real loader, gate, and ask path with in-memory fakes for Artifacts and the Worker Loader. The test sends each request four ways: to each fork's plain code, through the ask path with installation off, to each renamed copy with nothing scanning the request, and through the ask path with the copies installed. Installation off must answer every request as the plain code did, so the plain fleet stands for it. The test measures what compromised a fork, what the platform refused, which rotations started, and the equivalence check of every copy. `npm run polymorph:demo` prints the scoreboard, and these are its results. The Polymorph view replays a recording of this experiment, `platform/public/data/polymorph-demo.json`.
 
 | Attack | Plain fleet | Renamed copies, scan bypassed | Through the platform | Refused | Moved to a new copy |
 | :-- | :-- | :-- | :-- | :-- | :-- |
