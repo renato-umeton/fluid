@@ -32,7 +32,7 @@ suffix = 8 base36 characters from HMAC-SHA256(seed, name), one per listed name
 
 ### The loader renames at load time
 
-The loader turns a fork's files at a commit into modules (`buildModuleMap`). When a load asks for a copy (`LoadOptions.morph`), `morphFork` then renames every identifier token that matches a listed name, in every JavaScript module except the generated entry. It finds the tokens with sucrase's parser, the one the loader already uses to strip types. Strings, comments, regular expressions, and JSON modules stay as they are.
+The loader turns a fork's files at a commit into modules (`buildModuleMap`). When a load asks for a copy (`LoadOptions.morph`), `morphFork` then renames every identifier token that matches a listed name the copy does not skip (see below), in every JavaScript module except the generated entry. It finds the tokens with sucrase's parser, the one the loader already uses to strip types. Strings, comments, regular expressions, and JSON modules stay as they are.
 
 Git keeps the readable code. The customize agent, recipes, contests, merges, and intent replay all work on the plain text, as before. Plain loads are never renamed.
 
