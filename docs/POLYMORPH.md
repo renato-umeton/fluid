@@ -101,7 +101,7 @@ Only the keys of plain objects are checked, at any depth up to 32 levels and 10,
 | A key trips a wire | 403 `Request refused by a security check.`, the same for both kinds. The platform records a `tripwire` security event and starts one rotation of this copy in each 10-minute window, however many requests trip it. The fork is not asked, and no ledger row is written. |
 | The request is too deep or has too many keys to scan | 400 `Request too large or too deeply nested.` Nothing is recorded, and no rotation starts. |
 | The stored copy cannot be built because a read failed in Artifacts | 503 `The fork's renamed copy could not be loaded; retry shortly.`, with `retry-after: 10`, on every ref. Nothing is recorded, and no rotation starts. |
-| The stored copy no longer builds as verified for another reason (a changed secret, other names, code the renamer refuses now) | The plain fork answers without a scan, and a rotation starts (reason `mismatch`). |
+| The stored copy no longer builds as verified for another reason (a changed secret, other names, code the renamer refuses now) | The plain fork answers without a scan, and a rotation starts (reason `mismatch`). If that rotation stores no new copy, it builds the stored copy again. When that still fails, for a reason other than a failed read, the rotation clears the stored copy and records `copy_cleared`. The fork then answers as one with no copy until a later rotation stores one. |
 
 Error bodies carry `error` and `requestId`, like every other API error.
 
@@ -116,14 +116,23 @@ These asks run with no copy and no scan:
 
 - every ask on a platform without a usable secret, even when Fleet holds a copy;
 - a fork that has no stored copy yet;
-- the yellow soak's end-to-end host, which asks the commit as it landed (`asBuilt`);
+- the yellow soak's end-to-end host, which asks the commit as it landed through its own entry point, `serveAskAsBuilt` (`serveAsk` has no input that turns the guard off);
 - `main` under an active safety fallback, where stock answers. The safety fallback (main only) and the clinical dose backstop are unchanged.
 
 ## Rotation
 
 `rotateFork(deps, repo, reason)` (`platform/src/polymorph/rotate.ts`) moves a fork to its next epoch. It runs the check mode gate above and stores the new copy in Fleet only when the gate passes, and only if no other rotation stored one first (compare-and-set on the epoch it read before the gate). A copy that fails the gate never goes live: the fork keeps the copy it has. Whatever an attacker learned about the old copy goes stale.
 
-A rotation skips, changing nothing, when there is no usable secret, the fork is not in the fleet, the fork is `provisioning`, `upgrading`, or `gating`, the gate could make no copy, `main` moved during the gate, or another rotation moved the fork first. A failed read in Artifacts throws instead, so the workflow step retries.
+A rotation of a fork that is `provisioning`, `upgrading`, or `gating` waits: the workflow tries again a minute later, up to 5 times, and notes each wait on the run. A rotation skips when:
+
+- there is no usable secret;
+- the fork is not in the fleet;
+- the fork is still busy after the last try;
+- the gate could make no copy;
+- `main` moved during the gate;
+- another rotation moved the fork first.
+
+A skip changes nothing, except that a `mismatch` rotation clears a stored copy that no longer builds (see "Tripwires and refusals"). A failed read in Artifacts throws instead, so the workflow step retries.
 
 Rotations run in the `fluid-rotate` workflow. What starts one:
 
@@ -141,8 +150,8 @@ Each rotation logs a `rotate` run (`GET /api/runs/:runId`) with the epoch and th
 ## Records
 
 - **Fleet's copy state.** Fleet keeps the verified copy of each fork: epoch, commit, fingerprint, names hash, and when it was stored. Only a rotation changes it, by compare-and-set. It is never part of the public fleet entries.
-- **Security events.** `tripwire` (which kind of wire, the listed name, the key's path, the copy's epoch and fingerprint), `rotated` (reason, epoch, fingerprint), and `rotation_refused` (reason, epoch, number of failures). Fleet keeps the latest 100 per fork. No route serves them yet.
-- **The public fleet stream** gets a `security` event with only the repo, the kind, and the time, at most one per fork and kind every 10 seconds. `rotation_refused` is never broadcast.
+- **Security events.** `tripwire` (which kind of wire, the listed name, the key's path, the copy's epoch and fingerprint), `rotated` (reason, epoch, fingerprint), `rotation_refused` (reason, epoch, number of failures), and `copy_cleared` (epoch, and why the stored copy no longer builds). Fleet keeps the latest 100 per fork. No route serves them yet.
+- **The public fleet stream** gets a `security` event with only the repo, the kind, and the time, at most one per fork and kind every 10 seconds. `rotation_refused` and `copy_cleared` are never broadcast.
 - **Answers and the ledger.** An answer from a copy carries `fork.variant` (the fingerprint), and its ledger row carries `variant`.
 
 ## Setup
@@ -208,7 +217,7 @@ The recording is `platform/public/data/polymorph-demo.json`.
 - **A fork's own fields.** A request field of the fork's own that is named like a listed name stays plain only when the fork's tests (`tests/user/manifest.json`, `tests/user/e2e.json`), its `fluid.toml`, or its modules' text name it. Otherwise the copy renames the code that reads the field, so the copy answers differently, and a request that sends the field under its original name is refused as a decoy. Naming the field in the fork's own tests fixes it.
 - **Rotation needs a pass.** A rotation needs the whole check mode gate to pass. A fork whose `main` fails a tier keeps the copy it has, or stays plain.
 - **After a change lands.** Until the landed commit's rotation stores a copy of it, `main` answers plain, behind the stored copy's scan.
-- **Runtime upgrades.** A runtime upgrade can cost a name: a name the new runtime builds in is skipped from then on, and the stored copy no longer matches until the fork rotates.
+- **Runtime upgrades.** A runtime upgrade can cost a name: a name the new runtime builds in is skipped from then on. The stored copy then no longer matches, so the fork answers plain until it rotates, and a rotation that stores no new copy clears the old one.
 - **Cost.** Each rotation is a check mode gate that asks every probe twice, and the schedule runs one per fork every 6 hours.
 - **Tests share one process.** Tests simulate isolates in one Node process. The experiment checks that no attack changed a built-in the isolates share.
 - **Not on the live site yet.** Nothing has run on the deployed site yet.
