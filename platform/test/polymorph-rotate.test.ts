@@ -37,6 +37,7 @@ beforeAll(() => {
 		"user-stale-busy": { ...PUBLISHED, "app/stale.ts": "export const stale = 1;\n" },
 		"user-retired": { ...PUBLISHED, "app/retired.ts": "export const retired = 1;\n" },
 		"user-resecret-2": { ...PUBLISHED, "app/resecret.ts": "export const resecret = 2;\n" },
+		"user-unread": { ...PUBLISHED, "app/unread.ts": "export const unread = 1;\n" },
 	});
 	for (const repo of Object.keys(p.heads)) p.t.fleet.register({ repo, userId: repo.replace(/^user-/, ""), persona: "p", pinnedTag: TAG, status: "pinned" });
 });
@@ -318,6 +319,28 @@ describe("rotateFork", () => {
 			const third = await rotateFork(p.deps, repo, "schedule");
 			expect(third).toMatchObject({ outcome: "rotated", epoch: 3 });
 			expect(printsOf(first, second)).not.toContain(printsOf(third)[0]);
+		},
+		SLOW_MS,
+	);
+
+	it(
+		"clears nothing when Artifacts fails to read the stored copy for the check after a mismatch rotation",
+		async () => {
+			vi.spyOn(console, "warn").mockImplementation(() => undefined);
+			const repo = "user-unread";
+			const state = await storeVerified(repo);
+			p.t.fleet.update(repo, { status: "gating" });
+			const git = p.t.artifacts.repos.get(repo)!.git;
+			const read = git.readFile.bind(git);
+			vi.spyOn(git, "readFile").mockImplementation(async (args: { ref: string; path: string }) => {
+				if (args.path === "tests/user/manifest.json") throw new Error("Artifacts: 503 service unavailable");
+				return read(args);
+			});
+			const result = await rotateFork(p.deps, repo, "mismatch");
+			expect(result).toMatchObject({ outcome: "skipped", busy: true });
+			expect(result).not.toHaveProperty("cleared");
+			expect(p.t.fleet.morphState(repo)).toEqual({ ...state, at: iso(t0) });
+			expect(p.t.fleet.securityEvents(repo)).toEqual([]);
 		},
 		SLOW_MS,
 	);
