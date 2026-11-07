@@ -5,7 +5,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import stockSource from "../src/generated/stock-source.json";
 import synthetic from "../src/generated/synthetic.json";
 import { APP_MODULE, ENTRY_MODULE, ForkCodeError, RUNNER_ENTRY_MODULE, buildModuleMap, buildRunnerModuleMap, entrySource, isRuntimePath, moduleName, transformTs } from "../src/runtime/modules.ts";
-import { askLoaded, MAX_CARD_CHARS, type LoadedFork } from "../src/runtime/loader.ts";
+import { askLoaded, isolateId, MAX_CARD_CHARS, type LoadedFork } from "../src/runtime/loader.ts";
 
 const files = stockSource.files as Record<string, string>;
 
@@ -148,8 +148,12 @@ describe("transformed stock runtime", () => {
 
 describe("card serialization across RPC", () => {
 	const fork = (value: unknown) => ({ ask: async () => value as string });
-	// A plain fork answering with value, asked the only way the platform asks one.
-	const askPlain = (value: unknown) => askLoaded({ fork: fork(value), morph: null } as LoadedFork, {});
+	const sha = "a".repeat(40);
+	// A plain fork that answers with value, loaded with no copy asked for, and asked the only way the platform asks one.
+	const askPlain = (value: unknown) => {
+		const loaded: LoadedFork = { repo: "user-a", ref: "main", sha, isolateId: isolateId("user-a", sha), fluidToml: undefined, fork: fork(value), morph: null, plain: { kind: "none", reason: "no copy was asked for" } };
+		return askLoaded(loaded, {});
+	};
 
 	it("the generated entry returns the card as a JSON string", () => {
 		expect(entrySource()).toContain("return JSON.stringify(card);");
