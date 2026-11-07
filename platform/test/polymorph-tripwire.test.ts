@@ -44,6 +44,18 @@ describe("scanRequest", () => {
 		expect(scanRequest({ question, context: { [own]: false } }, names)).toBeNull();
 	});
 
+	it("flags a string value that holds one of these names with a suffix, this copy's own included, since the copy's answer maps its own names back", () => {
+		expect(scanRequest({ question: `What is ${own}?`, context: {} }, names)).toEqual({ kind: "foreign", name: "researchNeedsAttestation", path: "question" });
+		expect(scanRequest({ question, context: { notes: ["plain", `see${otherCopy}too`] } }, names)).toEqual({ kind: "foreign", name: "researchNeedsAttestation", path: "context.notes.1" });
+		const longer = names.get("answerModes")!;
+		expect(scanRequest({ question, history: [{ role: "user", text: longer }] }, names)).toEqual({ kind: "foreign", name: "answerModes", path: "history.0.text" });
+	});
+
+	it("flags a key that holds a renamed name inside a longer word, but never this copy's own name as the whole key", () => {
+		expect(scanRequest({ question, context: { [`x${own}`]: 1 } }, names)).toEqual({ kind: "foreign", name: "researchNeedsAttestation", path: `context.x${own}` });
+		expect(scanRequest({ question, context: { [own]: false } }, names)).toBeNull();
+	});
+
 	it("ignores keys that only look similar and values that name listed names", () => {
 		const request = {
 			question: "researchNeedsAttestation",

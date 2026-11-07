@@ -61,7 +61,7 @@ For a fork with a list, the gate sends every probe request to the plain fork and
 
 ### 5. Tripwires
 
-In a renamed copy, the original names are dead. A request that uses one as a key, at any depth, can only come from someone working from upstream's source. The platform refuses that request, records a security event, and starts a rotation for that fork. A key shaped like a renamed name with another copy's suffix is treated the same way. The fork's own renamed names are not flagged, so the experiment can show honestly what a leaked copy does.
+In a renamed copy, the original names are dead. A request that uses one as a key, at any depth, can only come from someone working from upstream's source. The platform refuses that request, records a security event, and starts a rotation for that fork. A key shaped like a renamed name with another copy's suffix is treated the same way. The fork's own renamed names are not flagged as keys, so the experiment can show honestly what a leaked copy does. A renamed name inside a string value is refused, the fork's own included. The copy maps its own names back in what it answers, so an echoed value would otherwise confirm a guess.
 
 ### 6. Nothing renamed leaves the platform
 

@@ -76,6 +76,7 @@ beforeAll(() => {
 		"user-trip": { ...PUBLISHED, "app/trip.ts": "export const trip = 1;\n" },
 		"user-flood": { ...PUBLISHED, "app/flood.ts": "export const flood = 1;\n" },
 		"user-chain": { ...PUBLISHED, "app/chain.ts": "export const chain = 1;\n" },
+		"user-echo": { ...PUBLISHED, "app/echo.ts": "export const echo = 1;\n" },
 		"user-deep": { ...PUBLISHED, "app/deep.ts": "export const deep = 1;\n" },
 		"user-route": { ...PUBLISHED, "app/route.ts": "export const route = 1;\n" },
 		"user-busy": { ...PUBLISHED, "app/busy.ts": "export const busy = 1;\n" },
@@ -367,6 +368,23 @@ describe("serveAsk and a copy's tripwires", () => {
 			await refusal(ask("user-busy", naming("researchNeedsAttestation")));
 			expect(rotationsOf("user-busy").map((instance) => instance.id)).toEqual([rotationId("user-busy", tripKey(t0)), rotationId("user-busy", tripKey(t0 + 10 * 60_000))]);
 			expect(rotationId("user-busy", tripKey(t0))).not.toBe(rotationId("user-busy", tripKey(t0 + 10 * 60_000)));
+		},
+		SLOW_MS,
+	);
+
+	it(
+		"refuses a renamed name sent in a value, the copy's own as well as a guess, so no answer can show which guess was right",
+		async () => {
+			const state = await storeCopy("user-echo", 1);
+			const own = (await variantNames(await deriveSeed(POLYMORPH_TEST_SECRET, "user-echo", state.sha, 1), LISTED)).get("researchNeedsAttestation")!;
+			const asking = (name: string) => ({ ...requests.research, question: `${requests.research.question} (${name})` });
+			const refusals = [await refusal(ask("user-echo", asking(own))), await refusal(ask("user-echo", asking(await foreignName("user-echo", 1))))];
+			expect(refusals).toEqual([0, 1].map(() => ({ status: 403, message: TRIPWIRE_REFUSAL, extra: {}, headers: {} })));
+			expect(p.t.fleet.securityEvents("user-echo").map((event) => [event.detail?.hit, event.detail?.path])).toEqual([
+				["foreign", "question"],
+				["foreign", "question"],
+			]);
+			expect(await ledgerOf("user-echo")).toEqual([]);
 		},
 		SLOW_MS,
 	);

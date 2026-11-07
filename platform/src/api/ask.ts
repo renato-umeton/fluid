@@ -194,7 +194,8 @@ async function enforceGuard(deps: AskDeps, repo: string, request: Record<string,
 
 /**
  * Refuses, before the fork sees it, a request that names one of the copy's
- * dead original names or another copy's renamed one (polymorph/tripwire.ts).
+ * dead original names or another copy's renamed one, or holds a renamed name
+ * in a value (polymorph/tripwire.ts).
  * The hit is recorded as a security event and starts one rotation of the fork
  * in each ten-minute window (tripKey), however many requests trip it, and
  * whichever copy they trip; the fork keeps serving. A request too deep or too

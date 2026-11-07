@@ -101,8 +101,9 @@ No request needs an internal name. In a renamed copy the original names are dead
 
 - **Decoy:** a key exactly equal to a name this copy renamed.
 - **Foreign:** a key `<name>$<8 base36 characters>` for one of those names, with a suffix other than this copy's.
+- **Foreign in text:** `<name>$<8 base36 characters>` for one of those names inside a string value, or inside a longer key, with any suffix, this copy's own included. A copy maps its own names back to the originals wherever its answer shows them. So an answer that echoed such a value would show whether a guessed suffix was right.
 
-Only the keys of plain objects are checked, at any depth up to 32 levels and 10,000 keys (array elements count toward that). Values are never inspected. Only the names this copy renamed are tripwires: a listed name the copy skipped never trips, and the copy's own renamed names do not either.
+The scan walks plain objects and arrays at any depth, up to 32 levels and 10,000 keys (array elements count toward that). A value that holds an original name with no suffix is left alone. Only the names this copy renamed are tripwires: a listed name the copy skipped never trips, and a key that is exactly the copy's own renamed name does not either.
 
 | Case | Answer |
 | :-- | :-- |
