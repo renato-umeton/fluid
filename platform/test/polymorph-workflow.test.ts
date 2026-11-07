@@ -227,9 +227,12 @@ describe("startRotation", () => {
 	it("logs a failure to start and never throws, so whatever asked for the rotation still finishes", async () => {
 		const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
 		const failing = { create: async () => Promise.reject(new Error("workflows unavailable")) };
-		expect(await startRotation(p.t.env, failing as never, { repo: "user-1", reason: "install", key: "install" })).toBeNull();
-		expect(await startRotation(p.t.env, undefined, { repo: "user-1", reason: "install", key: "install" })).toBeNull();
-		expect(error.mock.calls.map(([line]) => String(line))).toEqual([expect.stringMatching(/rotation rot-[0-9a-f]{8}-install of user-1 \(install\) did not start: workflows unavailable$/), expect.stringMatching(/did not start: .*RotateWorkflow/)]);
+		expect(await startRotation(p.t.env, failing as never, { repo: "user-1", reason: "install", key: "k-failing" })).toBeNull();
+		expect(error.mock.calls.map(([line]) => String(line))).toEqual([expect.stringMatching(/rotation rot-[0-9a-f]{8}-k-failing of user-1 \(install\) did not start: workflows unavailable$/)]);
+	});
+
+	it("throws when the platform has a secret but no rotate workflow binding, a mistake no request should hide", async () => {
+		await expect(startRotation(p.t.env, undefined as never, { repo: "user-1", reason: "install", key: "k-unbound" })).rejects.toThrow(/no RotateWorkflow binding/);
 	});
 });
 

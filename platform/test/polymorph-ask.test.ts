@@ -83,6 +83,8 @@ beforeAll(() => {
 		"user-other": { ...PUBLISHED, "app/other.ts": "export const other = 1;\n" },
 		"user-crowd": { ...PUBLISHED, "app/crowd.ts": "export const crowd = 1;\n" },
 		"user-dosing": DOSING,
+		"user-flag": { ...PUBLISHED, "app/flag.ts": "export const flag = 1;\n" },
+		"user-unbound": { ...PUBLISHED, "app/unbound.ts": "export const unbound = 1;\n" },
 		"user-flaky": { ...PUBLISHED, "app/flaky.ts": "export const flaky = 1;\n" },
 		"user-resecret": { ...PUBLISHED, "app/resecret.ts": "export const resecret = 1;\n" },
 		"user-renames": { ...PUBLISHED, "app/renames.ts": "export const renames = 1;\n" },
@@ -621,6 +623,30 @@ describe("serveAsk's clinical dose backstop with a copy", () => {
 			expect(served.fork).not.toHaveProperty("variant");
 			expect(served.computed_dose).toBeNull();
 			expect((await ledgerOf("user-dosing")).map((record) => "variant" in record)).toEqual([false]);
+		},
+		SLOW_MS,
+	);
+});
+
+describe("serveAsk's guard", () => {
+	it(
+		"has no input that switches it off: an asBuilt field, as the soak's own entry point once took, changes nothing",
+		async () => {
+			await storeCopy("user-flag", 1);
+			const flagged = { repo: "user-flag", ref: "main", request: naming("researchNeedsAttestation"), useModel: false, userId: "flag", fallback: true, asBuilt: true } as ServeAskInput;
+			expect((await refusal(serveAsk(deps, flagged))).status).toBe(403);
+		},
+		SLOW_MS,
+	);
+
+	it(
+		"fails loudly, rather than refuse quietly with nothing rotating, when the rotate workflow binding is missing",
+		async () => {
+			await storeCopy("user-unbound", 1);
+			const unbound = { env: p.t.env, exports: { LlmHost: MODEL.LlmHost } } as never;
+			const failure = await serveAsk(unbound, { repo: "user-unbound", ref: "main", request: naming("researchNeedsAttestation"), useModel: false, userId: "unbound", fallback: true }).catch((error: unknown) => error);
+			expect(failure).not.toBeInstanceOf(HttpError);
+			expect((failure as Error).message).toMatch(/no RotateWorkflow binding/);
 		},
 		SLOW_MS,
 	);

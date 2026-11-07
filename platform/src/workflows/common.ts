@@ -335,13 +335,15 @@ export function landedKey(commit: string): string {
  * starts none (it would only skip), and a failure to start is logged, never
  * thrown, since whatever asked for the rotation (a refused request, a landed
  * change, a new fork) finishes either way and the schedule rotates every fork
- * within six hours.
+ * within six hours. A missing binding, which only a deployment mistake leaves,
+ * is thrown.
  */
-export async function startRotation(env: Env, binding: WorkflowBinding<RotateParams> | undefined, input: { repo: string; reason: RotationReason; key: string }): Promise<{ id: string; created: boolean } | null> {
+export async function startRotation(env: Env, binding: WorkflowBinding<RotateParams>, input: { repo: string; reason: RotationReason; key: string }): Promise<{ id: string; created: boolean } | null> {
 	if (polymorphSecret(env) === null) return null;
+	// A deployment mistake, not a passing failure: thrown, so no request or workflow carries on with nothing rotating.
+	if (!binding) throw new Error("ctx.exports has no RotateWorkflow binding");
 	const id = rotationId(input.repo, input.key);
 	try {
-		if (!binding) throw new Error("ctx.exports has no RotateWorkflow binding");
 		return await startInstance(binding, id, { repo: input.repo, reason: input.reason, runId: `run_${id}` });
 	} catch (error) {
 		console.error(`polymorph: rotation ${id} of ${input.repo} (${input.reason}) did not start: ${errorText(error)}`);

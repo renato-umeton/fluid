@@ -1,11 +1,12 @@
-// The platform's ask path, shared by POST /api/ask and the yellow soak's
-// end-to-end host: ask the fork (or stock after a safety grace period), refuse
-// any clinical card with a computed dose, and append the answer's run-time
-// record to the given user's ledger. A fork with a verified renamed copy (see
-// polymorph/) is guarded on every ref: its copy's commit answers from the
-// copy, behind the copy's tripwires, and any other commit answers plain to a
-// request those tripwires let through.
-import type { MorphState } from "../durable/fleet.ts";
+// The platform's ask path: ask the fork (or stock after a safety grace
+// period), refuse any clinical card with a computed dose, and append the
+// answer's run-time record to the given user's ledger. serveAsk (POST
+// /api/ask) guards a fork with a verified renamed copy (see polymorph/) on
+// every ref: its copy's commit answers from the copy, behind the copy's
+// tripwires, and any other commit answers plain to a request those tripwires
+// let through. serveAskAsBuilt, the yellow soak's own entry point, asks a
+// commit exactly as built.
+import type { MorphState, SafetyFallback } from "../durable/fleet.ts";
 import { currentStockTag } from "../forks/provision.ts";
 import { STOCK_REPO } from "../lib/names.ts";
 import { polymorphSecret } from "../polymorph/install.ts";
@@ -21,7 +22,7 @@ import { hasClinicalDose, markSafety, SAFETY_SIGNALS } from "./safety.ts";
 
 /** The runtime, plus the rotate workflow, which a request tripping a fork's copy (on any ref) or a copy that no longer loads starts. */
 export interface AskDeps extends RuntimeDeps {
-	exports: RuntimeDeps["exports"] & { RotateWorkflow?: WorkflowBinding<RotateParams> };
+	exports: RuntimeDeps["exports"] & { RotateWorkflow: WorkflowBinding<RotateParams> };
 }
 
 /** What every request that trips a copy's wire gets, whichever wire it was, so a sender learns nothing about the copy. */
@@ -41,16 +42,15 @@ export interface ServeAskInput {
 	userId: string;
 	/** Apply the safety fallback (production main only). */
 	fallback: boolean;
-	/**
-	 * Ask the plain fork at ref exactly as built: no renamed copy and no
-	 * tripwire scan. Only the yellow soak's host sets it: it checks a commit as
-	 * it landed, while the copy Fleet holds is of the commit before until a
-	 * rotation stores one, and that copy's names could refuse the new commit's
-	 * own scenarios. Every other ask, on any ref, goes through the fork's copy.
-	 */
-	asBuilt?: boolean;
 	/** On a re-ask (override or attestation), the first answer of the same question; recorded as reask_of. */
 	reaskOf?: string;
+}
+
+/** What answered: the fork or stock, under which ref, and the safety fallback that sent the ask to stock. */
+interface Served {
+	repo: string;
+	ref: string;
+	fallback: SafetyFallback | null;
 }
 
 export type ServedCard = AnswerCardLike & { fork: Record<string, unknown> };
@@ -64,24 +64,48 @@ interface Answer {
 }
 
 export async function serveAsk(deps: AskDeps, input: ServeAskInput): Promise<ServedCard> {
-	const { env } = deps;
 	const { repo, ref, request, useModel } = input;
-	const fleet = fleetStub(env);
 	// Safety fallback (spec 7): after a safety release's grace period, a fork still pinned below it is
 	// answered by stock at that release (production only: main). The card carries a visible signal.
 	// askState also returns the fork's verified renamed copy, which guards every ref, in the same call.
-	const state = repo !== STOCK_REPO && (input.fallback || !input.asBuilt) ? await fleet.askState(repo) : null;
+	const state = repo !== STOCK_REPO ? await fleetStub(deps.env).askState(repo) : null;
 	const fallback = input.fallback ? (state?.fallback ?? null) : null;
-	const copy = input.asBuilt ? null : (state?.morph ?? null);
-	let result: Answer = fallback ? { ...(await askFork(deps, { repo: STOCK_REPO, ref: fallback.tag, request, useModel })), variant: null } : await askOwnFork(deps, { repo, ref, request, useModel, copy });
-	let card = fallback
-		? markSafety(result.card, SAFETY_SIGNALS.stockFallback, `Safety fallback: the grace period of stock ${fallback.tag} ended ${fallback.graceUntil.slice(0, 10)} and this fork is still pinned to ${fallback.from}, so stock ${fallback.tag} answered. Apply the open repair or upgrade to use your customizations again.`)
-		: result.card;
-	let served = fallback ? { repo: STOCK_REPO, ref: fallback.tag, fallback } : { repo, ref, fallback: null };
+	if (fallback) {
+		const result = await askFork(deps, { repo: STOCK_REPO, ref: fallback.tag, request, useModel });
+		const card = markSafety(result.card, SAFETY_SIGNALS.stockFallback, `Safety fallback: the grace period of stock ${fallback.tag} ended ${fallback.graceUntil.slice(0, 10)} and this fork is still pinned to ${fallback.from}, so stock ${fallback.tag} answered. Apply the open repair or upgrade to use your customizations again.`);
+		return deliver(deps, input, { ...result, card, variant: null }, { repo: STOCK_REPO, ref: fallback.tag, fallback });
+	}
+	return deliver(deps, input, await askOwnFork(deps, { repo, ref, request, useModel, copy: state?.morph ?? null }), { repo, ref, fallback: null });
+}
+
+/**
+ * The yellow soak's ask: the commit exactly as built, with no renamed copy
+ * and no tripwire scan, then the same dose backstop and ledger record as
+ * every ask. The soak checks the commit that landed, while Fleet may still
+ * hold the previous commit's copy, whose names could refuse the new commit's
+ * own scenarios. It is an entry point of its own, so that no input of
+ * serveAsk can switch the guard off.
+ */
+export async function serveAskAsBuilt(deps: RuntimeDeps, input: Omit<ServeAskInput, "fallback">): Promise<ServedCard> {
+	const result = await askFork(deps, { repo: input.repo, ref: input.ref, request: input.request, useModel: input.useModel });
+	return deliver(deps, input, { ...result, variant: null }, { repo: input.repo, ref: input.ref, fallback: null });
+}
+
+/**
+ * What every answer goes through on its way out: the dose backstop, the
+ * ledger record (with reask_of, and the copy's variant when a copy answered),
+ * and the response's fork wrapper.
+ */
+async function deliver(deps: RuntimeDeps, input: Omit<ServeAskInput, "fallback">, answered: Answer, servedFirst: Served): Promise<ServedCard> {
+	const { env } = deps;
+	const { repo, request, useModel } = input;
+	let result = answered;
+	let card = answered.card;
+	let served = servedFirst;
 	// Backstop: no answer with a computed clinical dose is ever served, whatever the fork's code does.
 	if (hasClinicalDose(card)) {
 		if (served.repo === STOCK_REPO) throw new Error("stock answered a clinical card with a computed dose");
-		const pinned = (await fleet.get(repo))?.pinnedTag ?? (await currentStockTag(env));
+		const pinned = (await fleetStub(env).get(repo))?.pinnedTag ?? (await currentStockTag(env));
 		console.error(`safety guard: ${repo}@${result.sha.slice(0, 7)} answered a clinical card with a computed dose; serving stock ${pinned}`);
 		result = { ...(await askFork(deps, { repo: STOCK_REPO, ref: pinned, request, useModel })), variant: null };
 		card = markSafety(result.card, SAFETY_SIGNALS.clinicalDose, `Safety guard: this fork's answer computed a clinical dose, which the floor forbids, so stock ${pinned} answered instead.`);
