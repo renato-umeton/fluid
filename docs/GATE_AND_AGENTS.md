@@ -160,7 +160,7 @@ The mothership owns it. Stock ships the core suite in `tests/e2e/manifest.json` 
 | `platform` | `PLATFORM_SCENARIOS` in `platform/src/yellow/tiers.ts` | Runs instead of the stock tier when the pinned tag predates the suite (an empty stock suite). The runner then comes from the stock source bundled into the platform. |
 | `user` | `tests/user/e2e.json` in the fork at the yellow commit | Extra scenarios from the user or the test suggester. A scenario cannot reuse a stock or platform id (it is rejected and logged); `"disabled": true` skips it and logs its `disabledReason`; at most 10 run. |
 
-Steps that touch platform state act for a synthetic test user scoped to the run (`e2e-<run id>`): asks go through the platform's own ask path (the same safety guard users get) at the yellow commit, and overrides and ledger reads use that user's own ledger. The real user's ledger never sees a soak.
+Steps that touch platform state act for a synthetic test user scoped to the run (`e2e-<run id>`): asks go through the platform's own ask path at the yellow commit, as built (`serveAskAsBuilt`: the same dose backstop users get, with no renamed copy and no tripwire scan), and overrides and ledger reads use that user's own ledger. The real user's ledger never sees a soak.
 
 ### Scenario format
 
@@ -226,12 +226,12 @@ Each fork can run its own renamed copy of its code, in which upstream's internal
 | A merge mode gate that lands on `main` (customizations, outside imports, contest picks, repair applies), once the gate sets the fork back to `pinned` | `landed` | landed commit |
 | An upgrade that lands with `auto_upgrade`, and a one-tap upgrade approval | `landed` | landed commit |
 | A yellow rollback's revert commit | `landed` | landed commit |
-| `POST /api/forks` once it provisions a fork, and `SeedForkWorkflow` for a seeded fork with no change still gating | `install` | fork |
+| `POST /api/forks` once it provisions a fork, and `SeedForkWorkflow` for a seeded fork with no change still gating | `install` | fork, keyed by when the fleet registered it, so a fork deleted and created again under the same name gets its own |
 | `POST /api/admin/fleet/rotate`, with or without a repo | `admin` | request |
 
 Until a landed commit's rotation stores a copy of it, `main` answers plain, behind the stored copy's tripwire scan. A fork whose rotation was refused, or skipped even after the busy retries, gets its next try from the schedule within 6 hours.
 
-**Runs.** Every rotation logs a `rotate` run (`GET /api/runs/:runId`) with one step, "Rotate to the next renamed copy". It ends `passed` (rotated), `failed` (refused, with the failures), or `cancelled` (skipped, with `cancelReason`). A rotated or refused run also keeps the epoch and the commit. An error that outlasts the step's retries also ends it `failed`, with the error. No run keeps the copy's fingerprint, because anyone who knows a run id can read the run. A fleet-wide run has the step "Rotate every fork" and ends `passed` with the number of forks; each fork's rotation logs its own run. The run format is in [API.md](API.md#rotate-run-record).
+**Runs.** Every rotation logs a `rotate` run (`GET /api/runs/:runId`) with one step, "Rotate to the next renamed copy". It ends `passed` (rotated), `failed` (refused, with the failures), or `cancelled` (skipped, with `cancelReason`). A rotated or refused run also keeps the epoch and the commit. A run that cleared a stored copy (step 5) has `cleared: true`, even when that try then waited for a busy fork and a later try ended the run. If a later try rotated the fork, its step says that an earlier try cleared the copy it replaces. An error that outlasts the step's retries also ends it `failed`, with the error. No run keeps the copy's fingerprint, because anyone who knows a run id can read the run. A fleet-wide run has the step "Rotate every fork" and ends `passed` with the number of forks; each fork's rotation logs its own run. The run format is in [API.md](API.md#rotate-run-record).
 
 ## Harvest is opt-in
 

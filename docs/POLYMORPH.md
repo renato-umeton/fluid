@@ -45,7 +45,7 @@ Git keeps the readable code. The customize agent, recipes, contests, merges, and
 
 Two callers ask for a copy:
 
-- **A rotation's gate.** `rotateFork` runs a check mode gate with `GateInput.morph`, and only `rotateFork` passes it (see "How the gate checks a copy").
+- **A rotation.** `rotateFork` runs a check mode gate with `GateInput.morph`, and only `rotateFork` passes it (see "How the gate checks a copy"). A `mismatch` rotation that stores no new copy also builds the stored copy again, without starting it, to see whether it still builds (see "Tripwires and refusals").
 - **The live ask path.** It asks for a copy when Fleet holds a verified copy of the fork. At the copy's commit it loads the copy. At any other commit it builds the stored copy without starting it, only to get its names for the tripwire scan.
 
 A fork's first copy comes from a rotation: `POST /api/forks` and `SeedForkWorkflow` each start one, and it makes and checks that copy.
@@ -109,7 +109,7 @@ Only the keys of plain objects are checked, at any depth up to 32 levels and 10,
 | A key hits a tripwire | 403 `Request refused by a security check.`, the same for both kinds. The platform records a `tripwire` security event and starts one rotation of this copy in each 10-minute window, however many requests trip it. The fork is not asked, and no ledger row is written. |
 | The request is too deep or has too many keys to scan | 400 `Request too large or too deeply nested.` Nothing is recorded, and no rotation starts. |
 | The stored copy cannot be built because a read failed in Artifacts | 503 `The fork's renamed copy could not be loaded; retry shortly.`, with `retry-after: 10`, on every ref. Nothing is recorded, and no rotation starts. |
-| The stored copy no longer builds as verified for another reason (a changed secret, other names, code the renamer refuses now) | The plain fork answers without a scan, and a rotation starts (reason `mismatch`). If that rotation stores no new copy, it builds the stored copy again. When that still fails, for a reason other than a failed read, the rotation clears the stored copy and records `copy_cleared`. The fork then answers as one with no copy until a later rotation stores one. |
+| The stored copy no longer builds as verified for another reason (a changed secret, other names, code the renamer refuses now) | The plain fork answers without a scan, with the model off at the copy's commit. One rotation of this copy starts in each 10-minute window (reason `mismatch`). If that rotation stores no new copy, it builds the stored copy again. When that still fails, for a reason other than a failed read, the rotation clears the stored copy, keeping its epoch, and records `copy_cleared`. The fork then answers as one with no copy until a later rotation stores one. |
 
 Error bodies carry `error` and `requestId`, like every other API error.
 
@@ -123,7 +123,7 @@ The stored copy was made from the commit that `main` had at its last passing rot
 These asks run with no copy and no scan:
 
 - every ask on a platform without a usable secret, even when Fleet holds a copy;
-- a fork that has no stored copy yet;
+- a fork with no stored copy: none stored yet, or one a rotation cleared;
 - the yellow soak's end-to-end host, which asks the commit as it landed through its own entry point, `serveAskAsBuilt` (`serveAsk` has no input that turns the guard off);
 - `main` under an active safety fallback, where stock answers. The safety fallback (main only) and the clinical dose backstop are unchanged.
 
@@ -134,10 +134,10 @@ These asks run with no copy and no scan:
 A rotation of a fork that is `provisioning`, `upgrading`, or `gating` waits: the workflow tries again a minute later, up to 5 times, and notes each wait on the run. A rotation skips when:
 
 - there is no usable secret;
-- the fork is not in the fleet;
+- the fork is not in the fleet, or leaves it during the rotation;
 - the fork is still busy after the last try;
 - the gate could make no copy;
-- `main` moved during the gate;
+- `main` moved during the gate, or could not be read after it;
 - another rotation moved the fork first.
 
 A skip changes nothing, except that a `mismatch` rotation clears a stored copy that no longer builds (see "Tripwires and refusals"). A failed read in Artifacts throws instead, so the workflow step retries.
@@ -150,10 +150,10 @@ Rotations run in the `fluid-rotate` workflow. What starts one:
 | A tripwire hit on the live path | `tripwire` | one per copy in each 10-minute window |
 | A stored copy that no longer builds as verified | `mismatch` | one per copy in each 10-minute window |
 | A change landing on `main`: a merge mode gate (customizations, outside imports, contest picks, repair applies), an upgrade with `auto_upgrade`, a one-tap upgrade approval, or a yellow rollback | `landed` | one per landed commit |
-| A new fork: `POST /api/forks`, and `SeedForkWorkflow` for a seeded fork with no change still gating | `install` | one per fork |
+| A new fork: `POST /api/forks`, and `SeedForkWorkflow` for a seeded fork with no change still gating | `install` | one per fork, and one more for a fork deleted and created again under the same name |
 | `POST /api/admin/fleet/rotate`, for one fork or the whole fleet | `admin` | each request |
 
-Each rotation logs a `rotate` run (`GET /api/runs/:runId`): a rotated or refused run records the epoch and the commit, and a skipped one its `cancelReason`. The run never holds the copy's fingerprint. Details in [GATE_AND_AGENTS.md](GATE_AND_AGENTS.md#rotation) and [API.md](API.md#rotate-run-record).
+Each rotation logs a `rotate` run (`GET /api/runs/:runId`): a rotated or refused run records the epoch and the commit, and a skipped one its `cancelReason`. A run that cleared a stored copy also has `cleared: true`, even when that try then waited for a busy fork and a later try ended the run. The run never holds the copy's fingerprint. Details in [GATE_AND_AGENTS.md](GATE_AND_AGENTS.md#rotation) and [API.md](API.md#rotate-run-record).
 
 ## Records
 
