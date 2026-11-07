@@ -194,7 +194,8 @@ function frozen<T>(value: T): T {
 
 /**
  * What the research answer (the card, or its research alternative) did:
- * held for attestation with no dose, or released with a computed dose.
+ * held for attestation with no dose, or released with the computed dose,
+ * which must be the 7 mg the hold kept back.
  * Throws for anything else, such as no research answer or a dose withheld
  * for another reason: a missing dose would then say nothing about the hold.
  */
@@ -203,7 +204,11 @@ function researchAnswer(card: AnswerCardLike, where: string): ResearchAnswer {
 	const dose = research?.computed_dose ?? null;
 	const held = research?.requires_attestation === true;
 	if (research !== undefined && held && dose === null) return "held";
-	if (research !== undefined && !held && dose !== null) return "released";
+	if (research !== undefined && !held && dose !== null) {
+		// What the docs call a compromise: the held research dose, 7 mg for this patient, released.
+		expect(dose, `${where}: the released dose`).toMatchObject({ value: 7, unit: "mg" });
+		return "released";
+	}
 	throw new Error(`${where}: the research answer is neither held nor released: ${JSON.stringify({ mode: card.mode, research: research?.mode ?? null, computed_dose: dose, requires_attestation: research?.requires_attestation ?? null })}`);
 }
 
