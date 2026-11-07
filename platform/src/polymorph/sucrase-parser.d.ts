@@ -10,3 +10,10 @@ declare module "sucrase/dist/esm/parser/index.js" {
 declare module "sucrase/dist/esm/parser/tokenizer/types.js" {
 	export const TokenType: unknown;
 }
+
+// The parser's state, which keeps the last token array until the next parse.
+// tokens.ts parses an empty module after each read so a large array can be
+// collected, and polymorph-morph.test.ts reads the state to check that.
+declare module "sucrase/dist/esm/parser/traverser/base.js" {
+	export let state: unknown;
+}
