@@ -12,6 +12,7 @@ import { CopyMismatchError, plainKindOf, PolymorphUnavailableError, type PlainKi
 import { buildCopy, clearCopyCaches, planCopy, readContract } from "../polymorph/install.ts";
 import type { SkippedName } from "../polymorph/list.ts";
 import { unmorphText } from "../polymorph/morph.ts";
+import { forgetRotations } from "../polymorph/started.ts";
 import { clearStockCaches } from "../stock/suite.ts";
 import { buildE2ERunnerModuleMap, buildModuleMap, buildRunnerModuleMap, isRuntimePath, RUNTIME_DIRS, type ModuleMap } from "./modules.ts";
 import { isSha, resolveCommit, shortRef } from "./refs.ts";
@@ -438,14 +439,16 @@ export function loadE2ERunner(env: Env, key: string, stockFiles: Record<string, 
  * Starts the loader over as a new isolate would (tests and admin use): drops
  * the module maps, the names hash each copy built with, and the fallback
  * lines already logged; the copies' plans, upstream lists, and the short
- * secret report (polymorph/install.ts); the stock suites and release tag
- * commits (stock/suite.ts); and the file contents read (runtime/repo-files.ts).
+ * secret report (polymorph/install.ts); the rotations this isolate started
+ * (polymorph/started.ts); the stock suites and release tag commits
+ * (stock/suite.ts); and the file contents read (runtime/repo-files.ts).
  */
 export function clearRuntimeCache(): void {
 	builds.clear();
 	copyHashes.clear();
 	reportedFallbacks.clear();
 	clearCopyCaches();
+	forgetRotations();
 	clearStockCaches();
 	clearBlobCache();
 }

@@ -15,6 +15,7 @@ import { copyKey, GATE_STEP, INSTALL_KEY, LIVE_ROTATION_WINDOW_MS, rotationId, s
 import { SeedForkWorkflow } from "../src/workflows/fleet.ts";
 import { GateWorkflow } from "../src/workflows/gate.ts";
 import { RotateWorkflow } from "../src/workflows/rotate.ts";
+import { clearRuntimeCache } from "../src/runtime/loader.ts";
 import { FAN_OUT } from "../src/workflows/upgrade.ts";
 import { apiEnv, cookieFor, post } from "./helpers/api-env.ts";
 import { POLYMORPH_TEST_SECRET, PUBLISHED, REFLECTIVE, TAG, polymorphPlatform, type PolymorphPlatform } from "./helpers/polymorph-platform.ts";
@@ -229,6 +230,29 @@ describe("startRotation", () => {
 		const failing = { create: async () => Promise.reject(new Error("workflows unavailable")) };
 		expect(await startRotation(p.t.env, failing as never, { repo: "user-1", reason: "install", key: "k-failing" })).toBeNull();
 		expect(error.mock.calls.map(([line]) => String(line))).toEqual([expect.stringMatching(/rotation rot-[0-9a-f]{8}-k-failing of user-1 \(install\) did not start: workflows unavailable$/)]);
+	});
+
+	it("awaits no second create for a rotation this isolate started, until the loader starts over", async () => {
+		const creates: string[] = [];
+		const binding = { create: async ({ id }: { id: string }) => (creates.push(id), creates.length > 1 ? Promise.reject(new Error(`instance ${id} already exists`)) : { id }) };
+		const key = "k-memo";
+		const id = rotationId("user-1", key);
+		expect(await startRotation(p.t.env, binding as never, { repo: "user-1", reason: "tripwire", key })).toEqual({ id, created: true });
+		for (let i = 0; i < 3; i++) expect(await startRotation(p.t.env, binding as never, { repo: "user-1", reason: "tripwire", key })).toEqual({ id, created: false });
+		expect(creates).toEqual([id]);
+		// A new isolate knows nothing of it: the binding answers that the instance exists.
+		clearRuntimeCache();
+		expect(await startRotation(p.t.env, binding as never, { repo: "user-1", reason: "tripwire", key })).toEqual({ id, created: false });
+		expect(creates).toEqual([id, id]);
+	});
+
+	it("remembers no rotation that failed to start, so the next request tries again", async () => {
+		vi.spyOn(console, "error").mockImplementation(() => undefined);
+		let fail = true;
+		const binding = { create: async ({ id }: { id: string }) => (fail ? Promise.reject(new Error("workflows unavailable")) : { id }) };
+		expect(await startRotation(p.t.env, binding as never, { repo: "user-1", reason: "tripwire", key: "k-retry" })).toBeNull();
+		fail = false;
+		expect(await startRotation(p.t.env, binding as never, { repo: "user-1", reason: "tripwire", key: "k-retry" })).toEqual({ id: rotationId("user-1", "k-retry"), created: true });
 	});
 
 	it("throws when the platform has a secret but no rotate workflow binding, a mistake no request should hide", async () => {

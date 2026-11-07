@@ -5,6 +5,7 @@
 import type { Remote } from "../git/ops.ts";
 import type { Json } from "../lib/json.ts";
 import { polymorphSecret } from "../polymorph/install.ts";
+import { rememberRotation, rotationStarted } from "../polymorph/started.ts";
 import type { RotationReason } from "../polymorph/rotate.ts";
 import type { PlatformExports } from "../runtime/loader.ts";
 import { openRepo } from "../runtime/repo-files.ts";
@@ -343,8 +344,12 @@ export async function startRotation(env: Env, binding: WorkflowBinding<RotatePar
 	// A deployment mistake, not a passing failure: thrown, so no request or workflow carries on with nothing rotating.
 	if (!binding) throw new Error("ctx.exports has no RotateWorkflow binding");
 	const id = rotationId(input.repo, input.key);
+	// Started from this isolate already: the binding would only say it exists.
+	if (rotationStarted(id)) return { id, created: false };
 	try {
-		return await startInstance(binding, id, { repo: input.repo, reason: input.reason, runId: `run_${id}` });
+		const started = await startInstance(binding, id, { repo: input.repo, reason: input.reason, runId: `run_${id}` });
+		rememberRotation(id);
+		return started;
 	} catch (error) {
 		console.error(`polymorph: rotation ${id} of ${input.repo} (${input.reason}) did not start: ${errorText(error)}`);
 		return null;
