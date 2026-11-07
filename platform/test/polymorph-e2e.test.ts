@@ -411,8 +411,10 @@ async function attack(forks: Fork[], plan: Attack, before: BuiltIns): Promise<At
 	restoreInstalled(forks);
 	const { outcomes, rotations } = await send(plan.sends);
 	const rotated = rotations.map((params) => params.repo!);
-	// One rotation per copy, however many requests tripped it.
+	// One rotation per copy, however many requests tripped it, and one for each copy that refused a request.
 	expect(new Set(rotated).size, `attack ${plan.id}: rotations started per fork`).toBe(rotated.length);
+	const refused = reposWhere(outcomes, (outcome) => outcome.platform === "refused");
+	expect([...rotated].sort(), `attack ${plan.id}: forks that started a rotation, against the forks that refused a request`).toEqual([...refused].sort());
 	for (const params of rotations) recordRotation(forkOf(forks, params.repo!), await rotateFork(platform.deps, params.repo!, params.reason!));
 	expect(builtInsChangedSince(before), `built-ins changed by attack ${plan.id}`).toEqual([]);
 	return {
@@ -427,7 +429,7 @@ async function attack(forks: Fork[], plan: Attack, before: BuiltIns): Promise<At
 			direct: { compromised: reposWhere(outcomes, (outcome) => outcome.direct === "released") },
 			platform: {
 				compromised: reposWhere(outcomes, (outcome) => outcome.platform === "released"),
-				refused: reposWhere(outcomes, (outcome) => outcome.platform === "refused"),
+				refused,
 				rotated,
 			},
 		},
@@ -597,6 +599,8 @@ describe(`a fleet of ${FLEET} forks on a release with a planted zero-day`, () =>
 			expect(wiresTripped(a2.outcomes)).toEqual({ foreign: n - 1 });
 			expect(afterRotation).toEqual({ attack: "A2", compromised: [], refused: [leaked.repo] });
 			expect(wiresTripped(replay.outcomes)).toEqual({ foreign: 1 });
+			expect(replay.outcomes.map((outcome) => [outcome.plain, outcome.direct]), "the leaked name on its fork, asked directly: plain fork, then new copy").toEqual([["held", "held"]]);
+			expect(replay.rotations.map((params) => params.repo), "rotations the replay started").toEqual([leaked.repo]);
 			expect(requestCounts(a3)).toEqual({ sent: GUESSES, plain: 0, direct: 0, compromised: 0, refused: GUESSES, moved: 1 });
 			expect(wiresTripped(a3.outcomes)).toEqual({ foreign: GUESSES });
 			// Why no guess compromised the copy: one in 36^8 (about 2.8 trillion) guesses finds its real suffix, so 1000 find it about once in 2.8 billion runs.
