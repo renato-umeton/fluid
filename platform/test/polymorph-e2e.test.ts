@@ -51,6 +51,8 @@ const [MAJOR, MINOR] = TAG.slice(1).split(".").map(Number);
 /** The fixture release: the next minor release after the stock release the platform bundles. */
 const ZERO_DAY_TAG = `v${MAJOR}.${MINOR! + 1}.0`;
 const RELEASE = zeroDayRelease(PUBLISHED, ZERO_DAY_TAG);
+/** How the recording and the scoreboard name the fixture release, so nobody takes it for a stock release. */
+const RELEASE_LABEL = `${ZERO_DAY_TAG}, a test fixture with two planted bugs`;
 /** Upstream's list at the fixture release. */
 const LIST = parsePolymorphList(RELEASE[POLYMORPH_LIST_PATH]!);
 /** The internal flag that bug A lets a request set, by its name in upstream's source. */
@@ -410,7 +412,7 @@ function scoreboard(forks: Fork[], runs: AttackRun[], recording: ReturnType<type
 	const line = (row: string[]) => row.map((cell, column) => cell.padEnd(widths[column]!)).join("  ").trimEnd();
 	return [
 		"Polymorphic installation against a planted zero-day",
-		`${plural(forks.length, "fork")} on release ${ZERO_DAY_TAG}; each copy renames ${renamed} of the ${LIST.length} names on upstream's list.`,
+		`${plural(forks.length, "fork")} on release ${RELEASE_LABEL}; each copy renames ${renamed} of the ${LIST.length} names on upstream's list.`,
 		"",
 		line(header),
 		...rows.map(line),
@@ -432,7 +434,7 @@ function recordingOf(forks: Fork[], runs: AttackRun[], afterRotation: AfterRotat
 	return {
 		version: 1,
 		recordedAt: new Date().toISOString(),
-		release: ZERO_DAY_TAG,
+		release: RELEASE_LABEL,
 		listSize: LIST.length,
 		probes: compared[0]!,
 		forks: forks.map((fork) => {

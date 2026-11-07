@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "recordedAt": "2026-11-07T00:32:12.239Z",
-  "release": "v1.1.0",
+  "recordedAt": "2026-11-07T01:01:45.431Z",
+  "release": "v1.1.0, a test fixture with two planted bugs",
   "listSize": 74,
   "probes": 70,
   "forks": [
