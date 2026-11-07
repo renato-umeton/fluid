@@ -1,7 +1,7 @@
 # Polymorphic installation: design
 
 Issue: [#1](https://github.com/renato-umeton/fluid/issues/1), "Can the polymorphic aspect of Fluid be turned into an advantage to protect from zeroday cyberattacks?"
-Date: 2026-11-06. Status: the proof of concept is built on branch `issue-1-polymorphic-installation` and measured in tests (20 forks, with in-memory fakes for Artifacts and the Worker Loader). It has not run on the deployed site yet. Feature doc: [../POLYMORPH.md](../POLYMORPH.md). Plan: [../IMPLEMENTATION_PLAN.md](../IMPLEMENTATION_PLAN.md).
+Date: 2026-11-06. Status: the proof of concept is built on branch `issue-1-polymorphic-installation` and measured in tests (20 forks, with in-memory fakes for Artifacts and the Worker Loader). It has not run on the deployed site yet. Feature doc: [../POLYMORPH.md](../POLYMORPH.md).
 
 ## The question
 
