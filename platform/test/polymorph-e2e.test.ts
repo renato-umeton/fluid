@@ -14,7 +14,9 @@
 // POLYMORPH_DEMO=1 prints the scoreboard, and POLYMORPH_DEMO_RECORD=<path>
 // writes the recording the Polymorph view replays, checked with the view's own
 // validateDemo (package.json: polymorph:demo, polymorph:record). The platform
-// secret is fixed, so every run makes the same copies.
+// secret and the seed of the blind guesses are fixed, so every run makes the
+// same copies and sends the same requests; POLYMORPH_TEST_SECRET and
+// POLYMORPH_GUESS_SEED replace them.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -31,7 +33,7 @@ import type { RotateParams } from "../src/workflows/common.ts";
 // @ts-expect-error plain ES module from the static UI
 import { afterRotationLine, equivalenceLine, validateDemo } from "../public/js/polymorph-replay.js";
 import { zeroDayRelease } from "./fixtures/zero-day.ts";
-import { PUBLISHED, TAG, polymorphPlatform, type PolymorphPlatform } from "./helpers/polymorph-platform.ts";
+import { POLYMORPH_TEST_SECRET, PUBLISHED, TAG, polymorphPlatform, type PolymorphPlatform } from "./helpers/polymorph-platform.ts";
 import { fakeWorkflows } from "./helpers/workflows.ts";
 
 const FLEET = Number(process.env.POLYMORPH_FLEET ?? 4);
@@ -42,9 +44,13 @@ const DEMO = process.env.POLYMORPH_DEMO === "1";
 const RECORD_PATH = process.env.POLYMORPH_DEMO_RECORD;
 /** A run takes under a second per fork on a quiet machine (about 15 seconds for 20 forks); this leaves room for a loaded one. */
 const EXPERIMENT_MS = FLEET * 30_000;
+/** The platform secret that seeds every copy. */
+const SECRET = process.env.POLYMORPH_TEST_SECRET ?? POLYMORPH_TEST_SECRET;
+if (SECRET.length < 16) throw new Error("POLYMORPH_TEST_SECRET must have at least 16 characters: the platform treats a shorter secret as none");
 const GUESSES = 1000;
-/** Seeds the blind guesses, so every run sends the same ones. */
-const GUESS_SEED = 20_261_106;
+/** Seeds the blind guesses. */
+const GUESS_SEED = Number(process.env.POLYMORPH_GUESS_SEED ?? 20_261_106);
+if (!Number.isSafeInteger(GUESS_SEED)) throw new Error(`POLYMORPH_GUESS_SEED must be a whole number, got ${JSON.stringify(process.env.POLYMORPH_GUESS_SEED)}`);
 const BASE36 = "0123456789abcdefghijklmnopqrstuvwxyz";
 
 const [MAJOR, MINOR] = TAG.slice(1).split(".").map(Number);
@@ -67,11 +73,11 @@ const REPOS = Array.from({ length: FLEET }, (_, i) => forkRepoName(String(i + 1)
  * computes the dose (inv-attestation-recorded), so a skipped hold shows as a
  * computed dose.
  */
-const HELD = {
+const HELD = frozen({
 	question: "What is the right dose of Morphinex for a patient of 70 kg and 45 years?",
 	context: { chartOpen: { patientId: "synthetic_patient_117", identified: true } },
 	explicitMode: "research",
-};
+});
 /** HELD with display options, which the planted code reads from context.display. */
 const withDisplay = (display: Record<string, unknown>) => ({ ...HELD, context: { ...HELD.context, display } });
 
@@ -141,12 +147,22 @@ let platform: PolymorphPlatform;
 
 beforeAll(() => {
 	platform = polymorphPlatform(Object.fromEntries(REPOS.map((repo) => [repo, RELEASE])));
+	Object.assign(platform.t.env, { POLYMORPH_SECRET: SECRET });
 	// Upstream publishes the fixture release after the one the platform bundles, and every fork is a fresh fork of it.
 	platform.t.artifacts.seed("stock", { commits: [PUBLISHED, RELEASE], tags: { [TAG]: 0, [ZERO_DAY_TAG]: 1 } });
 	for (const repo of REPOS) platform.t.fleet.register({ repo, userId: userIdFromForkRepo(repo)!, persona: "p", pinnedTag: ZERO_DAY_TAG, status: "pinned" });
 });
 
 afterAll(() => platform?.cleanup());
+
+/** Freezes a value and every object in it, so no code path can change a request that a later path or request receives. */
+function frozen<T>(value: T): T {
+	if (typeof value === "object" && value !== null && !Object.isFrozen(value)) {
+		Object.freeze(value);
+		for (const inner of Object.values(value)) frozen(inner);
+	}
+	return value;
+}
 
 /** The exploit worked: the research answer (the card, or its research alternative) carries a computed dose and is not held for attestation. */
 function compromised(card: AnswerCardLike): boolean {
@@ -323,6 +339,7 @@ async function askThroughPlatform(sends: Send[]): Promise<{ answers: PlatformAns
 
 /** Sends each request to its fork, directly first, which changes nothing, then through the platform. Returns what each request did and the rotations started. */
 async function send(sends: Send[]): Promise<{ outcomes: Outcome[]; rotations: RotateParams[] }> {
+	frozen(sends);
 	const direct = await askDirectly(sends);
 	const { answers, rotations } = await askThroughPlatform(sends);
 	return { outcomes: sends.map(({ repo }, i) => ({ repo, ...direct[i]!, ...answers[i]! })), rotations };
@@ -472,11 +489,12 @@ describe(`a fleet of ${FLEET} forks on a release with a planted zero-day`, () =>
 			const control = await send(everyFork(HELD));
 			expect(control.outcomes.map((outcome) => [outcome.repo, outcome.plain, outcome.direct, outcome.platform])).toEqual(forks.map((fork) => [fork.repo, false, false, "answered"]));
 			expect(control.rotations).toEqual([]);
+			const attested = frozen({ ...HELD, attestation: true });
 			for (const fork of forks) {
 				for (const loaded of [await loadForkRuntime(platform.deps, fork.repo, "main"), await loadCopy(fork.repo)]) {
 					const held = await askLoaded(loaded, HELD);
 					expect([held.computed_dose, held.requires_attestation], `${loaded.isolateId}: held answer`).toEqual([null, true]);
-					expect((await askLoaded(loaded, { ...HELD, attestation: true })).computed_dose, `${loaded.isolateId}: attested answer`).not.toBeNull();
+					expect((await askLoaded(loaded, attested)).computed_dose, `${loaded.isolateId}: attested answer`).not.toBeNull();
 				}
 			}
 
