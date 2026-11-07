@@ -8,6 +8,7 @@ import config from "../cloudflare.config.ts";
 import { seedPlan } from "../src/fleet/seed-catalog.ts";
 import worker from "../src/index.ts";
 import * as entry from "../src/index.ts";
+import type { MorphState } from "../src/durable/fleet.ts";
 import { forkRepoName } from "../src/lib/names.ts";
 import { runsStub } from "../src/stubs.ts";
 import { deriveSeed, fingerprint } from "../src/polymorph/names.ts";
@@ -304,12 +305,15 @@ describe("tripKey", () => {
 });
 
 describe("copyKey", () => {
+	/** The copy Fleet stored at epoch 3 with this fingerprint, as the live path passes it. */
+	const stored = (fingerprint: string): MorphState => ({ epoch: 3, sha: "0123456789abcdef0123456789abcdef01234567", fingerprint, namesHash: "87806eb6", names: ["researchNeedsAttestation"], variant: "5eed0001", at: "2026-11-06T10:00:00.000Z" });
+
 	it("names the live path's mismatch rotation of a stored copy by the copy's epoch and the ten-minute window, and nothing about its fingerprint", () => {
 		const at = Date.parse("2026-11-06T10:07:00Z");
 		const window = Math.floor(at / LIVE_ROTATION_WINDOW_MS).toString(36);
-		expect(copyKey({ epoch: 3, fingerprint: "a1b2c3d4" }, at)).toBe(`c3-t${window}`);
-		expect(copyKey({ epoch: 3, fingerprint: "0f0f0f0f" }, at + 2 * 60_000)).toBe(`c3-t${window}`);
-		expect(copyKey({ epoch: 3, fingerprint: "a1b2c3d4" }, at + 3 * 60_000)).not.toBe(`c3-t${window}`);
+		expect(copyKey(stored("a1b2c3d4"), at)).toBe(`c3-t${window}`);
+		expect(copyKey(stored("0f0f0f0f"), at + 2 * 60_000)).toBe(`c3-t${window}`);
+		expect(copyKey(stored("a1b2c3d4"), at + 3 * 60_000)).not.toBe(`c3-t${window}`);
 	});
 });
 
