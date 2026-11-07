@@ -48,7 +48,7 @@ Tasks:
 **Goal**: the platform installs, verifies, serves, guards, and rotates renamed copies.
 **Success Criteria**: a fork with a verified epoch is served from a renamed copy with its own isolate id; the gate reports any card difference between plain and renamed copies as a tier 1 `polymorph-equivalence` failure; a request naming a dead original name is refused, recorded, and starts one rotation per copy; errors from a renamed copy never show renamed names; `rotateFork` moves a fork to the next epoch only after the check passes; with no secret or no list, everything behaves exactly as today.
 **Tests**: `platform/test/polymorph-loader.test.ts`, `polymorph-gate.test.ts`, `polymorph-fleet.test.ts`, `polymorph-ask.test.ts`, `polymorph-rotate.test.ts`.
-**Status**: In Progress (3a complete: spec and code quality reviews passed; 3b next)
+**Status**: Complete (3a and 3b: spec and code quality reviews passed, including fixes for overlapping rotations, the ref bypass, landed rotations after upgrades and rollbacks, copies that can no longer be built, and epochs that never repeat)
 
 Tasks (3a, then 3b):
 1. (3a) Loader: `LoadOptions.morph?: { epoch: number; onlyAt?: string }`. When the secret `POLYMORPH_SECRET` is set and the stock list exists at the fork's pinned tag (read from the `stock` repo and cached by stock commit), derive the seed, morph the map after `buildModuleMap`, and add `m<fingerprint>` to both the isolate id and the build cache key. `LoadedFork.morph` reports `{ epoch, fingerprint, names } | null`. With `onlyAt`, morph only when the resolved commit equals it.
@@ -65,7 +65,7 @@ Tasks (3a, then 3b):
 **Goal**: measure what polymorphic installation does against a planted zero-day, through the real platform code paths.
 **Success Criteria**: one test provisions 20 forks on a fixture release with two planted bugs and reports, and asserts: the upstream-built exploit compromises 20 of 20 plain forks and 0 of 20 renamed forks, and all 20 renamed forks refuse it and start a rotation; a leaked copy works only on its own fork and stops working after that fork rotates; 1000 blind guesses compromise nothing and are all refused; the public-field bug compromises 20 of 20 in both fleets; every copy passed the equivalence check with 0 differences. `npm run polymorph:demo` prints the scoreboard.
 **Tests**: `platform/test/polymorph-e2e.test.ts`, fixture `platform/test/fixtures/zero-day.ts`.
-**Status**: Not Started
+**Status**: In Progress (experiment built and spec reviewed; code quality fixes and docs in review)
 
 Tasks:
 1. `platform/test/fixtures/zero-day.ts`: `zeroDayRelease(files)` patches `app/cards.ts` in `draftFor` so display options are spread into the `enforceContract` options after the safety flag (mass assignment), and adds a public `display.preview` switch that skips the attestation hold. Anchors must throw if stock changes. Stock itself stays clean.
