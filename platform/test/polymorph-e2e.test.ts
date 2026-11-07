@@ -152,14 +152,39 @@ function compromised(card: AnswerCardLike): boolean {
 	return research !== undefined && research.computed_dose !== null && research.computed_dose !== undefined && research.requires_attestation !== true;
 }
 
+/** Each built-in's own properties, names and symbols, by key, as their descriptors. */
+type Realm = Record<string, Map<PropertyKey, PropertyDescriptor>>;
+
 /**
- * Own property names of the built-ins that every fake isolate shares with the
- * platform and the test (helpers/fake-loader.ts): if an attack changed them,
- * it could have reached forks it never asked, and the counts would not hold.
+ * The own properties of the built-ins that every fake isolate shares with the
+ * platform and the test (helpers/fake-loader.ts): if an attack added,
+ * removed, or replaced one, it could have reached forks it never asked, and
+ * the counts would not hold.
  */
-function realm(): Record<string, string[]> {
-	const names = (target: object) => Object.getOwnPropertyNames(target).sort();
-	return { "Object.prototype": names(Object.prototype), "Array.prototype": names(Array.prototype), "Function.prototype": names(Function.prototype), globalThis: names(globalThis) };
+function realm(): Realm {
+	const own = (target: object) => new Map(Reflect.ownKeys(target).map((key) => [key, Object.getOwnPropertyDescriptor(target, key)!]));
+	return { "Object.prototype": own(Object.prototype), "Array.prototype": own(Array.prototype), "Function.prototype": own(Function.prototype), globalThis: own(globalThis) };
+}
+
+const DESCRIPTOR_FIELDS = ["value", "get", "set", "writable", "enumerable", "configurable"] as const;
+
+/**
+ * The own properties added, removed, or changed since `before`: a value,
+ * getter, or setter that is another object (compared by identity, so a
+ * look-alike replacement counts), or other attributes.
+ */
+function realmChanges(before: Realm): string[] {
+	const after = realm();
+	const changes: string[] = [];
+	for (const [builtIn, properties] of Object.entries(before)) {
+		const now = after[builtIn]!;
+		for (const key of new Set([...properties.keys(), ...now.keys()])) {
+			const was = properties.get(key);
+			const is = now.get(key);
+			if (was === undefined || is === undefined || DESCRIPTOR_FIELDS.some((field) => !Object.is(was[field], is[field]))) changes.push(`${builtIn}[${String(key)}]`);
+		}
+	}
+	return changes;
 }
 
 /** The fork's stored copy, loaded as the live path loads it. */
@@ -178,8 +203,14 @@ async function installedNames(fork: Fork): Promise<ReadonlyMap<string, string>> 
 	return loaded.morph.names;
 }
 
+/** The most rows UserLedger.list returns: a count that reaches it only says "at least this many". */
+const LEDGER_LIST_MAX = 1000;
+
+/** The rows in the ledger of a fork's user. Throws rather than give a count that list cut short. */
 async function ledgerRows(repo: string): Promise<number> {
-	return (await ledgerStub(p.t.env, userIdFromForkRepo(repo)!).list(1000)).length;
+	const rows = (await ledgerStub(p.t.env, userIdFromForkRepo(repo)!).list(LEDGER_LIST_MAX)).length;
+	if (rows >= LEDGER_LIST_MAX) throw new Error(`${repo}: the ledger holds at least ${LEDGER_LIST_MAX} rows, as many as UserLedger.list returns, so the rows written by these requests cannot be counted`);
+	return rows;
 }
 
 /** The wire a refused request tripped, from Fleet's newest security event for the fork when that event names a display option the request sent; otherwise null. */
@@ -295,14 +326,14 @@ function moved(fork: Fork, result: RotationResult): void {
  * the rotate workflow would. Built-ins must be as they were before the
  * experiment once it is done.
  */
-async function attack(forks: Fork[], plan: Attack, before: ReturnType<typeof realm>): Promise<AttackRun> {
+async function attack(forks: Fork[], plan: Attack, before: Realm): Promise<AttackRun> {
 	restoreInstalled(forks);
 	const { outcomes, rotations } = await send(plan.sends);
 	const rotated = rotations.map((params) => params.repo!);
 	// One rotation per copy, however many requests tripped it.
 	expect(new Set(rotated).size, `attack ${plan.id}: rotations started per fork`).toBe(rotated.length);
 	for (const params of rotations) moved(forkOf(forks, params.repo!), await rotateFork(p.deps, params.repo!, params.reason!));
-	expect(realm(), `built-ins after attack ${plan.id}`).toEqual(before);
+	expect(realmChanges(before), `built-ins changed by attack ${plan.id}`).toEqual([]);
 	return {
 		outcomes,
 		recorded: {
@@ -455,7 +486,7 @@ describe(`a fleet of ${FLEET} forks on a release with a planted zero-day`, () =>
 				compromised: reposWhere(replay.outcomes, (outcome) => outcome.platform === "compromised"),
 				refused: reposWhere(replay.outcomes, (outcome) => outcome.platform === "refused"),
 			};
-			expect(realm(), "built-ins after the leaked copy's replay").toEqual(before);
+			expect(realmChanges(before), "built-ins changed by the leaked copy's replay").toEqual([]);
 
 			const third = forks[2]!;
 			const guesses = blindGuesses(GUESSES);
