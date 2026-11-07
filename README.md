@@ -4,7 +4,37 @@
 
 Fluid gives every user a git fork of the software they use, and lets them and any agent reshape it. A change reaches the user's `main` only when it behaves: upstream's tests pass, the user's own tests pass, and a live soak stays clean. It runs on Cloudflare Workers and Artifacts, and every commit of every fork is runnable as soon as it is pushed.
 
-This is an entry to Cloudflare's "Build the next Git platform" competition. Live demo: https://fluid.frontier-software.workers.dev (synthetic data only). To deploy your own copy, see [docs/DEPLOY.md](docs/DEPLOY.md). For the platform in one page, see [docs/OVERVIEW.md](docs/OVERVIEW.md).
+Patrick Collison [posted](https://x.com/patrickc/status/2116636967517798672) that he is building an "improvements" feature into all of his personal apps: a free-form text box hooked to an agent that implements whatever is submitted. [Renato Umeton](https://x.com/renato_umeton) replied in a two-post thread on 6 Nov 2026: Fluid answers the open questions this raises.
+
+- **Maintainable.** Each wish (a change and its intent record) is replayed on every release. See [Intent replay](#intent-replay).
+- **Collaborative.** Agents compete to grant a wish, and behavior picks the winner. See [Contest](#1-behavior-is-the-merge-rule).
+- **Secure.** Liquid software is polymorphic: "AI made zero-days cheap because we all run the same code; a fleet of forks is a moving target." See [Secure](#secure-a-fleet-of-forks-is-a-moving-target).
+
+Fluid is an entry to Cloudflare's "Build the next Git platform" competition. Live demo: https://fluid.frontier-software.workers.dev (synthetic data only). To deploy your own copy, see [docs/DEPLOY.md](docs/DEPLOY.md). For the platform in one page, see [docs/OVERVIEW.md](docs/OVERVIEW.md).
+
+## Secure: a fleet of forks is a moving target
+
+Every fork starts from the same upstream code, so a bug in upstream is a bug in every fork. One exploit written against upstream's public source reaches every user at once. Finding bugs got cheap: models now help find and exploit them (see the design doc's [background](docs/plans/2026-11-06-polymorphic-installation-design.md#background)). Fluid answers with **polymorphic installation**:
+
+- **Each fork runs its own renamed copy.** Upstream lists 74 internal names in `stock/polymorph.json`, such as `researchNeedsAttestation`. When the platform loads a fork's copy, it renames each one with a suffix from a secret seed for that fork, commit, and epoch, so `researchNeedsAttestation` becomes `researchNeedsAttestation$` and 8 secret characters. Git keeps the readable code, so customizations, contests, and upgrades work as before.
+- **The gate checks that the copy behaves the same.** Before a copy goes live, a check mode gate sends every probe to the plain fork and to the copy. Any difference fails tier 1, and the fork keeps the copy it has.
+- **Original names become tripwires.** No request needs an internal name, so a request that uses an original name, or another copy's name, was built from upstream's source or from a leaked copy. The platform refuses it with one answer for every wire, records a security event, and starts a rotation that moves that fork to a new copy.
+- **Copies rotate.** Every fork moves to a new copy every 6 hours and after a change lands on its `main`. Whatever an attacker learned about a copy goes stale.
+
+To measure it, a test release plants a zero-day in the medical app: a mass assignment bug that lets one request release a research dose held for attestation. Twenty forks on that release run through the platform's own loader, gate, and ask path, with in-memory fakes for Artifacts and the Worker Loader:
+
+| Attack | Plain fleet | Renamed copies, scan bypassed | Through the platform | Refused | Moved to a new copy |
+| :-- | :-- | :-- | :-- | :-- | :-- |
+| A: built from upstream's source | 20 of 20 | 0 of 20 | 0 of 20 | 20 of 20 | 20 of 20 |
+| A2: built from fork 7's leaked copy | 0 of 20 | 1 of 20 | 1 of 20 | 19 of 20 | 19 of 20 |
+| A3: 1000 blind guesses on fork 3 | 0 of 1000 | 0 of 1000 | 0 of 1000 | 1000 of 1000 | 1 of 1 fork |
+| B: public field only | 20 of 20 | 20 of 20 | 20 of 20 | 0 of 20 | 0 of 20 |
+
+The first three result columns count requests that released the held dose (7 mg) while an identified patient's chart was open and nothing was attested. Every copy renamed all 74 names and answered all 70 probe requests like the plain fork, with 0 differences. After fork 7 moved to a new copy, its leaked names were refused there too.
+
+The limit, stated plainly: renaming cannot stop a bug that public fields alone reach, so attack B works on every copy. A leaked copy works on its own fork until that fork rotates (attack A2). These results come from tests; nothing has run on the deployed site yet.
+
+Details and every limit: [docs/POLYMORPH.md](docs/POLYMORPH.md). The question, the research, and the design: the [design doc](docs/plans/2026-11-06-polymorphic-installation-design.md) for [issue #1](https://github.com/renato-umeton/fluid/issues/1). Replay the recorded run in mock mode: `/?mock=1#polymorph`.
 
 ## Four ideas
 
@@ -44,6 +74,7 @@ The platform loads any fork at any branch or commit into a Worker Loader isolate
 - **How do you keep track of why?** In git. Intent records live in the fork next to the code they explain. The run-time ledger links each answer to the exact fork commit and upstream tag.
 - **What about conflicting changes?** `main` only fast-forwards to a gated commit. When two changes race, the first to pass lands. The other merges the new `main` into its branch and is gated again, or stops on a real conflict. On a release, replay sets each wish again on the new files, which avoids many text conflicts.
 - **How do you compare multiple changes and decide which ships?** With a contest: several agents work on one wish, each is gated in check mode, a behavior diff against `main` shows what each one changed in the answers, and a fixed rule picks the winner. Only the one you ship is gated in merge mode. Harvest compares wishes across forks and drafts the common ones for upstream review.
+- **What stops one exploit from reaching every fork?** Polymorphic installation. Each fork runs its own copy of upstream's code with upstream's internal names renamed by a secret seed, and a gate checks that the copy answers every probe like the plain fork. A request that uses an original name is refused and starts a rotation to a new copy, and every copy rotates every 6 hours. In tests, an exploit built from upstream's source compromised 20 of 20 plain forks and 0 of 20 renamed copies. See [Secure](#secure-a-fleet-of-forks-is-a-moving-target).
 
 Shipped in v2.0-beta: Contest and the list of wishes in flight. Their limits, stated plainly: the contest workflow ran end to end on the live site on 2026-10-06 (three model plans, all passed, the pick went through the merge gate and turned green), but that is one run; model plans for a recipe request often produce no change (a model plan may not edit `fluid.toml`); a change that alters no probe's answer ties on behavior and is decided by files changed and time; the mock contest plays one fixed scenario whatever the wish.
 
@@ -81,7 +112,7 @@ A Fluid fork is a list of wishes and the proofs for them. On every release we gr
 
 ## Architecture
 
-One control plane Worker (`platform/`) serves the UI and the API. Upstream and every fork live as Artifacts repositories in one US-jurisdiction namespace. Pushes arrive as Artifacts events on a Queue and start a gate Workflow. Other Workflows run the customize, upgrade, repair, harvest, and yellow soak agents. Durable Objects hold the fleet state, the run timelines, and each user's ledger. Models run on Workers AI behind AI Gateway, and every safety rule is plain code. Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+One control plane Worker (`platform/`) serves the UI and the API. Upstream and every fork live as Artifacts repositories in one US-jurisdiction namespace. Pushes arrive as Artifacts events on a Queue and start a gate Workflow. Other Workflows run the customize, upgrade, repair, harvest, and yellow soak agents. The Rotate Workflow moves each fork to a new renamed copy every 6 hours, after a change lands, and after a tripwire hit. The loader builds a fork's modules at a commit and, for a renamed copy, renames upstream's listed names before the isolate starts. Durable Objects hold the fleet state (with each fork's verified copy), the run timelines, and each user's ledger. Models run on Workers AI behind AI Gateway, and every safety rule is plain code. Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ```mermaid
 flowchart LR
@@ -89,9 +120,12 @@ flowchart LR
   W -- fork, read, push --> A[("Artifacts: stock, user-*, ledger-*")]
   A -- repo.pushed --> Q["Queue"] --> G["Gate Workflow"]
   W --> WF["Customize, Upgrade, Repair, Harvest, Yellow Workflows"]
-  G & WF -- run fork at a commit --> L["Worker Loader isolates"]
+  S["Schedule: every 6 hours"] --> RW["Rotate Workflow"]
+  W & G & WF -- change landed, new fork, tripwire hit --> RW
+  W & G & WF & RW -- run fork at a commit --> M["Loader: build modules, rename listed names in a copy"]
+  M --> L["Worker Loader isolates"]
   G -- merge on pass --> A
-  W & WF --> DO["Durable Objects: Fleet, Runs, UserLedger"]
+  W & WF & RW --> DO["Durable Objects: Fleet, Runs, UserLedger"]
   WF --> AI["Workers AI via AI Gateway"]
 ```
 
@@ -122,6 +156,8 @@ To look at the UI with no account, serve `platform/public/` and open `/?mock=1`.
 - [docs/OVERVIEW.md](docs/OVERVIEW.md): the platform in one page, for any domain, and what is still medical-specific.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): concepts mapped to code and Cloudflare primitives, deviations, safety model.
 - [docs/GATE_AND_AGENTS.md](docs/GATE_AND_AGENTS.md): workflows, gate integrity, merge rules, replay, the yellow soak, events.
+- [docs/POLYMORPH.md](docs/POLYMORPH.md): polymorphic installation: renamed copies, the equivalence check, tripwires, rotation, setup, and the 20-fork results.
+- [docs/plans/2026-11-06-polymorphic-installation-design.md](docs/plans/2026-11-06-polymorphic-installation-design.md): the design for issue #1, with the background research and the threat model.
 - [docs/DEPLOY.md](docs/DEPLOY.md): deploy to your own account, local development, cleanup.
 - [docs/API.md](docs/API.md): shared contracts, HTTP routes, limits.
 - [docs/UI.md](docs/UI.md): UI notes and mock mode.
