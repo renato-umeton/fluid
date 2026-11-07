@@ -73,12 +73,13 @@ function checkAttacks(attacks, forks, need) {
     }
     need(isText(attack.label), `${at}.label must be a non-empty string`);
     need(isText(attack.detail), `${at}.detail must be a non-empty string`);
-    need(isCount(attack.tries), `${at}.tries must be a whole number of 0 or more`);
     const targets = checkRepos(attack.targets, `${at}.targets`, need, { forks });
-    for (const [part, lists] of Object.entries(RESULT_LISTS)) {
+    const lists = { targets };
+    for (const [part, names] of Object.entries(RESULT_LISTS)) {
       if (!need(isObject(attack[part]), `${at}.${part} must be an object`)) continue;
-      for (const list of lists) checkRepos(attack[part][list], `${at}.${part}.${list}`, need, { forks, targets, targetsAt: `${at}.targets` });
+      for (const list of names) lists[`${part}.${list}`] = checkRepos(attack[part][list], `${at}.${part}.${list}`, need, { forks, targets, targetsAt: `${at}.targets` });
     }
+    checkRequests(attack.requests, at, lists, need);
     if (forks && isObject(attack.platform) && isRepoList(attack.platform.rotated)) {
       for (const repo of new Set(attack.platform.rotated)) {
         const fork = forks.get(repo);
@@ -87,6 +88,32 @@ function checkAttacks(attacks, forks, need) {
     }
   });
   return ids;
+}
+
+/** Each request count of an attack, and the list of forks it counts requests for. */
+const REQUEST_COUNTS = [
+  ["sent", "targets"],
+  ["plainCompromised", "plain.compromised"],
+  ["directCompromised", "direct.compromised"],
+  ["platformCompromised", "platform.compromised"],
+  ["refused", "platform.refused"],
+];
+
+/**
+ * An attack's request counts: whole numbers, none above the requests sent, and each in line with its list of forks (at
+ * least one request for each fork listed, and none when no fork is). `lists` holds each list's names, or null when the list
+ * itself is not valid.
+ */
+function checkRequests(requests, at, lists, need) {
+  if (!need(isObject(requests), `${at}.requests must be an object`)) return;
+  const sent = isCount(requests.sent) ? requests.sent : null;
+  for (const [key, list] of REQUEST_COUNTS) {
+    const count = requests[key];
+    if (!need(isCount(count), `${at}.requests.${key} must be a whole number of 0 or more`)) continue;
+    if (key !== "sent" && sent !== null) need(count <= sent, `${at}.requests.${key} is ${count}, more than the ${plural(sent, "request")} sent`);
+    const names = lists[list];
+    if (names) need(count >= names.size && (count === 0 || names.size > 0), `${at}.requests.${key} is ${count}, but ${at}.${list} names ${names.size === 0 ? "no fork" : plural(names.size, "fork")}`);
+  }
 }
 
 function checkAfterRotation(after, ids, forks, need) {
@@ -207,20 +234,30 @@ export const SCORE_COLUMNS = [
   ["rotated", "Moved to a new copy"],
 ];
 
-/** One scoreboard row per attack: what was sent, then forks out of the fleet for each outcome. */
+/** What the scoreboard's counts count, shown under it on the page and in the terminal (npm run polymorph:demo). */
+export const SCORE_NOTE = "Compromised and refused count requests out of those sent; moved to a new copy counts the forks attacked.";
+
+/**
+ * One scoreboard row per attack: what was sent; the requests that compromised a fork three ways, and those refused, each
+ * out of the requests sent; and the attacked forks moved to a new copy. The terminal's scoreboard is built from these rows
+ * too, so the two always agree.
+ */
 export function scoreRows(data) {
-  const of = (list) => `${list.length} of ${data.forks.length}`;
-  return data.attacks.map((a) => ({
-    id: a.id,
-    label: a.label,
-    detail: a.detail,
-    sent: `${plural(a.tries, "request")} to ${plural(a.targets.length, "fork")}`,
-    plain: of(a.plain.compromised),
-    direct: of(a.direct.compromised),
-    compromised: of(a.platform.compromised),
-    refused: of(a.platform.refused),
-    rotated: of(a.platform.rotated),
-  }));
+  return data.attacks.map((a) => {
+    const { sent, plainCompromised, directCompromised, platformCompromised, refused } = a.requests;
+    const of = (count) => `${count} of ${sent}`;
+    return {
+      id: a.id,
+      label: a.label,
+      detail: a.detail,
+      sent: `${plural(sent, "request")} to ${plural(a.targets.length, "fork")}`,
+      plain: of(plainCompromised),
+      direct: of(directCompromised),
+      compromised: of(platformCompromised),
+      refused: of(refused),
+      rotated: `${a.platform.rotated.length} of ${plural(a.targets.length, "attacked fork")}`,
+    };
+  });
 }
 
 /** "2026-11-06 at 18:30 UTC", the same in every time zone. */

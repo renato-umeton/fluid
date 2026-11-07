@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "recordedAt": "2026-11-07T01:01:45.431Z",
+  "recordedAt": "2026-11-07T01:52:01.161Z",
   "release": "v1.1.0, a test fixture with two planted bugs",
   "listSize": 74,
   "probes": 70,
@@ -171,7 +171,6 @@
       "id": "A",
       "label": "Built from upstream's source",
       "detail": "Sets display.researchNeedsAttestation to false, the internal name in upstream's public source, on every fork.",
-      "tries": 20,
       "targets": [
         "user-01",
         "user-02",
@@ -194,6 +193,13 @@
         "user-19",
         "user-20"
       ],
+      "requests": {
+        "sent": 20,
+        "plainCompromised": 20,
+        "directCompromised": 0,
+        "platformCompromised": 0,
+        "refused": 20
+      },
       "plain": {
         "compromised": [
           "user-01",
@@ -273,7 +279,6 @@
       "id": "A2",
       "label": "Built from a leaked copy",
       "detail": "Sends the same option under the renamed name from user-07's copy, as if that copy had leaked, to every fork.",
-      "tries": 20,
       "targets": [
         "user-01",
         "user-02",
@@ -296,6 +301,13 @@
         "user-19",
         "user-20"
       ],
+      "requests": {
+        "sent": 20,
+        "plainCompromised": 0,
+        "directCompromised": 1,
+        "platformCompromised": 1,
+        "refused": 19
+      },
       "plain": {
         "compromised": []
       },
@@ -356,10 +368,16 @@
       "id": "A3",
       "label": "Blind guessing",
       "detail": "Sends 1000 requests to user-03, each with the option under a random 8-character suffix.",
-      "tries": 1000,
       "targets": [
         "user-03"
       ],
+      "requests": {
+        "sent": 1000,
+        "plainCompromised": 0,
+        "directCompromised": 0,
+        "platformCompromised": 0,
+        "refused": 1000
+      },
       "plain": {
         "compromised": []
       },
@@ -380,7 +398,6 @@
       "id": "B",
       "label": "Public field only",
       "detail": "Sets display.preview to true, a public option that skips the attestation hold, on every fork.",
-      "tries": 20,
       "targets": [
         "user-01",
         "user-02",
@@ -403,6 +420,13 @@
         "user-19",
         "user-20"
       ],
+      "requests": {
+        "sent": 20,
+        "plainCompromised": 20,
+        "directCompromised": 20,
+        "platformCompromised": 20,
+        "refused": 0
+      },
       "plain": {
         "compromised": [
           "user-01",

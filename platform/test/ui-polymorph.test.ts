@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // @ts-expect-error plain ES module from the static UI
-import { SCORE_COLUMNS, afterRotationLine, equivalenceLine, introLines, latestOnly, noRecordingMessage, outcomeLine, parseDemo, readRecording, replayer, replaySteps, scoreRows, tileStates, validateDemo } from "../public/js/polymorph-replay.js";
+import { SCORE_COLUMNS, SCORE_NOTE, afterRotationLine, equivalenceLine, introLines, latestOnly, noRecordingMessage, outcomeLine, parseDemo, readRecording, replayer, replaySteps, scoreRows, tileStates, validateDemo } from "../public/js/polymorph-replay.js";
 // @ts-expect-error plain ES module from the static UI
 import * as view from "../public/js/views/polymorph.js";
 
@@ -12,9 +12,9 @@ type Step = { at: number; repo: string; tile: Tile };
 const ALL = ["user-01", "user-02", "user-03"];
 
 /**
- * A small recording in the shape the end-to-end test writes: 3 forks, the four attacks, and the leaked copy after its fork moved.
- * Attack A refuses user-03 without moving it to a new copy, and attack A2 moves user-03 without refusing it, so the tests tell
- * the refused and rotated lists apart.
+ * A small recording in the shape the end-to-end test writes: 3 forks, the four attacks with their request counts, and the leaked
+ * copy after its fork moved. Attack A refuses user-03 without moving it to a new copy, and attack A2 moves user-03 without
+ * refusing it, so the tests tell the refused and rotated lists apart.
  */
 function demo() {
 	return {
@@ -30,19 +30,23 @@ function demo() {
 		],
 		attacks: [
 			{
-				id: "A", label: "Built from upstream's source", detail: "Sets display.researchNeedsAttestation to false, the name in upstream's source.", tries: 3, targets: [...ALL],
+				id: "A", label: "Built from upstream's source", detail: "Sets display.researchNeedsAttestation to false, the name in upstream's source.", targets: [...ALL],
+				requests: { sent: 3, plainCompromised: 3, directCompromised: 0, platformCompromised: 0, refused: 3 },
 				plain: { compromised: [...ALL] }, direct: { compromised: [] as string[] }, platform: { compromised: [] as string[], refused: [...ALL], rotated: ["user-01", "user-02"] },
 			},
 			{
-				id: "A2", label: "Built from a leaked copy", detail: "Sends the same key with the renamed name from user-02's copy.", tries: 3, targets: [...ALL],
+				id: "A2", label: "Built from a leaked copy", detail: "Sends the same key with the renamed name from user-02's copy.", targets: [...ALL],
+				requests: { sent: 3, plainCompromised: 0, directCompromised: 1, platformCompromised: 1, refused: 1 },
 				plain: { compromised: [] as string[] }, direct: { compromised: ["user-02"] }, platform: { compromised: ["user-02"], refused: ["user-01"], rotated: ["user-01", "user-03"] },
 			},
 			{
-				id: "A3", label: "Blind guessing", detail: "Sends 1000 random suffixes for the renamed name to one fork.", tries: 1000, targets: ["user-03"],
+				id: "A3", label: "Blind guessing", detail: "Sends 1000 random suffixes for the renamed name to one fork.", targets: ["user-03"],
+				requests: { sent: 1000, plainCompromised: 0, directCompromised: 0, platformCompromised: 0, refused: 1000 },
 				plain: { compromised: [] as string[] }, direct: { compromised: [] as string[] }, platform: { compromised: [] as string[], refused: ["user-03"], rotated: ["user-03"] },
 			},
 			{
-				id: "B", label: "Public field only", detail: "Sets display.preview to true, a public field that skips the attestation hold.", tries: 3, targets: [...ALL],
+				id: "B", label: "Public field only", detail: "Sets display.preview to true, a public field that skips the attestation hold.", targets: [...ALL],
+				requests: { sent: 3, plainCompromised: 3, directCompromised: 3, platformCompromised: 3, refused: 0 },
 				plain: { compromised: [...ALL] }, direct: { compromised: [...ALL] }, platform: { compromised: [...ALL], refused: [] as string[], rotated: [] as string[] },
 			},
 		],
@@ -84,6 +88,7 @@ describe("validateDemo", () => {
 		["attacks", (d) => Reflect.deleteProperty(d, "attacks"), "attacks must be a non-empty list"],
 		["attacks[0].platform", (d) => Reflect.deleteProperty(d.attacks[0], "platform"), "attacks[0].platform must be an object"],
 		["attacks[1].platform.rotated", (d) => Reflect.deleteProperty(d.attacks[1].platform, "rotated"), "attacks[1].platform.rotated must be a list of repo names"],
+		["attacks[2].requests", (d) => Reflect.deleteProperty(d.attacks[2], "requests"), "attacks[2].requests must be an object"],
 		["forks[2].mismatches", (d) => Reflect.deleteProperty(d.forks[2], "mismatches"), "forks[2].mismatches must be a whole number of 0 or more"],
 	])("names the missing field %s", (_field, edit, problem) => {
 		expect(validateDemo(changed(edit))).toEqual([problem]);
@@ -95,16 +100,16 @@ describe("validateDemo", () => {
 		["a listSize that is not whole", (d) => Object.assign(d, { listSize: 2.5 }), ["listSize must be a whole number of 0 or more"]],
 		["an uppercase fingerprint", (d) => Object.assign(d.forks[0], { before: "0A1B2C3D" }), ["forks[0].before must be 8 lowercase hex characters"]],
 		["a short fingerprint", (d) => Object.assign(d.forks[1], { after: "4e5f6a7" }), ["forks[1].after must be 8 lowercase hex characters"]],
-		["negative tries", (d) => Object.assign(d.attacks[2], { tries: -1 }), ["attacks[2].tries must be a whole number of 0 or more"]],
+		["a negative count of requests sent", (d) => Object.assign(d.attacks[2].requests, { sent: -1 }), ["attacks[2].requests.sent must be a whole number of 0 or more"]],
 		["targets that are not a list", (d) => Object.assign(d.attacks[0], { targets: "user-01" }), ["attacks[0].targets must be a list of repo names"]],
 		["an empty label", (d) => Object.assign(d.attacks[3], { label: "" }), ["attacks[3].label must be a non-empty string"]],
 		["an afterRotation that is not an object", (d) => Object.assign(d, { afterRotation: "A2" }), ["afterRotation must be an object"]],
 		["an attack id it does not know", (d) => Object.assign(d.attacks[0], { id: "C" }), ['attacks[0].id must be one of A, A2, A3, B, not "C"']],
 		["an attack id used twice", (d) => Object.assign(d.attacks[1], { id: "A" }), ['attacks[1].id "A" appears twice', "afterRotation.attack names A2, which is not in attacks"]],
 		["an afterRotation for another attack", (d) => Object.assign(d.afterRotation, { attack: "A9" }), ['afterRotation.attack must be "A2"']],
-		["a target that is not in forks", (d) => d.attacks[0].targets.push("user-42"), ['attacks[0].targets names "user-42", which is not in forks']],
+		["a target that is not in forks", (d) => { d.attacks[0].targets.push("user-42"); d.attacks[0].requests.sent = 4; }, ['attacks[0].targets names "user-42", which is not in forks']],
 		["an outcome for a fork that is not in forks", (d) => d.attacks[2].platform.refused.push("user-99"), ['attacks[2].platform.refused names "user-99", which is not in forks']],
-		["a bypassed-scan outcome for a fork that is not in forks", (d) => d.attacks[3].direct.compromised.push("upstream"), ['attacks[3].direct.compromised names "upstream", which is not in forks']],
+		["a bypassed-scan outcome for a fork that is not in forks", (d) => { d.attacks[3].direct.compromised.push("upstream"); Object.assign(d.attacks[3].requests, { sent: 4, directCompromised: 4 }); }, ['attacks[3].direct.compromised names "upstream", which is not in forks']],
 		["an afterRotation entry that is not in forks", (d) => d.afterRotation.refused.push("user-7"), ['afterRotation.refused names "user-7", which is not in forks']],
 	])("rejects %s", (_what, edit, problems) => {
 		expect(validateDemo(changed(edit))).toEqual(problems);
@@ -128,12 +133,23 @@ describe("validateDemo", () => {
 	});
 
 	it.each<[string, Edit, string]>([
-		["plain.compromised", (d) => d.attacks[2].plain.compromised.push("user-01"), 'attacks[2].plain.compromised names "user-01", which is not in attacks[2].targets'],
-		["direct.compromised", (d) => d.attacks[2].direct.compromised.push("user-01"), 'attacks[2].direct.compromised names "user-01", which is not in attacks[2].targets'],
-		["platform.compromised", (d) => d.attacks[2].platform.compromised.push("user-02"), 'attacks[2].platform.compromised names "user-02", which is not in attacks[2].targets'],
+		["plain.compromised", (d) => { d.attacks[2].plain.compromised.push("user-01"); d.attacks[2].requests.plainCompromised = 1; }, 'attacks[2].plain.compromised names "user-01", which is not in attacks[2].targets'],
+		["direct.compromised", (d) => { d.attacks[2].direct.compromised.push("user-01"); d.attacks[2].requests.directCompromised = 1; }, 'attacks[2].direct.compromised names "user-01", which is not in attacks[2].targets'],
+		["platform.compromised", (d) => { d.attacks[2].platform.compromised.push("user-02"); d.attacks[2].requests.platformCompromised = 1; }, 'attacks[2].platform.compromised names "user-02", which is not in attacks[2].targets'],
 		["platform.refused", (d) => d.attacks[2].platform.refused.push("user-02"), 'attacks[2].platform.refused names "user-02", which is not in attacks[2].targets'],
 		["platform.rotated", (d) => d.attacks[2].platform.rotated.push("user-01"), 'attacks[2].platform.rotated names "user-01", which is not in attacks[2].targets'],
 	])("rejects an outcome in %s for a fork the attack did not target", (_list, edit, problem) => {
+		expect(validateDemo(changed(edit))).toEqual([problem]);
+	});
+
+	it.each<[string, Edit, string]>([
+		["a count that is not whole", (d) => Object.assign(d.attacks[0].requests, { refused: 2.5 }), "attacks[0].requests.refused must be a whole number of 0 or more"],
+		["more compromising requests than were sent", (d) => Object.assign(d.attacks[0].requests, { plainCompromised: 4 }), "attacks[0].requests.plainCompromised is 4, more than the 3 requests sent"],
+		["fewer requests sent than forks attacked", (d) => Object.assign(d.attacks[1].requests, { sent: 2 }), "attacks[1].requests.sent is 2, but attacks[1].targets names 3 forks"],
+		["no compromising request for a fork listed as compromised", (d) => Object.assign(d.attacks[1].requests, { directCompromised: 0 }), "attacks[1].requests.directCompromised is 0, but attacks[1].direct.compromised names 1 fork"],
+		["fewer refused requests than forks that refused", (d) => Object.assign(d.attacks[0].requests, { refused: 2 }), "attacks[0].requests.refused is 2, but attacks[0].platform.refused names 3 forks"],
+		["compromising requests while no fork is listed as compromised", (d) => Object.assign(d.attacks[1].requests, { plainCompromised: 1 }), "attacks[1].requests.plainCompromised is 1, but attacks[1].plain.compromised names no fork"],
+	])("rejects request counts with %s", (_what, edit, problem) => {
 		expect(validateDemo(changed(edit))).toEqual([problem]);
 	});
 
@@ -391,13 +407,17 @@ describe("latestOnly", () => {
 });
 
 describe("scoreRows", () => {
-	it("counts each attack's forks out of the fleet, in the recording's order", () => {
+	it("counts requests out of those sent, and the attacked forks moved to a new copy, in the recording's order", () => {
 		expect(scoreRows(demo())).toEqual([
-			{ id: "A", label: "Built from upstream's source", detail: "Sets display.researchNeedsAttestation to false, the name in upstream's source.", sent: "3 requests to 3 forks", plain: "3 of 3", direct: "0 of 3", compromised: "0 of 3", refused: "3 of 3", rotated: "2 of 3" },
-			{ id: "A2", label: "Built from a leaked copy", detail: "Sends the same key with the renamed name from user-02's copy.", sent: "3 requests to 3 forks", plain: "0 of 3", direct: "1 of 3", compromised: "1 of 3", refused: "1 of 3", rotated: "2 of 3" },
-			{ id: "A3", label: "Blind guessing", detail: "Sends 1000 random suffixes for the renamed name to one fork.", sent: "1000 requests to 1 fork", plain: "0 of 3", direct: "0 of 3", compromised: "0 of 3", refused: "1 of 3", rotated: "1 of 3" },
-			{ id: "B", label: "Public field only", detail: "Sets display.preview to true, a public field that skips the attestation hold.", sent: "3 requests to 3 forks", plain: "3 of 3", direct: "3 of 3", compromised: "3 of 3", refused: "0 of 3", rotated: "0 of 3" },
+			{ id: "A", label: "Built from upstream's source", detail: "Sets display.researchNeedsAttestation to false, the name in upstream's source.", sent: "3 requests to 3 forks", plain: "3 of 3", direct: "0 of 3", compromised: "0 of 3", refused: "3 of 3", rotated: "2 of 3 attacked forks" },
+			{ id: "A2", label: "Built from a leaked copy", detail: "Sends the same key with the renamed name from user-02's copy.", sent: "3 requests to 3 forks", plain: "0 of 3", direct: "1 of 3", compromised: "1 of 3", refused: "1 of 3", rotated: "2 of 3 attacked forks" },
+			{ id: "A3", label: "Blind guessing", detail: "Sends 1000 random suffixes for the renamed name to one fork.", sent: "1000 requests to 1 fork", plain: "0 of 1000", direct: "0 of 1000", compromised: "0 of 1000", refused: "1000 of 1000", rotated: "1 of 1 attacked fork" },
+			{ id: "B", label: "Public field only", detail: "Sets display.preview to true, a public field that skips the attestation hold.", sent: "3 requests to 3 forks", plain: "3 of 3", direct: "3 of 3", compromised: "3 of 3", refused: "0 of 3", rotated: "0 of 3 attacked forks" },
 		]);
+	});
+
+	it("says what the counts count, in one sentence the page and the terminal both show", () => {
+		expect(SCORE_NOTE).toBe("Compromised and refused count requests out of those sent; moved to a new copy counts the forks attacked.");
 	});
 
 	it("names a field of every row in each scoreboard column, Sent first", () => {

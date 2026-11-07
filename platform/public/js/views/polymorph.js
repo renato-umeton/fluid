@@ -7,7 +7,7 @@
 // no valid recording the page says so and shows no numbers. Built with h()
 // only, and every tile state is written out, never shown by color alone.
 import { h, mount } from "../dom.js";
-import { SCORE_COLUMNS, afterRotationLine, equivalenceLine, introLines, latestOnly, noRecordingMessage, readRecording, replayer, scoreRows } from "../polymorph-replay.js";
+import { SCORE_COLUMNS, SCORE_NOTE, afterRotationLine, equivalenceLine, introLines, latestOnly, noRecordingMessage, readRecording, replayer, scoreRows } from "../polymorph-replay.js";
 
 export const title = "Polymorph";
 export const sub = "Every fork runs its own renamed copy of upstream's code.";
@@ -82,7 +82,7 @@ function layout(root, demo) {
           h("button", { type: "button", class: "btn", onclick: () => controller.reset(polymorphOn) }, "Reset")),
         status)),
     h("section", { class: "panel" },
-      h("div", { class: "panel-head" }, h("div", {}, h("h2", { id: "polymorph-score-heading" }, "Scoreboard"), h("p", {}, `Each count is forks out of the ${demo.forks.length} in the recorded run.`))),
+      h("div", { class: "panel-head" }, h("div", {}, h("h2", { id: "polymorph-score-heading" }, "Scoreboard"), h("p", {}, SCORE_NOTE))),
       h("div", { class: "panel-body stack polymorph-scoreboard" },
         scoreTable(rows),
         scoreList(rows),
@@ -98,7 +98,7 @@ function attackName(attack) {
 function scoreTable(rows) {
   return h("div", { class: "table-wrap polymorph-score-wide" },
     h("table", { class: "data polymorph-score" },
-      h("caption", { class: "visually-hidden" }, "Scoreboard: one row per attack, with the forks it compromised on the plain fleet, on renamed copies with the platform scan bypassed, and through the platform"),
+      h("caption", { class: "visually-hidden" }, "Scoreboard: one row per attack, with the requests it sent, those that compromised a fork on the plain fleet, on renamed copies with the platform scan bypassed, and through the platform, those refused, and the attacked forks moved to a new copy"),
       h("thead", {}, h("tr", {}, h("th", { scope: "col" }, "Attack"), SCORE_COLUMNS.map(([, name]) => h("th", { scope: "col" }, name)))),
       h("tbody", {}, rows.map((r) => h("tr", {},
         h("th", { scope: "row" }, attackName(r), h("div", { class: "xsmall muted" }, r.detail)),

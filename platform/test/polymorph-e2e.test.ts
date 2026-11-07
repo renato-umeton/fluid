@@ -33,7 +33,7 @@ import { askLoaded, clearRuntimeCache, loadForkRuntime, storedCopy, type AnswerC
 import { ledgerStub } from "../src/stubs.ts";
 import type { RotateParams } from "../src/workflows/common.ts";
 // @ts-expect-error plain ES module from the static UI
-import { afterRotationLine, equivalenceLine, validateDemo } from "../public/js/polymorph-replay.js";
+import { SCORE_COLUMNS, SCORE_NOTE, afterRotationLine, equivalenceLine, scoreRows, validateDemo } from "../public/js/polymorph-replay.js";
 import { zeroDayRelease } from "./fixtures/zero-day.ts";
 import { POLYMORPH_TEST_SECRET, PUBLISHED, TAG, polymorphPlatform, type PolymorphPlatform } from "./helpers/polymorph-platform.ts";
 import { fakeWorkflows } from "./helpers/workflows.ts";
@@ -129,13 +129,22 @@ interface Attack {
 	sends: Send[];
 }
 
+/** An attack's requests: sent, those that released a held dose three ways, and those the platform refused. */
+interface RequestCounts {
+	sent: number;
+	plainCompromised: number;
+	directCompromised: number;
+	platformCompromised: number;
+	refused: number;
+}
+
 /** One attack as the Polymorph view's recording holds it (public/js/polymorph-replay.js, validateDemo). */
 interface RecordedAttack {
 	id: AttackId;
 	label: string;
 	detail: string;
-	tries: number;
 	targets: string[];
+	requests: RequestCounts;
 	plain: { compromised: string[] };
 	direct: { compromised: string[] };
 	platform: { compromised: string[]; refused: string[]; rotated: string[] };
@@ -437,8 +446,8 @@ async function attack(forks: Fork[], plan: Attack, before: BuiltIns): Promise<At
 			id: plan.id,
 			label: plan.label,
 			detail: plan.detail,
-			tries: outcomes.length,
 			targets: [...new Set(plan.sends.map((entry) => entry.repo))],
+			requests: requestCounts(outcomes),
 			plain: { compromised: reposWhere(outcomes, (outcome) => outcome.plain === "released") },
 			direct: { compromised: reposWhere(outcomes, (outcome) => outcome.direct === "released") },
 			platform: {
@@ -471,16 +480,32 @@ function blindGuesses(count: number): string[] {
 	return Array.from({ length: count }, () => Array.from({ length: 8 }, () => BASE36[Math.floor(random() * BASE36.length)]).join(""));
 }
 
-/** The scoreboard's numbers for one attack: requests sent, compromised, and refused, and forks moved to a new copy. */
-function requestCounts({ outcomes, recorded }: AttackRun) {
+/** An attack's request counts, from what each request did. */
+function requestCounts(outcomes: Outcome[]): RequestCounts {
 	const count = (test: (outcome: Outcome) => boolean) => outcomes.filter(test).length;
 	return {
 		sent: outcomes.length,
-		plain: count((outcome) => outcome.plain === "released"),
-		direct: count((outcome) => outcome.direct === "released"),
-		compromised: count((outcome) => outcome.platform === "released"),
+		plainCompromised: count((outcome) => outcome.plain === "released"),
+		directCompromised: count((outcome) => outcome.direct === "released"),
+		platformCompromised: count((outcome) => outcome.platform === "released"),
 		refused: count((outcome) => outcome.platform === "refused"),
-		moved: recorded.platform.rotated.length,
+	};
+}
+
+type Score = RequestCounts & { moved: number };
+
+/** What a recorded attack shows on the scoreboard: its request counts, and how many forks it moved to a new copy. */
+function scoreOf(attack: RecordedAttack): Score {
+	return { ...attack.requests, moved: attack.platform.rotated.length };
+}
+
+/** The score every run must show for each attack, in a fleet of n forks. */
+function expectedScores(n: number): Record<AttackId, Score> {
+	return {
+		A: { sent: n, plainCompromised: n, directCompromised: 0, platformCompromised: 0, refused: n, moved: n },
+		A2: { sent: n, plainCompromised: 0, directCompromised: 1, platformCompromised: 1, refused: n - 1, moved: n - 1 },
+		A3: { sent: GUESSES, plainCompromised: 0, directCompromised: 0, platformCompromised: 0, refused: GUESSES, moved: 1 },
+		B: { sent: n, plainCompromised: n, directCompromised: n, platformCompromised: n, refused: 0, moved: 0 },
 	};
 }
 
@@ -493,34 +518,37 @@ function wiresTripped(outcomes: Outcome[]): Record<string, number> {
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
-/** The scoreboard as plain text: a row per attack, then the equivalence check and the leaked copy after its fork moved, worded as the Polymorph view words them. */
-function scoreboard(forks: Fork[], runs: AttackRun[], recording: ReturnType<typeof recordingOf>): string {
-	const renamed = [...new Set(forks.map((fork) => LIST.length - fork.skipped))].join(" or ");
-	const header = ["", "Attack", "Sent", "Plain fleet", "Copies, scan bypassed", "Platform", "Refused", "Moved"];
-	const rows = runs.map((run) => {
-		const n = requestCounts(run);
-		const of = (count: number) => `${count} of ${n.sent}`;
-		const { id, label, targets } = run.recorded;
-		return [id, label, `${plural(n.sent, "request")} to ${plural(targets.length, "fork")}`, of(n.plain), of(n.direct), of(n.compromised), of(n.refused), `${n.moved} of ${targets.length}`];
-	});
-	const widths = header.map((_, column) => Math.max(...[header, ...rows].map((row) => row[column]!.length)));
-	const line = (row: string[]) => row.map((cell, column) => cell.padEnd(widths[column]!)).join("  ").trimEnd();
+/** A row of the Polymorph view's scoreboard (scoreRows): the attack, and a cell for each of SCORE_COLUMNS. */
+type ScoreRow = Record<string, string> & { id: string; label: string; detail: string };
+
+/**
+ * The scoreboard as plain text, made from the Polymorph view's own rows,
+ * columns, and lines (scoreRows, SCORE_COLUMNS, SCORE_NOTE), so the terminal
+ * and the page always say the same: the attacks, then a table with a column
+ * per attack and a row per scoreboard column (narrow enough for a terminal),
+ * then the equivalence check and the leaked copy after its fork moved.
+ */
+function scoreboard(forks: Fork[], recording: Recording): string {
+	const rows: ScoreRow[] = scoreRows(recording);
+	const renamed = [...new Set(forks.map((fork) => recording.listSize - fork.skipped))].join(" or ");
+	const table = [["", ...rows.map((row) => row.id)], ...(SCORE_COLUMNS as [string, string][]).map(([key, name]) => [name, ...rows.map((row) => row[key]!)])];
+	const widths = table[0]!.map((_, column) => Math.max(...table.map((cells) => cells[column]!.length)));
+	const line = (cells: string[]) => cells.map((cell, column) => cell.padEnd(widths[column]!)).join("  ").trimEnd();
 	return [
 		"Polymorphic installation against a planted zero-day",
-		`${plural(forks.length, "fork")} on release ${RELEASE_LABEL}; each copy renames ${renamed} of the ${LIST.length} names on upstream's list.`,
+		`${plural(forks.length, "fork")} on release ${recording.release}; each copy renames ${renamed} of the ${recording.listSize} names on upstream's list.`,
 		"",
-		line(header),
-		...rows.map(line),
+		...rows.map((row) => `${row.id.padEnd(4)}${row.label}: ${row.detail}`),
 		"",
-		"Plain fleet: requests that released a held research dose on the plain forks.",
-		"Copies, scan bypassed: the same on the renamed copies, asked without the platform's scan.",
-		"Platform: the same through the platform. Refused: requests the platform refused.",
-		"Moved: attacked forks that moved to a new copy.",
+		...table.map(line),
 		"",
+		SCORE_NOTE,
 		equivalenceLine(recording),
 		afterRotationLine(recording),
 	].join("\n");
 }
+
+type Recording = ReturnType<typeof recordingOf>;
 
 /** The recording the Polymorph view replays, in the shape its validateDemo accepts. */
 function recordingOf(forks: Fork[], runs: AttackRun[], afterRotation: AfterRotation) {
@@ -546,6 +574,7 @@ describe(`a fleet of ${FLEET} forks on a release with a planted zero-day`, () =>
 		"installs a renamed copy per fork, then measures four exploits on the plain fleet, on the copies, and through the platform",
 		async ({ task }) => {
 			const n = FLEET;
+			const expected = expectedScores(n);
 			const forks = await install();
 			expect.soft(forks.map((fork) => [fork.repo, fork.mismatches]), "probe answers that differ between each copy and its plain fork").toEqual(forks.map((fork) => [fork.repo, 0]));
 			const everyFork = (request: Record<string, unknown>) => forks.map((fork) => ({ repo: fork.repo, request }));
@@ -569,7 +598,7 @@ describe(`a fleet of ${FLEET} forks on a release with a planted zero-day`, () =>
 				{ id: "A", label: "Built from upstream's source", detail: `Sets display.${FLAG} to false, the internal name in upstream's public source, on every fork.`, sends: everyFork(withDisplay({ [FLAG]: false })) },
 				before,
 			);
-			expect.soft(requestCounts(a), "attack A").toEqual({ sent: n, plain: n, direct: 0, compromised: 0, refused: n, moved: n });
+			expect.soft(scoreOf(a.recorded), "attack A").toEqual(expected.A);
 			expect.soft(wiresTripped(a.outcomes), "attack A: wires tripped").toEqual({ decoy: n });
 
 			// A disclosure of the copy one fork was installed with: the 4th fork's, or the 7th's in a fleet of 7 or more.
@@ -580,7 +609,7 @@ describe(`a fleet of ${FLEET} forks on a release with a planted zero-day`, () =>
 				{ id: "A2", label: "Built from a leaked copy", detail: `Sends the same option under the renamed name from ${leaked.repo}'s copy, as if that copy had leaked, to every fork.`, sends: everyFork(leakedRequest) },
 				before,
 			);
-			expect.soft(requestCounts(a2), "attack A2").toEqual({ sent: n, plain: 0, direct: 1, compromised: 1, refused: n - 1, moved: n - 1 });
+			expect.soft(scoreOf(a2.recorded), "attack A2").toEqual(expected.A2);
 			expect.soft([a2.recorded.direct.compromised, a2.recorded.platform.compromised], "attack A2: forks compromised directly, then through the platform").toEqual([[leaked.repo], [leaked.repo]]);
 			expect.soft(wiresTripped(a2.outcomes), "attack A2: wires tripped").toEqual({ foreign: n - 1 });
 
@@ -613,17 +642,17 @@ describe(`a fleet of ${FLEET} forks on a release with a planted zero-day`, () =>
 			// Why no guess compromised the copy: one in 36^8 (about 2.8 trillion) guesses finds its real suffix, so 1000 find it about once in 2.8 billion runs.
 			const own = (await installedNames(third)).get(FLAG)!.slice(FLAG.length + 1);
 			expect.soft(guesses, `no guess is ${third.repo}'s real suffix (odds of a hit: ${GUESSES} in 36^8)`).not.toContain(own);
-			expect.soft(requestCounts(a3), "attack A3").toEqual({ sent: GUESSES, plain: 0, direct: 0, compromised: 0, refused: GUESSES, moved: 1 });
+			expect.soft(scoreOf(a3.recorded), "attack A3").toEqual(expected.A3);
 			expect.soft(wiresTripped(a3.outcomes), "attack A3: wires tripped").toEqual({ foreign: GUESSES });
 
 			const b = await attack(forks, { id: "B", label: "Public field only", detail: "Sets display.preview to true, a public option that skips the attestation hold, on every fork.", sends: everyFork(withDisplay({ preview: true })) }, before);
-			expect.soft(requestCounts(b), "attack B").toEqual({ sent: n, plain: n, direct: n, compromised: n, refused: 0, moved: 0 });
+			expect.soft(scoreOf(b.recorded), "attack B").toEqual(expected.B);
 
 			const runs = [a, a2, a3, b];
 			const recording = recordingOf(forks, runs, afterRotation);
 			expect(validateDemo(recording)).toEqual([]);
 			// Printed after every check, failed or not, so the scoreboard always shows what this run measured.
-			if (DEMO) console.log(scoreboard(forks, runs, recording));
+			if (DEMO) console.log(scoreboard(forks, recording));
 			// A run with a failed check writes no recording, so the page never replays one.
 			if (RECORD_PATH && task.result?.state !== "fail") {
 				const path = resolve(RECORD_PATH);
