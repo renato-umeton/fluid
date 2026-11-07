@@ -13,7 +13,7 @@ Yes, for a large class of exploits, and Fluid is well placed to do it safely.
 
 - Many exploits depend on details that callers never see: internal property names, internal function names, the shape of internal objects. If each fork runs a copy where those details are renamed with a secret seed, an exploit built against upstream stops working on the forks.
 - The hard part of software diversity has always been knowing that the changed copy still works. Fluid already checks that for every change: the gate runs upstream's probes. A renamed copy goes live only when every probe gives the same answer as the plain fork. That shows equivalence on tested behavior; it is not a formal proof.
-- The original names stay behind as tripwires. Only someone working from upstream's source would use them, so a blind attempt raises an alarm, and the platform moves that fork to a new copy at once.
+- The original names stay behind as tripwires. Only someone working from upstream's source would use them, so a blind attempt raises an alarm, and the platform at once starts a rotation that moves that fork to a new copy when the new copy passes its gate.
 
 Limits, stated plainly: a transform that keeps behavior also keeps every bug that the public behavior exposes. A wrong rule or a missing check on a public request field stays exploitable. Polymorphic installation buys time between "bug found" and "fix shipped", and in that window it stops one exploit from reaching the whole fleet. The bug still needs a patch.
 
@@ -69,7 +69,7 @@ Seeds and renamed copies never leave the platform. Everything a renamed copy sen
 
 ### 7. Rotation
 
-A new workflow, `fluid-rotate`, moves every fork to its next epoch every 6 hours, moves one fork at once after a tripwire hit, and moves a fork right after a change lands on its `main`. It runs the equivalence check first and keeps the old copy when the new one fails. Hits on one fork start at most one rotation in each 10-minute window, whatever copy they trip, so a flood of hits costs one gate run per window. Whatever an attacker learned about a copy goes stale at the next rotation.
+A new workflow, `fluid-rotate`, moves every fork to its next epoch every 6 hours, starts a rotation of one fork at once after a tripwire hit, and moves a fork right after a change lands on its `main`. It runs the equivalence check first and keeps the old copy when the new one fails. Hits on one fork start at most one rotation in each 10-minute window, whatever copy they trip, so a flood of hits costs one gate run per window. Whatever an attacker learned about a copy goes stale at the next rotation.
 
 ## The proof of concept
 
