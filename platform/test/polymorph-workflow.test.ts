@@ -10,7 +10,8 @@ import worker from "../src/index.ts";
 import * as entry from "../src/index.ts";
 import { forkRepoName } from "../src/lib/names.ts";
 import { runsStub } from "../src/stubs.ts";
-import { GATE_STEP, rotationId, startRotation, type RotateParams } from "../src/workflows/common.ts";
+import { deriveSeed, fingerprint } from "../src/polymorph/names.ts";
+import { GATE_STEP, INSTALL_KEY, rotationId, startRotation, type RotateParams } from "../src/workflows/common.ts";
 import { SeedForkWorkflow } from "../src/workflows/fleet.ts";
 import { GateWorkflow } from "../src/workflows/gate.ts";
 import { RotateWorkflow } from "../src/workflows/rotate.ts";
@@ -101,6 +102,25 @@ describe("RotateWorkflow with a repo", () => {
 			expect(run.steps.at(-1)).toMatchObject({ name: "Rotate to the next renamed copy", status: "failed" });
 			expect((run.failures as unknown[]).length).toBeGreaterThan(0);
 			expect(JSON.stringify(run)).not.toMatch(/\$[0-9a-z]{8}/);
+		},
+		SLOW_MS,
+	);
+
+	it(
+		"keeps the copy's fingerprint out of what anyone reading the run by its id sees, even when the gate refused the copy",
+		async () => {
+			const repo = "user-reflective";
+			// An install rotation's run id is rot-<fork hash>-install: anyone who knows the fork's name can work it out.
+			const runId = `run_${rotationId(repo, INSTALL_KEY)}`;
+			const epoch = (p.t.fleet.morphState(repo)?.epoch ?? 0) + 1;
+			const refused = await fingerprint(await deriveSeed(POLYMORPH_TEST_SECRET, repo, p.heads[repo]!, epoch));
+			const { output } = await runRotate(p.t.env, { repo, reason: "install", runId }, runId.slice("run_".length));
+			expect(output).toMatchObject({ outcome: "refused", epoch });
+			const response = await worker.fetch(new Request(`https://fluid.test/api/runs/${runId}`), p.t.env, fakeWorkflows(NO_MODEL).ctx);
+			expect(response.status).toBe(200);
+			const shown = await response.text();
+			expect(shown).toContain("polymorph-equivalence");
+			expect(shown).not.toContain(refused);
 		},
 		SLOW_MS,
 	);

@@ -294,10 +294,11 @@ function addIntentFailure(tiers: Record<TierName, TierSummary | null>, failures:
  * gate's report of the copy.
  */
 export function addEquivalence(tiers: Record<TierName, TierSummary | null>, failures: GateFailure[], copy: LoadedCopy, report: EquivalenceReport): GatePolymorph {
+	// The text never names the copy: a failure is kept on runs that anyone who knows the run id can read.
 	const recorded: GateFailure[] = report.findings.map(({ request, difference }) => ({
 		tier: "invariant",
 		probe: EQUIVALENCE_PROBE,
-		description: `The renamed copy ${copy.fingerprint} answered ${requestLabel(request)} differently from the plain fork.`,
+		description: `The renamed copy answered ${requestLabel(request)} differently from the plain fork.`,
 		sample: 1,
 		samples: 1,
 		path: difference.path,
