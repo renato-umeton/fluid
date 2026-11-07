@@ -136,7 +136,7 @@ Rotations run in the `fluid-rotate` workflow. What starts one:
 | A new fork: `POST /api/forks`, and `SeedForkWorkflow` for a seeded fork with no change still gating | `install` | one per fork |
 | `POST /api/admin/fleet/rotate`, for one fork or the whole fleet | `admin` | each request |
 
-Each rotation logs a `rotate` run (`GET /api/runs/:runId`) that keeps the epoch and the commit, never the fingerprint. Details in [GATE_AND_AGENTS.md](GATE_AND_AGENTS.md#rotation) and [API.md](API.md#rotate-run-record).
+Each rotation logs a `rotate` run (`GET /api/runs/:runId`) with the epoch and the commit. The run never holds the copy's fingerprint. Details in [GATE_AND_AGENTS.md](GATE_AND_AGENTS.md#rotation) and [API.md](API.md#rotate-run-record).
 
 ## Records
 
