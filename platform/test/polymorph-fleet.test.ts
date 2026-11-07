@@ -172,6 +172,18 @@ describe("Fleet security events", () => {
 		expect(fleet.securityEvents("user-a")).toHaveLength(6);
 	});
 
+	it("record a cleared copy but never broadcast it, since it changes nothing anyone was told about", async () => {
+		const fleet = fleetWith("user-a");
+		const response = await fleet.fetch(new Request("https://fleet/stream", { headers: { "x-fluid-client": "203.0.113.9" } }));
+		const reader = response.body!.getReader();
+		fleet.recordSecurityEvent("user-a", { kind: "copy_cleared", detail: { epoch: 2, cause: "unavailable" } }, t0);
+		fleet.recordSecurityEvent("user-a", { kind: "tripwire" }, t0 + 1);
+		const events = await readUntil(reader, "security");
+		await reader.cancel();
+		expect(events.filter((event) => event.type === "security").map((event) => event.data)).toEqual([{ type: "security", repo: "user-a", kind: "tripwire", at: iso(t0 + 1) }]);
+		expect(fleet.securityEvents("user-a").map((event) => event.kind)).toEqual(["tripwire", "copy_cleared"]);
+	});
+
 	it("tell stream subscribers the repo, the kind, and the time, and nothing more", async () => {
 		const fleet = fleetWith("user-a");
 		const response = await fleet.fetch(new Request("https://fleet/stream", { headers: { "x-fluid-client": "203.0.113.7" } }));

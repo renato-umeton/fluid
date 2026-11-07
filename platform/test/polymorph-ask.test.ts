@@ -85,6 +85,8 @@ beforeAll(() => {
 		"user-dosing": DOSING,
 		"user-flag": { ...PUBLISHED, "app/flag.ts": "export const flag = 1;\n" },
 		"user-unbound": { ...PUBLISHED, "app/unbound.ts": "export const unbound = 1;\n" },
+		// Its stored copy no longer builds, as after a change to the renamer's limits.
+		"user-gone": { ...PUBLISHED, "app/big.js": `// ${"x".repeat(SCAN_LIMITS.moduleChars)}\nexport const gone = 1;\n` },
 		"user-flaky": { ...PUBLISHED, "app/flaky.ts": "export const flaky = 1;\n" },
 		"user-resecret": { ...PUBLISHED, "app/resecret.ts": "export const resecret = 1;\n" },
 		"user-renames": { ...PUBLISHED, "app/renames.ts": "export const renames = 1;\n" },
@@ -647,6 +649,29 @@ describe("serveAsk's guard", () => {
 			const failure = await serveAsk(unbound, { repo: "user-unbound", ref: "main", request: naming("researchNeedsAttestation"), useModel: false, userId: "unbound", fallback: true }).catch((error: unknown) => error);
 			expect(failure).not.toBeInstanceOf(HttpError);
 			expect((failure as Error).message).toMatch(/no RotateWorkflow binding/);
+		},
+		SLOW_MS,
+	);
+});
+
+describe("a stored copy that no longer builds", () => {
+	it(
+		"is cleared by the one rotation it starts, and the fork then answers as one with no copy: plain, model and all, starting nothing",
+		async () => {
+			vi.spyOn(console, "warn").mockImplementation(() => undefined);
+			await storeCopy("user-gone", 1);
+			const now = vi.spyOn(Date, "now").mockReturnValue(t0);
+			const first = await ask("user-gone", requests.administrative, { useModel: true });
+			expect(first.signals).not.toContain(MODEL_WORDING);
+			const [rotation] = rotationsOf("user-gone");
+			expect(rotation?.params).toMatchObject({ reason: "mismatch" });
+			expect(await rotateFork(p.deps, "user-gone", "mismatch")).toMatchObject({ outcome: "skipped", cleared: true });
+			now.mockReturnValue(t0 + 60 * 60_000);
+			const after = await ask("user-gone", requests.administrative, { useModel: true });
+			expect(after.signals).toContain(MODEL_WORDING);
+			expect(after.fork).toEqual({ repo: "user-gone", ref: "main", commit: p.heads["user-gone"] });
+			expect((await ask("user-gone", naming("researchNeedsAttestation"))).mode).toBe("research");
+			expect(rotationsOf("user-gone")).toHaveLength(1);
 		},
 		SLOW_MS,
 	);

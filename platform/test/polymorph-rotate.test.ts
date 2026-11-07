@@ -31,6 +31,10 @@ beforeAll(() => {
 		"user-flaky": { ...PUBLISHED, "app/flaky.ts": "export const flaky = 1;\n" },
 		// More JavaScript in one module than the renamer reads: the plain fork runs, no copy can be made.
 		"user-big": { ...PUBLISHED, "app/big.js": `// ${"x".repeat(SCAN_LIMITS.moduleChars)}\nexport const big = 1;\n` },
+		// Forks whose stored copy no longer builds, as after a change to the renamer's limits.
+		"user-outgrown": { ...PUBLISHED, "app/big.js": `// ${"x".repeat(SCAN_LIMITS.moduleChars)}\nexport const outgrown = 1;\n` },
+		"user-outgrown-2": { ...PUBLISHED, "app/big.js": `// ${"x".repeat(SCAN_LIMITS.moduleChars)}\nexport const outgrown = 2;\n` },
+		"user-stale-busy": { ...PUBLISHED, "app/stale.ts": "export const stale = 1;\n" },
 	});
 	for (const repo of Object.keys(p.heads)) p.t.fleet.register({ repo, userId: repo.replace(/^user-/, ""), persona: "p", pinnedTag: TAG, status: "pinned" });
 });
@@ -212,6 +216,56 @@ describe("rotateFork", () => {
 			expect((failure as Error).message).toMatch(/Artifacts: 503 service unavailable$/);
 			expect(p.t.fleet.morphState("user-flaky")).toBeNull();
 			expect(p.t.fleet.securityEvents("user-flaky")).toEqual([]);
+		},
+		SLOW_MS,
+	);
+
+	/** The copy a rotation would have stored for a fork at epoch 1, stored as if a gate had verified it. */
+	async function storeVerified(repo: string) {
+		const state = { epoch: 1, sha: p.heads[repo]!, fingerprint: await printOf(repo, 1), namesHash: await namesHash(LISTED) };
+		if (!p.t.fleet.setMorph(repo, state, { from: null }, t0)) throw new Error(`${repo}: no copy stored`);
+		return state;
+	}
+
+	it(
+		"clears a stored copy that no longer builds when a mismatch rotation cannot replace it, and records that quietly",
+		async () => {
+			vi.spyOn(console, "warn").mockImplementation(() => undefined);
+			await storeVerified("user-outgrown");
+			const result = await rotateFork(p.deps, "user-outgrown", "mismatch");
+			expect(result).toMatchObject({ outcome: "skipped", reason: "mismatch", cleared: true });
+			expect(p.t.fleet.morphState("user-outgrown")).toBeNull();
+			const events = p.t.fleet.securityEvents("user-outgrown");
+			expect(events.map((event) => [event.kind, event.detail?.epoch, event.detail?.cause])).toEqual([["copy_cleared", 1, "unavailable"]]);
+			expect(String(events[0]!.detail?.why)).toMatch(/app\/big\.js: polymorph: the module has \d+ characters/);
+		},
+		SLOW_MS,
+	);
+
+	it(
+		"keeps a stored copy that no longer builds when the rotation is for any other reason",
+		async () => {
+			vi.spyOn(console, "warn").mockImplementation(() => undefined);
+			const state = await storeVerified("user-outgrown-2");
+			for (const reason of ["schedule", "tripwire", "landed", "admin", "install"] as const) {
+				expect(await rotateFork(p.deps, "user-outgrown-2", reason)).not.toHaveProperty("cleared");
+			}
+			expect(p.t.fleet.morphState("user-outgrown-2")).toEqual({ ...state, at: iso(t0) });
+			expect(p.t.fleet.securityEvents("user-outgrown-2")).toEqual([]);
+		},
+		SLOW_MS,
+	);
+
+	it(
+		"keeps a stored copy that still builds when a mismatch rotation skips because the fork is busy",
+		async () => {
+			const state = await storeVerified("user-stale-busy");
+			p.t.fleet.update("user-stale-busy", { status: "gating" });
+			const result = await rotateFork(p.deps, "user-stale-busy", "mismatch");
+			expect(result).toMatchObject({ outcome: "skipped", repo: "user-stale-busy", reason: "mismatch", why: "the fork is gating" });
+			expect(result).not.toHaveProperty("cleared");
+			expect(p.t.fleet.morphState("user-stale-busy")).toEqual({ ...state, at: iso(t0) });
+			expect(p.t.fleet.securityEvents("user-stale-busy")).toEqual([]);
 		},
 		SLOW_MS,
 	);

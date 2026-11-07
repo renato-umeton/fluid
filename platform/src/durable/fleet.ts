@@ -97,8 +97,11 @@ export interface AskState {
 	morph: MorphState | null;
 }
 
-export const SECURITY_EVENT_KINDS = ["tripwire", "rotated", "rotation_refused"] as const;
-/** A request tripped a wire of a renamed copy, or a rotation moved a fork to a new copy or was refused. */
+export const SECURITY_EVENT_KINDS = ["tripwire", "rotated", "rotation_refused", "copy_cleared"] as const;
+/**
+ * A request tripped a wire of a renamed copy, a rotation moved a fork to a new
+ * copy or was refused, or a stored copy that no longer builds was cleared.
+ */
 export type SecurityEventKind = (typeof SECURITY_EVENT_KINDS)[number];
 
 export interface SecurityEvent {
@@ -134,8 +137,11 @@ export const SECURITY_EVENTS_PER_REPO = 100;
  * shows an onlooker nothing about each request); every event is recorded.
  */
 export const SECURITY_BROADCAST_WINDOW_MS = 10_000;
-/** Kinds recorded but never broadcast: a refused rotation changes nothing a fork serves. */
-const QUIET_SECURITY_KINDS: ReadonlySet<SecurityEventKind> = new Set(["rotation_refused"]);
+/**
+ * Kinds recorded but never broadcast: a refused rotation changes nothing a
+ * fork serves, and a cleared copy only ends what no broadcast ever showed.
+ */
+const QUIET_SECURITY_KINDS: ReadonlySet<SecurityEventKind> = new Set(["rotation_refused", "copy_cleared"]);
 const SECURITY_BROADCAST_KEYS_LIMIT = 1000;
 
 const encoder = new TextEncoder();

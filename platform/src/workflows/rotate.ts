@@ -104,15 +104,16 @@ function runOutcome(result: RotationResult): { step: StepStatus; status: RunStat
 	if (result.outcome === "rotated") {
 		return { step: "done", status: "passed", detail: `The renamed copy for epoch ${result.epoch} of ${result.sha.slice(0, 7)} answered every probe like the plain fork, and the fork serves it now`, fields: { outcome: result.outcome, epoch: result.epoch, commit: result.sha } };
 	}
+	const cleared = result.cleared ? { detail: "; the stored copy no longer builds, so it was cleared and the fork answers as one with no copy", fields: { cleared: true } } : { detail: "", fields: {} };
 	if (result.outcome === "refused") {
 		const count = result.failures.length + result.more;
 		const first = result.failures[0]?.probe;
 		return {
 			step: "failed",
 			status: "failed",
-			detail: `The gate failed the renamed copy for epoch ${result.epoch} of ${result.sha.slice(0, 7)} (${count} failure${count === 1 ? "" : "s"}${first ? `, first ${first}` : ""}); the fork keeps the copy it has`,
-			fields: { outcome: result.outcome, epoch: result.epoch, commit: result.sha, failures: result.failures, more: result.more },
+			detail: `The gate failed the renamed copy for epoch ${result.epoch} of ${result.sha.slice(0, 7)} (${count} failure${count === 1 ? "" : "s"}${first ? `, first ${first}` : ""})${result.cleared ? cleared.detail : "; the fork keeps the copy it has"}`,
+			fields: { outcome: result.outcome, epoch: result.epoch, commit: result.sha, failures: result.failures, more: result.more, ...cleared.fields },
 		};
 	}
-	return { step: "info", status: "cancelled", detail: `Skipped: ${result.why}`, fields: { outcome: result.outcome, cancelReason: result.why } };
+	return { step: "info", status: "cancelled", detail: `Skipped: ${result.why}${cleared.detail}`, fields: { outcome: result.outcome, cancelReason: result.why, ...cleared.fields } };
 }
