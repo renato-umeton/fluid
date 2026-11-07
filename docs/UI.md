@@ -80,7 +80,7 @@ A Fluid fork is a list of wishes and the tests that prove them. On every release
 
 ## Polymorphic installation
 
-**Polymorph** in the rail (`js/views/polymorph.js`, with the checks, the text, and the replay itself in `js/polymorph-replay.js`) replays a recorded run of the polymorphic installation end-to-end test: one tile per fork with the fingerprint of its copy, a button per attack, and a switch that plays the attack on the plain fleet or through the platform, where forks refuse it and move to a new copy. Each tile says its state in words, and with reduced motion the tiles change at once. Once an attack has played, a status line counts the forks it compromised, the forks that refused it, and the forks that moved to a new copy, as in "0 of 20 forks compromised, 1 fork refused it, and 1 fork moved to a new copy" for attack A3. A scoreboard lists what each attack did, then what the leaked copy's names did once its fork moved, then the equivalence check, using only the numbers in the recording. The recording is `platform/public/data/polymorph-demo.json`, written by `cd platform && npm run polymorph:record` and read the same way in mock and live mode; when it is missing, the page says no run has been recorded yet, and when it fails `validateDemo`, the page says the run cannot be shown and the console says why, both with that command.
+**Polymorph** in the rail replays a recorded run of the polymorphic installation end-to-end test. The view is `js/views/polymorph.js`; the checks, the text, and the replay itself are in `js/polymorph-replay.js`. It shows one tile per fork with the fingerprint of its copy, a button per attack, and a switch. The switch plays the attack on the plain fleet or through the platform, where forks refuse it and move to a new copy. Each tile says its state in words, and with reduced motion the tiles change at once. Once an attack has played, a status line counts the forks it compromised, the forks that refused it, and the forks that moved to a new copy. For attack A3 it reads "0 of 20 forks compromised, 1 fork refused it, and 1 fork moved to a new copy". A scoreboard lists what each attack did, then what the leaked copy's names did once its fork moved, then the equivalence check. It uses only the numbers in the recording. The recording is `platform/public/data/polymorph-demo.json`, written by `cd platform && npm run polymorph:record`. Mock and live mode read it the same way. When it is missing, the page says no run has been recorded yet. When it fails `validateDemo`, the page says the run cannot be shown, and the console says why. Both messages give the record command.
 
 The recording is one JSON object:
 
@@ -92,4 +92,13 @@ The recording is one JSON object:
 
 `validateDemo` checks every field except the epochs, which the page does not show. Each request count must be a whole number, no more than the requests sent, and in line with its list of forks: at least one request for each fork listed, and none when no fork is.
 
-The page's scoreboard has one row per attack and the columns of `SCORE_COLUMNS`: the requests sent, those that compromised a fork on the plain fleet, on renamed copies with the platform scan bypassed, and through the platform, those refused by the platform, and the attacked forks moved to a new copy. So it counts requests for what compromised a fork and what was refused, out of the requests sent, and attacked forks for the new copies. `SCORE_NOTE` says so under its heading. `npm run polymorph:demo` prints the same scoreboard in the terminal, with a column per attack, built from the same `scoreRows`, `SCORE_COLUMNS`, and `SCORE_NOTE`. The status line counts forks, so for attack A3 the scoreboard shows 1000 of 1000 requests refused, and the status line 1 fork that refused it.
+The page's scoreboard has one row per attack. Its columns come from `SCORE_COLUMNS`:
+
+- the requests sent;
+- the requests that compromised a fork on the plain fleet;
+- the requests that compromised a renamed copy with the platform scan bypassed;
+- the requests that compromised a fork through the platform;
+- the requests the platform refused;
+- the attacked forks moved to a new copy.
+
+The compromised and refused columns count requests out of those sent, and the last column counts attacked forks. `SCORE_NOTE` says so under its heading. `npm run polymorph:demo` prints the same scoreboard in the terminal, with a column per attack, built from the same `scoreRows`, `SCORE_COLUMNS`, and `SCORE_NOTE`. The status line counts forks, so for attack A3 the scoreboard shows 1000 of 1000 requests refused, and the status line 1 fork that refused it.
