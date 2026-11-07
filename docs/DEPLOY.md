@@ -101,7 +101,7 @@ umask 077
 echo "POLYMORPH_SECRET=$(openssl rand -hex 32)" >> ~/.config/fluid/secrets.env
 ```
 
-Then pass the file to the next deploy (step 7). The deploy uploads every secret in the file, declared or not, and later deploys keep it. A renamed copy also needs the stock release that its fork pins to ship `polymorph.json`. When `stock` is new, step 8 publishes such a release, and each fork gets its first renamed copy at its first rotation. When `stock` already has releases from before the list existed, see [Polymorphic installation on an existing deployment](#polymorphic-installation-on-an-existing-deployment).
+Then pass the file to the next deploy (step 7). The deploy uploads every secret in the file, declared or not, and later deploys keep it. A renamed copy also needs `polymorph.json` in the stock release that its fork pins. When `stock` is new, step 8 publishes such a release, and each fork gets its first renamed copy at its first rotation. When `stock` already has releases from before the list existed, see [Polymorphic installation on an existing deployment](#polymorphic-installation-on-an-existing-deployment).
 
 Each rotation is a check mode gate that asks every probe twice, and the schedule runs one per fork every 6 hours. A 200-fork fleet adds 800 gate runs a day.
 
@@ -186,7 +186,7 @@ ADMIN_TOKEN=... FLUID_URL="$FLUID_URL" node scripts/e2e-yellow.mjs
 
 ## Polymorphic installation on an existing deployment
 
-A renamed copy needs the stock release that its fork pins to ship `polymorph.json`. Stock tags published before the list existed lack it. Every rotation of a fork pinned to one of them runs a check mode gate and then skips (`stock <tag> publishes no polymorph.json`). `npm run publish-stock` leaves an existing tag alone, and `POST /api/admin/release` builds its new tag from the latest tag's files, so neither adds the list.
+A renamed copy needs `polymorph.json` in the stock release that its fork pins. Stock tags published before the list existed lack it. Every rotation of a fork pinned to one of them runs a check mode gate and then skips (`stock <tag> publishes no polymorph.json`). `npm run publish-stock` leaves an existing tag alone, and `POST /api/admin/release` builds its new tag from the latest tag's files, so neither adds the list.
 
 After you add `POLYMORPH_SECRET` and deploy (steps 6 and 7), publish the bundled stock under a tag newer than every tag in `stock`, then upgrade the fleet to that tag. Replace `vX.Y.Z` with that tag:
 
