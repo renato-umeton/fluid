@@ -4,6 +4,7 @@
 // they never land in workflow state.
 import type { Remote } from "../git/ops.ts";
 import type { Json } from "../lib/json.ts";
+import { polymorphSecret } from "../polymorph/install.ts";
 import type { RotationReason } from "../polymorph/rotate.ts";
 import type { PlatformExports } from "../runtime/loader.ts";
 import { openRepo } from "../runtime/repo-files.ts";
@@ -297,6 +298,37 @@ export async function startYellowRun(env: Env, exports: AppExports, input: { rep
 		await parent.step("Yellow: live on main, end-to-end soak", "running", `${input.commit.slice(0, 7)} is live with a yellow badge; the end-to-end suite runs 3 times (${runId})`).catch(() => undefined);
 	}
 	return { runId, created: started.created };
+}
+
+/** The instance id of the rotation of `repo` that `key` names: rot-<fork hash>-<key>. */
+export function rotationId(repo: string, key: string): string {
+	return `rot-${fnv1a(repo)}-${key}`;
+}
+
+/** The key of a stored copy: the live path starts at most one rotation per copy, however many requests trip it. */
+export function copyKey(copy: { epoch: number; fingerprint: string }): string {
+	return `c${copy.epoch}-${copy.fingerprint}`;
+}
+
+/**
+ * Starts the rotation of one fork that `key` names (see rotationId), with the
+ * run that logs it; an instance that already exists counts as started.
+ * Returns its id, or null when nothing started: a platform without a secret
+ * starts none (it would only skip), and a failure to start is logged, never
+ * thrown, since whatever asked for the rotation (a refused request, a landed
+ * change, a new fork) finishes either way and the schedule rotates every fork
+ * within six hours.
+ */
+export async function startRotation(env: Env, binding: WorkflowBinding<RotateParams> | undefined, input: { repo: string; reason: RotationReason; key: string }): Promise<{ id: string; created: boolean } | null> {
+	if (polymorphSecret(env) === null) return null;
+	const id = rotationId(input.repo, input.key);
+	try {
+		if (!binding) throw new Error("ctx.exports has no RotateWorkflow binding");
+		return await startInstance(binding, id, { repo: input.repo, reason: input.reason, runId: `run_${id}` });
+	} catch (error) {
+		console.error(`polymorph: rotation ${id} of ${input.repo} (${input.reason}) did not start: ${errorText(error)}`);
+		return null;
+	}
 }
 
 /** Waiting for a gate or repair run: up to WAIT_ROUNDS event waits of WAIT_EACH each (about 30 minutes). */

@@ -14,7 +14,7 @@ import { rotateFork } from "../src/polymorph/rotate.ts";
 import { SCAN_LIMITS } from "../src/polymorph/tokens.ts";
 import { askLoaded, loadForkRuntime, type RuntimeDeps } from "../src/runtime/loader.ts";
 import { ledgerStub } from "../src/stubs.ts";
-import { copyKey, rotationId } from "../src/workflows/rotate.ts";
+import { copyKey, rotationId } from "../src/workflows/common.ts";
 import { cookieFor, post } from "./helpers/api-env.ts";
 import { LISTED, POLYMORPH_TEST_SECRET, PUBLISHED, TAG, polymorphPlatform, type PolymorphPlatform } from "./helpers/polymorph-platform.ts";
 import { fakeWorkflows } from "./helpers/workflows.ts";

@@ -5,50 +5,20 @@
 // the whole fleet) it starts one instance per fork in paced batches. Security
 // events are rotateFork's to record. Each instance id names what asked for
 // the rotation (a stored copy, a landed commit, a new fork, a fleet-wide run),
-// so asking again, however often, starts nothing new.
+// so asking again, however often, starts nothing new: everything else starts
+// one with startRotation (common.ts).
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import type { RunStatus, StepStatus } from "../durable/runs.ts";
 import { fnv1a } from "../events/filter.ts";
 import { polymorphSecret } from "../polymorph/install.ts";
 import { rotateFork, type RotationReason, type RotationResult } from "../polymorph/rotate.ts";
 import { fleetStub } from "../stubs.ts";
-import { appExports, ensureRun, errorText, GATE_STEP, GIT_STEP, guarded, runLog, startInstance, steps, type RotateParams, type Steps, type WorkflowBinding } from "./common.ts";
+import { appExports, ensureRun, GATE_STEP, GIT_STEP, guarded, rotationId, runLog, startInstance, steps, type RotateParams, type Steps } from "./common.ts";
 import { FAN_OUT } from "./upgrade.ts";
 
 const ROTATE_STEP = "Rotate to the next renamed copy";
 const FLEET_STEP = "Rotate every fork";
 const NO_SECRET = "POLYMORPH_SECRET is not set or is shorter than 16 characters";
-
-/** The instance id of the rotation of `repo` that `key` names: rot-<fork hash>-<key>. */
-export function rotationId(repo: string, key: string): string {
-	return `rot-${fnv1a(repo)}-${key}`;
-}
-
-/** The key of a stored copy: the live path starts at most one rotation per copy, however many requests trip it. */
-export function copyKey(copy: { epoch: number; fingerprint: string }): string {
-	return `c${copy.epoch}-${copy.fingerprint}`;
-}
-
-/**
- * Starts the rotation of one fork that `key` names (see rotationId), with the
- * run that logs it; an instance that already exists counts as started.
- * Returns its id, or null when nothing started: a platform without a secret
- * starts none (it would only skip), and a failure to start is logged, never
- * thrown, since whatever asked for the rotation (a refused request, a landed
- * change, a new fork) finishes either way and the schedule rotates every fork
- * within six hours.
- */
-export async function startRotation(env: Env, binding: WorkflowBinding<RotateParams> | undefined, input: { repo: string; reason: RotationReason; key: string }): Promise<{ id: string; created: boolean } | null> {
-	if (polymorphSecret(env) === null) return null;
-	const id = rotationId(input.repo, input.key);
-	try {
-		if (!binding) throw new Error("ctx.exports has no RotateWorkflow binding");
-		return await startInstance(binding, id, { repo: input.repo, reason: input.reason, runId: `run_${id}` });
-	} catch (error) {
-		console.error(`polymorph: rotation ${id} of ${input.repo} (${input.reason}) did not start: ${errorText(error)}`);
-		return null;
-	}
-}
 
 export class RotateWorkflow extends WorkflowEntrypoint<Env, RotateParams> {
 	async run(event: Readonly<WorkflowEvent<RotateParams>>, workflowStep: WorkflowStep) {

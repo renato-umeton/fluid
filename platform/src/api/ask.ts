@@ -14,8 +14,7 @@ import { resolveCommit, shortRef } from "../runtime/refs.ts";
 import { openRepo } from "../runtime/repo-files.ts";
 import type { RunTimeRecord } from "../durable/user-ledger.ts";
 import { fleetStub, ledgerStub } from "../stubs.ts";
-import { errorText, type RotateParams, type WorkflowBinding } from "../workflows/common.ts";
-import { copyKey, startRotation } from "../workflows/rotate.ts";
+import { copyKey, errorText, startRotation, type RotateParams, type WorkflowBinding } from "../workflows/common.ts";
 import { HttpError } from "./http.ts";
 import { hasClinicalDose, markSafety, SAFETY_SIGNALS } from "./safety.ts";
 
