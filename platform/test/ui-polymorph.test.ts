@@ -462,9 +462,9 @@ describe("the lines around the fleet and the scoreboard", () => {
 	});
 
 	it("counts the forks whose copy answered every probe like the plain fork", () => {
-		expect(equivalenceLine(demo())).toBe("Equivalence check: on 3 of 3 forks the copy answered all 71 probes like the plain fork, with 0 differences.");
+		expect(equivalenceLine(demo())).toBe("Equivalence check: on 3 of 3 forks the copy answered all 71 probe requests like the plain fork, with 0 differences.");
 		const two = changed((d) => { Object.assign(d.forks[0], { mismatches: 2 }); Object.assign(d.forks[2], { mismatches: 1 }); });
-		expect(equivalenceLine(two)).toBe("Equivalence check: on 1 of 3 forks the copy answered all 71 probes like the plain fork. Forks with differences: user-01 (2), user-03 (1).");
+		expect(equivalenceLine(two)).toBe("Equivalence check: on 1 of 3 forks the copy answered all 71 probe requests like the plain fork. Forks with differences: user-01 (2), user-03 (1).");
 	});
 });
 
