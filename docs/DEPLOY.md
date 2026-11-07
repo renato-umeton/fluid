@@ -101,7 +101,9 @@ umask 077
 echo "POLYMORPH_SECRET=$(openssl rand -hex 32)" >> ~/.config/fluid/secrets.env
 ```
 
-Then pass the file to the next deploy (step 7). The deploy uploads every secret in the file, declared or not, and later deploys keep it. Each fork gets its first renamed copy at its next rotation. To start one for every fork at once, `POST /api/admin/fleet/rotate` with body `{}` and the admin header.
+Then pass the file to the next deploy (step 7). The deploy uploads every secret in the file, declared or not, and later deploys keep it. A renamed copy also needs the stock release that its fork pins to ship `polymorph.json`. When `stock` is new, step 8 publishes such a release, and each fork gets its first renamed copy at its first rotation. When `stock` already has releases from before the list existed, see [Polymorphic installation on an existing deployment](#polymorphic-installation-on-an-existing-deployment).
+
+Each rotation is a check mode gate that asks every probe twice, and the schedule runs one per fork every 6 hours. A 200-fork fleet adds 800 gate runs a day.
 
 Without `POLYMORPH_SECRET`, or with one shorter than 16 characters, every fork runs plain: no renamed copies, no tripwire scan, and no rotation. The `fluid-rotate` schedule still starts an instance every 6 hours, which records a rotate run marked `cancelled` ("Skipped: POLYMORPH_SECRET is not set or is shorter than 16 characters"), and `POST /api/admin/fleet/rotate` starts runs that skip the same way. A secret that is set but too short also logs one warning per isolate.
 
@@ -181,6 +183,33 @@ ADMIN_TOKEN=... FLUID_URL="$FLUID_URL" node scripts/e2e-yellow.mjs
 
 - `workers.dev` and preview URLs are on by default. Decide which ones you want public.
 - Write routes need a session cookie, and admin routes need the admin token. Per-client and global quotas limit forks, asks, and reads. Details are in `docs/API.md`, under Limits and protections.
+
+## Polymorphic installation on an existing deployment
+
+A renamed copy needs the stock release that its fork pins to ship `polymorph.json`. Stock tags published before the list existed lack it. Every rotation of a fork pinned to one of them runs a check mode gate and then skips (`stock <tag> publishes no polymorph.json`). `npm run publish-stock` leaves an existing tag alone, and `POST /api/admin/release` builds its new tag from the latest tag's files, so neither adds the list.
+
+After you add `POLYMORPH_SECRET` and deploy (steps 6 and 7), publish the bundled stock under a tag newer than every tag in `stock`, then upgrade the fleet to that tag. Replace `vX.Y.Z` with that tag:
+
+```sh
+ADMIN_TOKEN="$(grep '^ADMIN_TOKEN=' ~/.config/fluid/secrets.env | cut -d= -f2-)"
+curl -s -X POST "$FLUID_URL/api/admin/stock/publish" \
+  -H "content-type: application/json" -H "x-fluid-admin: $ADMIN_TOKEN" \
+  -d '{"tag": "vX.Y.Z"}'
+curl -s -X POST "$FLUID_URL/api/admin/release" \
+  -H "content-type: application/json" -H "x-fluid-admin: $ADMIN_TOKEN" \
+  -d '{"tag": "vX.Y.Z"}'
+```
+
+A fork with `auto_upgrade = false` (the default) moves to the new tag when its owner approves the upgrade. Until then it runs plain.
+
+A fork that pins a release with the list gets its first renamed copy at its next rotation: a landed upgrade starts one, and the schedule starts one every 6 hours. To start one for every fork at once, send `POST /api/admin/fleet/rotate` with body `{}` and the admin header:
+
+```sh
+ADMIN_TOKEN="$(grep '^ADMIN_TOKEN=' ~/.config/fluid/secrets.env | cut -d= -f2-)"
+curl -s -X POST "$FLUID_URL/api/admin/fleet/rotate" -H "x-fluid-admin: $ADMIN_TOKEN" -H "content-type: application/json" -d '{}'
+```
+
+To check it, watch the fleet stream with `curl -N "$FLUID_URL/api/fleet/stream"`. Each fork that moves to a new copy sends a `security` event of kind `rotated`. To see why one fork did not, rotate it alone with body `{"repo": "<repo>"}` and read the run that the answer names (`curl -s "$FLUID_URL/api/runs/<runId>"`). A skipped rotation gives its reason in `cancelReason`.
 
 ## Local development
 
