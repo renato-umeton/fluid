@@ -1,11 +1,11 @@
 // The platform's side of installing a polymorphic copy of a fork. Upstream's
 // list of names comes from the stock repo at the fork's pinned tag, the same
 // way the gate reads the probes, so a fork cannot shrink it. The seed comes
-// from the platform secret. Any reason a copy cannot be made is thrown, and
-// the loader then runs the plain fork. The error says which kind of reason it
-// is: PolymorphOffError (no copy is made for this fork at all),
+// from the platform secret. Any reason a copy cannot be made is thrown as one
+// of the polymorph errors (errors.ts), and the loader then runs the plain
+// fork: PolymorphOffError (no copy is made for this fork at all),
 // PolymorphTransientError (a read failed and may work next time), or
-// anything else (no copy can be made of this code or this list).
+// PolymorphUnavailableError (no copy can be made of this code, pin, or list).
 import { StockTagError } from "../gate/pins.ts";
 import { STOCK_REPO, USER_E2E_PATH, USER_MANIFEST_PATH } from "../lib/names.ts";
 import type { ModuleMap } from "../runtime/modules.ts";
@@ -14,33 +14,11 @@ import { pinnedTagOf } from "../stock/releases.ts";
 import { resolveStockTag } from "../stock/suite.ts";
 import { POLYMORPH_LIST_PATH, parsePolymorphList, type ContractTexts, type SkippedName } from "./list.ts";
 import { morphFork, unmorphText } from "./morph.ts";
+import { PolymorphOffError, PolymorphTransientError, PolymorphUnavailableError } from "./errors.ts";
 import { deriveSeed, fingerprint, namesHash, variantNames } from "./names.ts";
-import { PolymorphUnavailableError } from "./tokens.ts";
 
-/**
- * The platform makes no copy of this fork: it has no secret, or the release
- * the fork pins names no list (fluid.toml names no tag, or that release
- * publishes none). The fork runs plain, as every fork did before copies.
- */
-export class PolymorphOffError extends Error {
-	constructor(message: string) {
-		super(message);
-		this.name = "PolymorphOffError";
-	}
-}
-
-/**
- * A read that a copy needs failed: Artifacts erred while the platform read
- * upstream's list or the fork's contract. Nothing is known to be wrong with
- * the fork or the list, and the same load may make the copy a moment later.
- * The message is the failed read's own.
- */
-export class PolymorphTransientError extends Error {
-	constructor(message: string, options?: { cause?: unknown }) {
-		super(message, options);
-		this.name = "PolymorphTransientError";
-	}
-}
+// Defined with the other reasons a copy cannot be made (errors.ts); exported here too, where they were first.
+export { PolymorphOffError, PolymorphTransientError };
 
 /** Each stock commit's list, or null when it publishes none. A release tag never moves, so neither does its list. */
 const lists = new Map<string, readonly string[] | null>();
@@ -146,7 +124,10 @@ export async function planCopy(env: Env, input: { repo: string; sha: string; epo
 	if (cached !== undefined && cached.secret === secret) return cached.plan;
 	const tag = pinnedTagOf(input.fluidToml);
 	if (tag === null) throw new PolymorphOffError("fluid.toml names no stock_tag");
-	const list = await loadPolymorphList(env, tag);
+	const list = await loadPolymorphList(env, tag).catch((error: unknown) => {
+		// A pin that is not a published release makes no copy; the message says why, as the gate's does.
+		throw error instanceof StockTagError ? new PolymorphUnavailableError(error.message) : error;
+	});
 	if (list === null) throw new PolymorphOffError(`stock ${tag} publishes no ${POLYMORPH_LIST_PATH}`);
 	const seed = await deriveSeed(secret, input.repo, input.sha, input.epoch);
 	const plan: CopyPlan = { epoch: input.epoch, seed, fingerprint: await fingerprint(seed), list };
@@ -196,9 +177,10 @@ export interface BuiltCopy {
 
 /**
  * Renames what the plan's list allows in the plain module map, skipping the
- * names the fork's modules and contract use. Every error comes out as
- * PolymorphUnavailableError with this copy's names mapped back to the
- * originals, so a log line never shows one.
+ * names the fork's modules and contract use. Every error comes out with this
+ * copy's names mapped back to the originals, so a log line never shows one:
+ * PolymorphUnavailableError when the renamer refuses the code, and a plain
+ * Error, which the loader logs as a bug, for anything else.
  */
 export async function buildCopy(plan: CopyPlan, map: ModuleMap, contract: ContractTexts): Promise<BuiltCopy> {
 	const variants = await variantNames(plan.seed, plan.list);
@@ -206,7 +188,10 @@ export async function buildCopy(plan: CopyPlan, map: ModuleMap, contract: Contra
 		const { map: renamed, usable, skipped } = morphFork(map, variants, contract);
 		return { map: renamed, names: usable, skipped, namesHash: await namesHash(usable.keys()) };
 	} catch (error) {
-		throw new PolymorphUnavailableError(unmorphText(messageOf(error), variants));
+		const message = unmorphText(messageOf(error), variants);
+		// Neither carries the original error: its message and stack could show this copy's names.
+		if (error instanceof PolymorphUnavailableError) throw new PolymorphUnavailableError(message);
+		throw new Error(`polymorph: renaming failed unexpectedly: ${message}`);
 	}
 }
 

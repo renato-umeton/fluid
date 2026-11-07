@@ -8,10 +8,10 @@
 // names exactly the code it runs.
 import type { MorphState } from "../durable/fleet.ts";
 import synthetic from "../generated/synthetic.json";
-import { buildCopy, clearCopyCaches, planCopy, PolymorphOffError, PolymorphTransientError, readContract } from "../polymorph/install.ts";
+import { CopyMismatchError, plainKindOf, PolymorphUnavailableError, type PlainKind } from "../polymorph/errors.ts";
+import { buildCopy, clearCopyCaches, planCopy, readContract } from "../polymorph/install.ts";
 import type { SkippedName } from "../polymorph/list.ts";
 import { unmorphText } from "../polymorph/morph.ts";
-import { PolymorphUnavailableError } from "../polymorph/tokens.ts";
 import { clearStockCaches } from "../stock/suite.ts";
 import { buildE2ERunnerModuleMap, buildModuleMap, buildRunnerModuleMap, isRuntimePath, RUNTIME_DIRS, type ModuleMap } from "./modules.ts";
 import { resolveCommit, shortRef } from "./refs.ts";
@@ -145,19 +145,8 @@ export function storedCopy(state: Pick<MorphState, "epoch" | "sha" | "fingerprin
 	return { epoch: state.epoch, onlyAt: state.sha, fingerprint: state.fingerprint, namesHash: state.namesHash };
 }
 
-/**
- * Why a fork loaded plain rather than as a renamed copy:
- * - "none": no copy was asked for, or the platform makes none for this fork
- *   (no secret, or its pinned release publishes no list);
- * - "mismatch": the copy asked for is not the one this load makes (another
- *   commit, fingerprint, or names hash), so it is not the copy a gate verified;
- * - "transient": a read the copy needs failed (Artifacts), and the same load
- *   may make it a moment later;
- * - "unavailable": no copy can be made of this code (the renamer cannot read
- *   it, a candidate's extra files), or the fork's pin or upstream's list is
- *   broken.
- */
-export type PlainKind = "none" | "mismatch" | "transient" | "unavailable";
+/** Why a fork loaded plain rather than as a renamed copy (see polymorph/errors.ts). */
+export type { PlainKind };
 
 export interface PlainLoad {
 	kind: PlainKind;
@@ -249,22 +238,6 @@ async function buildFor(env: Env, repoName: string, sha: string, options: LoadOp
  */
 const copyHashes = new Map<string, string>();
 
-/** The copy asked for is not the one this load makes, so it is not the copy a gate verified. */
-class CopyMismatchError extends Error {
-	constructor(message: string) {
-		super(message);
-		this.name = "CopyMismatchError";
-	}
-}
-
-/** Which kind of reason (see PlainKind) an error that stopped a copy gives. Any other error came from the renamer, the pin, or the list: unavailable. */
-function plainKind(error: unknown): PlainKind {
-	if (error instanceof PolymorphTransientError) return "transient";
-	if (error instanceof CopyMismatchError) return "mismatch";
-	if (error instanceof PolymorphOffError) return "none";
-	return "unavailable";
-}
-
 /**
  * The renamed copy of a plain build for one epoch, built once (a variant
  * shares it, so the gate checks the code production runs). Throws, saying
@@ -327,7 +300,7 @@ async function makeCopy(env: Env, repoName: string, sha: string, plain: CachedBu
 		return { build: copied, copy: copied.copy, plain: null };
 	} catch (error) {
 		// Whatever stops a copy (no secret, no list, code the renamer cannot read, Artifacts failing), the plain fork still serves.
-		const why: PlainLoad = { kind: plainKind(error), reason: error instanceof Error ? error.message : String(error) };
+		const why: PlainLoad = { kind: plainKindOf(error), reason: error instanceof Error ? error.message : String(error) };
 		reportPlain(repoName, sha, morph.epoch, why.reason);
 		return { build: plain, copy: null, plain: why };
 	}

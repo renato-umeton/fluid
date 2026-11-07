@@ -8,6 +8,7 @@
 import { parse } from "sucrase/dist/esm/parser/index.js";
 import { TokenType } from "sucrase/dist/esm/parser/tokenizer/types.js";
 import { ENTRY_MODULE, type ModuleMap } from "../runtime/modules.ts";
+import { PolymorphUnavailableError } from "./errors.ts";
 
 export interface IdentifierToken {
 	/** Offsets of the token in the source (end exclusive). */
@@ -26,19 +27,8 @@ export interface SourceTokens {
 	regexes: string[];
 }
 
-/**
- * This fork cannot be renamed safely: the renamer cannot read its code (a
- * module sucrase does not parse or that nests deeper than the parser's stack,
- * more code than the renamer reads), or the parser no longer reads code the
- * way the renamer relies on. Callers run the plain fork and log the reason, so
- * a fork's owner only ever sees the errors that loading already reports.
- */
-export class PolymorphUnavailableError extends Error {
-	constructor(message: string, options?: { cause?: unknown }) {
-		super(message, options);
-		this.name = "PolymorphUnavailableError";
-	}
-}
+// Defined with the other reasons a copy cannot be made (errors.ts); exported here too, where it was first.
+export { PolymorphUnavailableError };
 
 /** Reads the tokens of plain JavaScript (no TypeScript, no JSX). Throws PolymorphUnavailableError when it cannot. */
 export const scanTokens = tokenScanner(parse, TokenType);

@@ -7,7 +7,8 @@
 // expression, or JSON key or value can be read back as a property name at run
 // time, and that use would not be renamed.
 import type { ModuleMap } from "../runtime/modules.ts";
-import { PolymorphUnavailableError, SCAN_LIMITS, scanModuleMap, walkJson, type SourceTokens } from "./tokens.ts";
+import { PolymorphUnavailableError } from "./errors.ts";
+import { SCAN_LIMITS, scanModuleMap, walkJson, type SourceTokens } from "./tokens.ts";
 
 /** Where stock publishes the list. */
 export const POLYMORPH_LIST_PATH = "polymorph.json";

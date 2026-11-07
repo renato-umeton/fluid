@@ -8,7 +8,8 @@ import type { GateFailure, GateResult } from "../gate/tiers.ts";
 import type { RuntimeDeps } from "../runtime/loader.ts";
 import { headOf, openRepo } from "../runtime/repo-files.ts";
 import { fleetStub } from "../stubs.ts";
-import { polymorphSecret, PolymorphTransientError } from "./install.ts";
+import { PolymorphTransientError } from "./errors.ts";
+import { polymorphSecret } from "./install.ts";
 
 /**
  * Why a rotation runs: the schedule, a tripwire hit, a change landing on

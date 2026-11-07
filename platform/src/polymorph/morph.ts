@@ -5,9 +5,10 @@
 import { ENTRY_MODULE, type LoaderModule, type ModuleMap } from "../runtime/modules.ts";
 import { nameProblems, usableNames, type ContractTexts, type SkippedName } from "./list.ts";
 import { VARIANT_PATTERN } from "./names.ts";
-import { PolymorphUnavailableError, scanModuleMap, scanTokens, type IdentifierToken } from "./tokens.ts";
+import { PolymorphUnavailableError } from "./errors.ts";
+import { scanModuleMap, scanTokens, type IdentifierToken } from "./tokens.ts";
 
-export { PolymorphUnavailableError } from "./tokens.ts";
+export { PolymorphUnavailableError } from "./errors.ts";
 
 export interface MorphedFork {
 	/** The renamed module map. */
