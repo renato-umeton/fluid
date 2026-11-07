@@ -4,9 +4,10 @@
 // schedule starts such an instance every six hours, and an admin may ask for
 // the whole fleet) it starts one instance per fork in paced batches. Security
 // events are rotateFork's to record. Each instance id names what asked for
-// the rotation (a stored copy, a landed commit, a new fork, a fleet-wide run),
-// so asking again, however often, starts nothing new: everything else starts
-// one with startRotation (common.ts).
+// the rotation (a stale stored copy, a window of tripwire hits, a landed
+// commit, a new fork, a fleet-wide run), so asking again, however often,
+// starts nothing new: everything else starts one with startRotation
+// (common.ts).
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import type { RunStatus, StepStatus } from "../durable/runs.ts";
 import { polymorphSecret } from "../polymorph/install.ts";
