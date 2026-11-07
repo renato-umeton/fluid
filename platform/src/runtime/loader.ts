@@ -312,6 +312,9 @@ async function makeCopy(env: Env, repoName: string, sha: string, plain: CachedBu
 	}
 }
 
+/** A stored copy as made: the copy, or why it was not made (as LoadedFork.plain says it). */
+export type StoredCopyResult = { copy: LoadedCopy; plain: null } | { copy: null; plain: PlainLoad };
+
 /**
  * The copy Fleet stored for a fork, made at its commit as loading it would
  * make it (the same build and cache, every guard of storedCopy on) but
@@ -319,7 +322,7 @@ async function makeCopy(env: Env, repoName: string, sha: string, plain: CachedBu
  * commit of the fork against. When the stored state does not make the
  * verified copy, says why as a load would.
  */
-export async function buildStoredCopy(deps: RuntimeDeps, repoName: string, state: Pick<MorphState, "epoch" | "sha" | "fingerprint" | "namesHash">): Promise<{ copy: LoadedCopy; plain: null } | { copy: null; plain: PlainLoad }> {
+export async function buildStoredCopy(deps: RuntimeDeps, repoName: string, state: Pick<MorphState, "epoch" | "sha" | "fingerprint" | "namesHash">): Promise<StoredCopyResult> {
 	const options: LoadOptions = { morph: storedCopy(state) };
 	const made = await makeCopy(deps.env, repoName, state.sha, await buildFor(deps.env, repoName, state.sha, options), options.morph!, options);
 	return made.copy ? { copy: made.copy, plain: null } : { copy: null, plain: made.plain! };

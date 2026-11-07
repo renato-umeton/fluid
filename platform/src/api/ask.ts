@@ -10,7 +10,7 @@ import { currentStockTag } from "../forks/provision.ts";
 import { STOCK_REPO } from "../lib/names.ts";
 import { polymorphSecret } from "../polymorph/install.ts";
 import { scanRequest, type TripwireHit } from "../polymorph/tripwire.ts";
-import { askFork, askLoaded, buildStoredCopy, FORK_CALL_TIMEOUT_MS, loadForkRuntime, storedCopy, withTimeout, type AnswerCardLike, type LoadedCopy, type PlainLoad, type RuntimeDeps } from "../runtime/loader.ts";
+import { askFork, askLoaded, buildStoredCopy, FORK_CALL_TIMEOUT_MS, loadForkRuntime, storedCopy, withTimeout, type AnswerCardLike, type LoadedCopy, type LoadedFork, type PlainKind, type RuntimeDeps, type StoredCopyResult } from "../runtime/loader.ts";
 import { resolveCommit } from "../runtime/refs.ts";
 import { openRepo } from "../runtime/repo-files.ts";
 import type { RunTimeRecord } from "../durable/user-ledger.ts";
@@ -96,50 +96,64 @@ export async function serveAsk(deps: AskDeps, input: ServeAskInput): Promise<Ser
 
 /**
  * Asks the fork itself. A fork with a verified copy (Fleet's MorphState) is
- * guarded on every ref. When the ref is at the copy's commit, the copy
- * answers, with the model off, once the request passes its tripwires:
- * useModel comes from the request, so serving the plain fork for it would let
- * any request bypass the copy, and the gate verified the copy with the model
- * off. Any other commit (another branch or tag, or main before the rotation
- * of the commit it moved to stores a copy) answers plain as before, model and
- * all, but only to a request the stored copy's tripwires let through, so no
- * ref reaches the original names the copy retired. When the stored copy does
- * not load, see copyDidNotLoad. A fork with no copy, or a platform without a
- * secret, answers plain as before.
+ * guarded on every ref: a request reaches the fork only past the stored
+ * copy's guard (enforceGuard). At the copy's commit the copy itself answers,
+ * with the model off: useModel comes from the request, so serving the plain
+ * fork for it would let any request bypass the copy, and the gate verified
+ * the copy with the model off. At any other commit (another branch or tag, or
+ * main before the rotation of the commit it moved to stores a copy) the plain
+ * fork answers as before, model and all. A fork with no copy, or a platform
+ * without a secret, answers plain as before.
  */
 async function askOwnFork(deps: AskDeps, input: { repo: string; ref: string; request: Record<string, unknown>; useModel: boolean; copy: MorphState | null }): Promise<Answer> {
 	const { repo, ref, request, copy } = input;
 	if (copy === null || polymorphSecret(deps.env) === null) return { ...(await askFork(deps, { repo, ref, request, useModel: input.useModel })), variant: null };
-	// Resolved once: both loads below take this commit, so a push landing now cannot slip another commit under the check.
+	// Resolved once: every load below takes this commit, so a push landing now cannot slip another commit under the check.
 	const commit = await commitOf(deps.env, repo, ref);
-	if (commit === copy.sha) {
-		const loaded = await loadForkRuntime(deps, repo, ref, { commit, useModel: false, morph: storedCopy(copy) });
-		if (loaded.morph) await checkTripwires(deps, repo, request, loaded.morph);
-		else await copyDidNotLoad(deps, repo, copy, loaded.plain);
-		const card = await withTimeout(askLoaded(loaded, request, { useModel: false }), FORK_CALL_TIMEOUT_MS, `fork ${repo} did not answer`);
-		return { card, sha: loaded.sha, ref: loaded.ref, variant: loaded.morph?.fingerprint ?? null };
-	}
-	// The stored copy is made (from the cache once made) but never started: only its names are needed here.
-	const stored = await buildStoredCopy(deps, repo, copy);
-	if (stored.copy) await checkTripwires(deps, repo, request, stored.copy);
-	else await copyDidNotLoad(deps, repo, copy, stored.plain);
-	const loaded = await loadForkRuntime(deps, repo, ref, { commit, useModel: input.useModel });
-	const card = await withTimeout(askLoaded(loaded, request, { useModel: input.useModel }), FORK_CALL_TIMEOUT_MS, `fork ${repo} did not answer`);
-	return { card, sha: loaded.sha, ref: loaded.ref, variant: null };
+	const atCopy = commit === copy.sha;
+	// At the copy's commit the copy loads and answers; at another commit it is only made (from the cache once made), for its names.
+	const loaded = atCopy ? await loadForkRuntime(deps, repo, ref, { commit, useModel: false, morph: storedCopy(copy) }) : null;
+	const guard = loaded ? fromLoaded(loaded) : await buildStoredCopy(deps, repo, copy);
+	await enforceGuard(deps, repo, request, copy, guard);
+	const useModel = atCopy ? false : input.useModel;
+	const answering = loaded ?? (await loadForkRuntime(deps, repo, ref, { commit, useModel }));
+	const card = await withTimeout(askLoaded(answering, request, { useModel }), FORK_CALL_TIMEOUT_MS, `fork ${repo} did not answer`);
+	return { card, sha: answering.sha, ref: answering.ref, variant: answering.morph?.fingerprint ?? null };
+}
+
+/** The stored copy as a load at its commit made it: the copy, or why the plain fork loaded instead. */
+function fromLoaded(loaded: LoadedFork): StoredCopyResult {
+	// loadForkRuntime sets plain exactly when it loaded no copy.
+	return loaded.morph ? { copy: loaded.morph, plain: null } : { copy: null, plain: loaded.plain! };
 }
 
 /**
- * The fork's stored copy did not load. When a read failed (Artifacts), the
- * request is refused as retryable: the plain fork answering unchecked would
- * let a request reach the original names whenever Artifacts errs. Any other
- * reason will not pass by itself (the secret changed, the copy would rename
- * other names, the renamer refuses the code now), so the plain fork answers
- * (at the copy's commit with the model off, as the copy would) and one
- * rotation of the stored copy brings back a verified one.
+ * What the live path does when a fork's stored copy did not load, by the
+ * kind of reason. "retry": refuse the request as retryable, since the plain
+ * fork answering unchecked would let a request reach the original names
+ * whenever Artifacts errs. "rotate": let the plain fork answer and start one
+ * rotation of the stored copy, for a reason that will not pass by itself (the
+ * secret changed, the copy would rename other names, the renamer refuses the
+ * code now). "plain": let the plain fork answer, for a fork the platform
+ * makes no copy of, which no rotation changes.
  */
-async function copyDidNotLoad(deps: AskDeps, repo: string, copy: MorphState, plain: PlainLoad | null): Promise<void> {
-	if (plain?.kind === "transient") throw new HttpError(503, COPY_RETRY, {}, { "retry-after": String(COPY_RETRY_AFTER_SECONDS) });
-	await startRotation(deps.env, deps.exports.RotateWorkflow, { repo, reason: "mismatch", key: copyKey(copy) });
+export function onCopyFailure(kind: PlainKind): "retry" | "rotate" | "plain" {
+	if (kind === "transient") return "retry";
+	if (kind === "none") return "plain";
+	return "rotate";
+}
+
+/**
+ * Lets a request through to the fork only past the stored copy's guard: when
+ * the copy was made, the request must pass its tripwires (checkTripwires);
+ * when it was not, onCopyFailure says whether to refuse it as retryable, or to
+ * let it through, after starting one rotation of the stored copy or not.
+ */
+async function enforceGuard(deps: AskDeps, repo: string, request: Record<string, unknown>, stored: MorphState, guard: StoredCopyResult): Promise<void> {
+	if (guard.copy) return checkTripwires(deps, repo, request, guard.copy);
+	const action = onCopyFailure(guard.plain.kind);
+	if (action === "retry") throw new HttpError(503, COPY_RETRY, {}, { "retry-after": String(COPY_RETRY_AFTER_SECONDS) });
+	if (action === "rotate") await startRotation(deps.env, deps.exports.RotateWorkflow, { repo, reason: "mismatch", key: copyKey(stored) });
 }
 
 /**

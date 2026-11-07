@@ -6,7 +6,7 @@
 // machine.
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import worker from "../src/index.ts";
-import { COPY_RETRY, serveAsk, TRIPWIRE_REFUSAL, UNSCANNABLE_REFUSAL, type ServeAskInput, type ServedCard } from "../src/api/ask.ts";
+import { COPY_RETRY, onCopyFailure, serveAsk, TRIPWIRE_REFUSAL, UNSCANNABLE_REFUSAL, type ServeAskInput, type ServedCard } from "../src/api/ask.ts";
 import { HttpError } from "../src/api/http.ts";
 import { cardDifferences } from "../src/polymorph/equivalence.ts";
 import { deriveSeed, fingerprint, namesHash, variantNames } from "../src/polymorph/names.ts";
@@ -17,7 +17,7 @@ import { ledgerStub } from "../src/stubs.ts";
 import { hostCallback } from "../src/yellow/run.ts";
 import { copyKey, rotationId } from "../src/workflows/common.ts";
 import { cookieFor, post } from "./helpers/api-env.ts";
-import { LISTED, POLYMORPH_TEST_SECRET, PUBLISHED, TAG, polymorphPlatform, type PolymorphPlatform } from "./helpers/polymorph-platform.ts";
+import { BUILD_CARD, LISTED, patched, POLYMORPH_TEST_SECRET, PUBLISHED, TAG, polymorphPlatform, type PolymorphPlatform } from "./helpers/polymorph-platform.ts";
 import { fakeWorkflows } from "./helpers/workflows.ts";
 
 const SLOW_MS = 120_000;
@@ -45,11 +45,26 @@ const MODEL_WORDING = "wording:model";
 // A fork whose main moved on after its copy was stored.
 const MOVED = [PUBLISHED, { ...PUBLISHED, "app/moved.ts": "export const moved = 2;\n" }];
 
+// A fork that puts a computed dose on every clinical card, which the platform's backstop never serves.
+const DOSING = patched(
+	"app/index.ts",
+	BUILD_CARD,
+	[
+		"  const card = await buildCard({ request, env, decision, classification, signals, config, answerId: newAnswerId(env) });",
+		'  return card.mode === "clinical" ? { ...card, computed_dose: { value: 5, unit: "mg", basis: "a test fork" } } : card;',
+	].join("\n"),
+);
+
+/** A fork's main and a work/next branch one commit ahead of it. */
+const withNext = (name: string) => [{ ...PUBLISHED, [`app/${name}.ts`]: `export const ${name} = 1;\n` }, { ...PUBLISHED, [`app/${name}.ts`]: `export const ${name} = 2;\n` }];
+
 let p: PolymorphPlatform;
 const workflows = fakeWorkflows(MODEL);
 let deps: RuntimeDeps;
 /** The commit of user-ahead's work/next, one commit ahead of its main. */
 let aheadCommit: string;
+/** The commit of each fork's work/next, for the forks seeded withNext. */
+const nextOf: Record<string, string> = {};
 
 beforeAll(() => {
 	p = polymorphPlatform({
@@ -67,6 +82,7 @@ beforeAll(() => {
 		"user-http": { ...PUBLISHED, "app/http.ts": "export const http = 1;\n" },
 		"user-other": { ...PUBLISHED, "app/other.ts": "export const other = 1;\n" },
 		"user-crowd": { ...PUBLISHED, "app/crowd.ts": "export const crowd = 1;\n" },
+		"user-dosing": DOSING,
 		"user-flaky": { ...PUBLISHED, "app/flaky.ts": "export const flaky = 1;\n" },
 		"user-resecret": { ...PUBLISHED, "app/resecret.ts": "export const resecret = 1;\n" },
 		"user-renames": { ...PUBLISHED, "app/renames.ts": "export const renames = 1;\n" },
@@ -79,7 +95,12 @@ beforeAll(() => {
 	const ahead = p.t.artifacts.seed("user-ahead", { commits: [{ ...PUBLISHED, "app/ahead.ts": "export const ahead = 1;\n" }, { ...PUBLISHED, "app/ahead.ts": "export const ahead = 2;\n" }], branches: { main: 0, "work/next": 1 } });
 	p.heads["user-ahead"] = ahead.commits[0]!;
 	aheadCommit = ahead.commits[1]!;
-	p.heads["user-reads"] = p.t.artifacts.seed("user-reads", { commits: [{ ...PUBLISHED, "app/reads.ts": "export const reads = 1;\n" }, { ...PUBLISHED, "app/reads.ts": "export const reads = 2;\n" }], branches: { main: 0, "work/next": 1 } }).commits[0]!;
+	p.heads["user-reads"] = p.t.artifacts.seed("user-reads", { commits: withNext("reads"), branches: { main: 0, "work/next": 1 } }).commits[0]!;
+	for (const repo of ["user-m1", "user-m2"]) {
+		const seeded = p.t.artifacts.seed(repo, { commits: withNext(repo.slice(5)), branches: { main: 0, "work/next": 1 } });
+		p.heads[repo] = seeded.commits[0]!;
+		nextOf[repo] = seeded.commits[1]!;
+	}
 	for (const repo of Object.keys(p.heads)) p.t.fleet.register({ repo, userId: repo.slice(5), persona: "p", pinnedTag: TAG, status: "pinned" });
 	deps = { env: p.t.env, exports: workflows.exports as never };
 });
@@ -534,6 +555,72 @@ describe("the live path at the HTTP layer", () => {
 			expect(served.signals).not.toContain(MODEL_WORDING);
 			expect(modelCalls.length).toBe(calls);
 			expect(p.loader.built.filter((id) => id.startsWith("user-http:") && id.endsWith(":llm"))).toEqual([]);
+		},
+		SLOW_MS,
+	);
+});
+
+describe("onCopyFailure", () => {
+	it.each([
+		["transient", "retry"],
+		["mismatch", "rotate"],
+		["unavailable", "rotate"],
+		["none", "plain"],
+	] as const)("answers a stored copy that did not load for a %s reason with %s", (kind, action) => {
+		expect(onCopyFailure(kind)).toBe(action);
+	});
+});
+
+describe("serveAsk when the stored copy does not load, asked at another commit", () => {
+	it(
+		"refuses as retryable when Artifacts fails to read what the copy needs, and lets the plain fork answer once it reads again",
+		async () => {
+			vi.spyOn(console, "warn").mockImplementation(() => undefined);
+			await storeCopy("user-m1", 1);
+			const git = p.t.artifacts.repos.get("user-m1")!.git;
+			const read = git.readFile.bind(git);
+			let failures = 0;
+			vi.spyOn(git, "readFile").mockImplementation(async (args: { ref: string; path: string }) => {
+				if (args.path === "tests/user/manifest.json" && failures++ === 0) throw new Error("Artifacts: 503 service unavailable");
+				return read(args);
+			});
+			const onNext = () => serveAsk(deps, { repo: "user-m1", ref: "work/next", request: requests.administrative, useModel: false, userId: "m1", fallback: false });
+			expect(await refusal(onNext())).toEqual({ status: 503, message: COPY_RETRY, extra: {}, headers: { "retry-after": "10" } });
+			expect(rotationsOf("user-m1")).toEqual([]);
+			expect(await ledgerOf("user-m1")).toEqual([]);
+			expect((await onNext()).fork).toEqual({ repo: "user-m1", ref: "work/next", commit: nextOf["user-m1"] });
+		},
+		SLOW_MS,
+	);
+
+	it(
+		"lets the plain fork answer, model and all, and starts one rotation, when the stored copy is stale",
+		async () => {
+			vi.spyOn(console, "warn").mockImplementation(() => undefined);
+			const stale = { ...(await storeCopy("user-m2", 1)), fingerprint: "00000000" };
+			p.t.fleet.setMorph("user-m2", stale, { from: 1 }, t0);
+			vi.spyOn(Date, "now").mockReturnValue(t0);
+			const served = await serveAsk(deps, { repo: "user-m2", ref: "work/next", request: requests.administrative, useModel: true, userId: "m2", fallback: false });
+			expect(served.fork).toEqual({ repo: "user-m2", ref: "work/next", commit: nextOf["user-m2"] });
+			expect(served.signals).toContain(MODEL_WORDING);
+			const id = rotationId("user-m2", copyKey(stale, t0));
+			expect(rotationsOf("user-m2")).toEqual([{ workflow: "RotateWorkflow", id, params: { repo: "user-m2", reason: "mismatch", runId: `run_${id}` } }]);
+		},
+		SLOW_MS,
+	);
+});
+
+describe("serveAsk's clinical dose backstop with a copy", () => {
+	it(
+		"serves stock's answer, which names no copy, when the copy's card computes a clinical dose",
+		async () => {
+			vi.spyOn(console, "error").mockImplementation(() => undefined);
+			await storeCopy("user-dosing", 1);
+			const served = await ask("user-dosing", requests.clinical);
+			expect(served.fork).toMatchObject({ repo: "user-dosing", servedBy: { repo: "stock", ref: TAG } });
+			expect(served.fork).not.toHaveProperty("variant");
+			expect(served.computed_dose).toBeNull();
+			expect((await ledgerOf("user-dosing")).map((record) => "variant" in record)).toEqual([false]);
 		},
 		SLOW_MS,
 	);
