@@ -32,7 +32,7 @@ import { headOf, isNotFound, openRepo, readTextFile } from "../runtime/repo-file
 import { parseUiPreferences, UI_PREFERENCES_PATH } from "../ui/preferences.ts";
 import { aggregateCharts, CHART_LIMITS } from "../ui/charts.ts";
 import { DEMO_OVERLAY, demoReleaseFiles, keepFloorTightening } from "../stock/releases.ts";
-import { appExports, ensureRun, INSTALL_KEY, mainBeforePush, recordMainBeforePush, repoRemote, startGateInstance, startRotation, startYellowRun } from "../workflows/common.ts";
+import { appExports, ensureRun, INSTALL_KEY, landedKey, mainBeforePush, recordMainBeforePush, repoRemote, startGateInstance, startRotation, startYellowRun } from "../workflows/common.ts";
 import { rerunTargets, upgradeTargets } from "../workflows/upgrade.ts";
 import { decodeParam, HttpError, json, readJson, requireJsonPost, requireString } from "./http.ts";
 import { askRef, parsePreferences } from "./validate.ts";
@@ -763,6 +763,9 @@ route("POST", "/api/forks/:repo/upgrade", async (rc, { repo }) => {
 	// The approved upgrade is live: it soaks in yellow like every other change that lands on main.
 	const yellow = landed ? await startYellowRun(rc.env, appExports(rc.ctx), { repo: name, commit: pending.commit, previous: ff.outcome === "fast-forward" ? previous : ((await mainBeforePush(rc.env, pending.runId, pending.commit)) ?? (await firstParent(ws, pending.commit))), source: "one-tap", parentRunId: pending.runId }) : null;
 	const updated = await fleet.update(name, { status: "passed", pendingUpgrade: null, lastRun });
+	// The approved upgrade runs plain until a rotation stores a verified copy of it; the fork now shows passed,
+	// which a rotation does not wait out.
+	if (landed) await startRotation(rc.env, appExports(rc.ctx).RotateWorkflow, { repo: name, reason: "landed", key: landedKey(pending.commit) });
 	forkInfoCache.delete(name);
 	return json({ repo: name, tag: pending.tag, commit: pending.commit, fork: updated, yellowRunId: yellow?.runId ?? null });
 });
