@@ -14,7 +14,7 @@ import { deriveSeed, fingerprint, namesHash } from "../src/polymorph/names.ts";
 import { SCAN_LIMITS } from "../src/polymorph/tokens.ts";
 import { scanRequest } from "../src/polymorph/tripwire.ts";
 import * as loaderModule from "../src/runtime/loader.ts";
-import { askLoaded, clearRuntimeCache, ForkRuntimeError, isolateId, loadForkRuntime, storedCopy, type LoadedFork, type PlainKind, type RuntimeDeps } from "../src/runtime/loader.ts";
+import { askLoaded, buildStoredCopy, clearRuntimeCache, ForkRuntimeError, isolateId, loadForkRuntime, storedCopy, type LoadedFork, type PlainKind, type RuntimeDeps } from "../src/runtime/loader.ts";
 import { releaseMetadata, releaseMetadataPath } from "../src/stock/releases.ts";
 import { apiEnv } from "./helpers/api-env.ts";
 import { fakeLoader } from "./helpers/fake-loader.ts";
@@ -593,4 +593,34 @@ describe("storedCopy", () => {
 		},
 		SLOW_MS,
 	);
+});
+
+describe("buildStoredCopy", () => {
+	const stateOf = async (epoch: number) => ({ epoch, sha: heads["user-1"]!, fingerprint: await fingerprint(await deriveSeed(SECRET, "user-1", heads["user-1"]!, epoch)), namesHash: await namesHash(listed) });
+
+	it(
+		"makes the copy Fleet stored as a load would, and starts no isolate for it",
+		async () => {
+			const state = await stateOf(91);
+			const get = vi.spyOn(loader, "get");
+			const made = await buildStoredCopy(deps, "user-1", state);
+			expect(made.plain).toBeNull();
+			expect([made.copy?.epoch, made.copy?.fingerprint, made.copy?.namesHash]).toEqual([91, state.fingerprint, state.namesHash]);
+			expect([...made.copy!.names.keys()]).toEqual(listed);
+			expect(get).not.toHaveBeenCalled();
+			// Loading the copy later finds what was made: nothing is read or signed again.
+			const work = [vi.spyOn(crypto.subtle, "sign"), vi.spyOn(t.artifacts.repos.get("user-1")!.git, "readFile"), vi.spyOn(stock, "readFile")];
+			const loaded = await loadForkRuntime(deps, "user-1", "main", { morph: storedCopy(state) });
+			expect(copyOf(loaded).names).toEqual(made.copy!.names);
+			expect(work.map((spy) => spy.mock.calls.length)).toEqual([0, 0, 0]);
+		},
+		SLOW_MS,
+	);
+
+	it("says why it made no copy, as a load would, when the stored state is not what the seed makes", async () => {
+		const warn = warnings();
+		const made = await buildStoredCopy(deps, "user-1", { ...(await stateOf(92)), fingerprint: "00000000" });
+		expect(made).toEqual({ copy: null, plain: { kind: "mismatch", reason: expect.stringMatching(/is not the verified copy's \(00000000\)$/) } });
+		expect(warn).toHaveBeenCalledTimes(1);
+	});
 });

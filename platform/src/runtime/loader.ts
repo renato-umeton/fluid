@@ -319,6 +319,32 @@ function reportPlain(repo: string, sha: string, epoch: number, reason: string): 
 	console.warn(`polymorph: ${repo}@${sha.slice(0, 7)} runs plain: ${reason}`);
 }
 
+/** The copy a load asks for, or the plain build and why there is none (logged as reportPlain says). */
+async function makeCopy(env: Env, repoName: string, sha: string, plain: CachedBuild, morph: NonNullable<LoadOptions["morph"]>, options: LoadOptions): Promise<{ build: CachedBuild; copy: LoadedCopy | null; plain: PlainLoad | null }> {
+	try {
+		const copied = await copyFor(env, repoName, sha, plain, morph, options);
+		return { build: copied, copy: copied.copy, plain: null };
+	} catch (error) {
+		// Whatever stops a copy (no secret, no list, code the renamer cannot read, Artifacts failing), the plain fork still serves.
+		const why: PlainLoad = { kind: plainKind(error), reason: error instanceof Error ? error.message : String(error) };
+		reportPlain(repoName, sha, morph.epoch, why.reason);
+		return { build: plain, copy: null, plain: why };
+	}
+}
+
+/**
+ * The copy Fleet stored for a fork, made at its commit as loading it would
+ * make it (the same build and cache, every guard of storedCopy on) but
+ * started in no isolate: what the live path checks a request to another
+ * commit of the fork against. When the stored state does not make the
+ * verified copy, says why as a load would.
+ */
+export async function buildStoredCopy(deps: RuntimeDeps, repoName: string, state: Pick<MorphState, "epoch" | "sha" | "fingerprint" | "namesHash">): Promise<{ copy: LoadedCopy; plain: null } | { copy: null; plain: PlainLoad }> {
+	const options: LoadOptions = { morph: storedCopy(state) };
+	const made = await makeCopy(deps.env, repoName, state.sha, await buildFor(deps.env, repoName, state.sha, options), options.morph!, options);
+	return made.copy ? { copy: made.copy, plain: null } : { copy: null, plain: made.plain! };
+}
+
 /** Resolves `ref` (branch, tag, or SHA) in `repoName` and returns an RPC handle to its runtime. */
 export async function loadForkRuntime(deps: RuntimeDeps, repoName: string, ref = "main", options: LoadOptions = {}): Promise<LoadedFork> {
 	if (options.extraFiles && !options.variant) throw new Error("loadForkRuntime: extraFiles requires a variant");
@@ -331,18 +357,7 @@ export async function loadForkRuntime(deps: RuntimeDeps, repoName: string, ref =
 	let build = await buildFor(deps.env, repoName, sha, options);
 	let copy: LoadedCopy | null = null;
 	let plain: PlainLoad | null = { kind: "none", reason: "no copy was asked for" };
-	if (options.morph) {
-		try {
-			const copied = await copyFor(deps.env, repoName, sha, build, options.morph, options);
-			build = copied;
-			copy = copied.copy;
-			plain = null;
-		} catch (error) {
-			// Whatever stops a copy (no secret, no list, code the renamer cannot read, Artifacts failing), the plain fork still serves.
-			plain = { kind: plainKind(error), reason: error instanceof Error ? error.message : String(error) };
-			reportPlain(repoName, sha, options.morph.epoch, plain.reason);
-		}
-	}
+	if (options.morph) ({ build, copy, plain } = await makeCopy(deps.env, repoName, sha, build, options.morph, options));
 	const id = isolateId(repoName, sha, { variant: options.variant, useModel: options.useModel === true, ...(copy ? { copy } : {}) });
 	const env: Record<string, unknown> = { fluidToml: build.fluidToml, forkCommit: sha, data: synthetic };
 	if (options.useModel) env.LLM = deps.exports.LlmHost({ props: { repo: repoName } });
