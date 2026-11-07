@@ -61,6 +61,18 @@ auto_upgrade = false
 harvest_opt_in = true
 ```
 
+### Polymorph list (polymorph.json)
+
+Optional. Upstream lists the internal names that a fork's renamed copy may rename (polymorphic installation, `docs/POLYMORPH.md`):
+
+```json
+{ "version": 1,
+  "description": "Internal identifiers that each running copy of a fork renames with a secret suffix, ...",
+  "names": ["administrativeAnswer", "ageInYears", "...", "researchNeedsAttestation", "...", "weightKg"] }
+```
+
+The platform reads it from `stock` at the fork's pinned tag. `version` must be 1, and each name must be a plain identifier (letters, digits, and underscores, with no leading digit), listed once, and not reserved (a keyword, or a name the language or the runtime contract reads). A release whose list breaks these rules, or that has none, runs every fork plain. Stock's own unit test (`stock/tests/unit/polymorph-list.test.ts`) also checks that each name is used in runtime code, appears nowhere as text, and is not a name that a contract reads (see `docs/POLYMORPH.md`).
+
 ### UI preferences (ui/preferences.json)
 
 ```json
@@ -139,6 +151,19 @@ An upgrade run and the fork's `lastRun` in the fleet carry `path` (`"replay"` or
 
 `status` is `running`, `waiting` (for a pick), `passed` (the pick reached main), `failed` (no winner, or the pick did not pass its merge gate), or `cancelled` (no pick within an hour). A contestant's `status` moves through `queued`, `planning`, `ready`, `checking`, `evaluated`, or ends as `no change` with an `error`; the owner's agent starts as `waiting for your push` and becomes `joined`. A cell's `scope` is `wish`, `target` (wording in a mode the wish targets), `outside`, or `own` (a test main never ran, such as one the contestant added; never counted against it). A row main never ran has `main: {passed: null, missing: true}`.
 
+### Rotate run record
+
+`GET /api/runs/<runId>` for a rotation, which moves a fork to its next renamed copy (`docs/GATE_AND_AGENTS.md`, "Rotation"):
+
+```json
+{ "id": "run_rot-1a2b3c4d-l0123456789abcdef", "kind": "rotate", "repo": "user-...", "status": "passed",
+  "reason": "landed", "outcome": "rotated", "epoch": 3, "commit": "...",
+  "steps": [ { "name": "Rotate to the next renamed copy", "status": "done",
+    "detail": "The renamed copy for epoch 3 of 0123abc answered every probe like the plain fork, and the fork serves it now" } ] }
+```
+
+`reason` is `schedule`, `tripwire`, `mismatch`, `landed`, `install`, or `admin`. `outcome` is `rotated` (status `passed`), `refused` (status `failed`; `failures` holds the gate's first 10 failures, and `more` counts the rest), or `skipped` (status `cancelled`, with `cancelReason`). A rotated or refused run also has `epoch` and `commit`. A `mismatch` rotation that cleared a stored copy that no longer builds also has `cleared: true`, and its step says so. A rotation that still errors after its retries ends `failed` with `error`. Anyone who knows a run id can read the run, so no rotate run holds the copy's fingerprint. A fleet-wide run has `repo: null`, the step "Rotate every fork", and `forks`, the number of rotations it started; each of those logs its own run. Run ids: `run_rotate_<hex>` from the admin route, `run_rot-<fork hash>-<key>` for one fork's rotation (the key names what asked for it), and `run_<instance id>` for the run the schedule starts.
+
 ## HTTP routes
 
 | Method and path | Who | What it does |
@@ -156,7 +181,7 @@ An upgrade run and the fork's `lastRun` in the fleet carry `path` (`"replay"` or
 | `POST /api/forks/:repo/token` | owner | A one hour git write token for your own agent, scoped to the fork's inbox repo (`inbox-<fork>`, created on first use), never to the fork: `{repo, inbox, remote, token, expiresAt, branchPrefix: "work/", commands}`. Revokes the previous outside token |
 | `POST /api/forks/:repo/upgrade` | owner | One-tap upgrade to a passed release |
 | `POST /api/forks/:repo/repairs/:sha/apply` | owner | Gate a repair branch and fast-forward main on pass |
-| `POST /api/ask` | session | Ask the user's fork (or stock); returns an answer card. `reaskOf` (an earlier `answer_id`) marks an override or attestation re-ask of the same question and is recorded as `reask_of` |
+| `POST /api/ask` | session | Ask the user's fork (or stock); returns an answer card. `reaskOf` (an earlier `answer_id`) marks an override or attestation re-ask of the same question and is recorded as `reask_of`. The card's `fork` names what answered: `repo`, `ref`, and `commit`, plus `variant` (the copy's fingerprint) when a renamed copy answered. The ledger row then records `variant` too. A fork with a renamed copy may refuse with 403, 400, or 503 (see "Limits and protections") |
 | `POST /api/override` | session | Record an override on a run-time record |
 | `GET /api/ledger/:userId` | owner | Run-time intent records |
 | `POST /api/ledger/commit` | owner | Commit pending records to the `ledger-<id>` repo |
@@ -165,18 +190,19 @@ An upgrade run and the fork's `lastRun` in the fleet carry `path` (`"replay"` or
 | `POST /api/contests` | owner | Start a contest for one wish: `{repo, request, size?: 2 or 3, includeAgent?: boolean}` -> `{runId, contestId, joinUntil, agentBranch}`. Costs `size` customizations |
 | `POST /api/contests/:runId/pick` | owner | Ship a contestant: `{label}`. Only one that passed every tier and every wish test, once per contest; it is then gated in merge mode |
 | `GET /api/forks/:repo/wishes` | anyone | Wishes in flight: the newest work branches with the intent records they add and their status. The owner (or admin) also gets the notes of runs that have not pushed yet (`notesIncluded: true`). Cached per fork for 10 seconds |
-| `GET /api/runs/:runId` | session | Run timeline: steps, diff, suggestions, gate, yellow phase |
+| `GET /api/runs/:runId` | anyone (with the run id) | Run timeline: steps, diff, suggestions, gate, yellow phase, or a rotation's outcome (see "Rotate run record") |
 | `POST /api/suggestions/:runId/decide` | owner | Accept, edit, or reject a suggested test |
 | `GET /api/gates/:repo` | anyone | Gate results history |
 | `POST /api/gates/:repo` | owner | Gate the head of a work branch directly |
 | `GET /api/fleet` | anyone | Fleet snapshot: forks, statuses, health, releases |
-| `GET /api/fleet/stream` | anyone | Server-sent events for fleet changes |
+| `GET /api/fleet/stream` | anyone | Server-sent events for fleet changes. A `security` event carries only the repo, the kind (`tripwire` or `rotated`), and the time, at most one per fork and kind every 10 seconds |
 | `GET /api/harvest` | anyone | Harvest proposals |
 | `POST /api/admin/stock/publish` | admin | Publish a stock release tag |
 | `POST /api/admin/release` | admin | Tag a release and upgrade the fleet; each upgrade tries intent replay first unless the body sets `replay: false` |
 | `POST /api/admin/fleet/seed` | admin | Seed synthetic forks |
 | `POST /api/admin/fleet/cleanup` | admin | Delete seeded forks |
 | `POST /api/admin/fleet/baseline` | admin | Dry-run the end-to-end suite on every fork and flag failures |
+| `POST /api/admin/fleet/rotate` | admin | Move one fork (`{repo}`) or every fork (`{}`) to its next renamed copy. Answers 202 with `{runId}`, plus `repo` when one was given; the run exists before the answer. An unknown repo gets 404 `fork not found`. The run starts even without `POLYMORPH_SECRET`, and then skips |
 | `POST /api/admin/forks/:repo/delete` | admin | Delete one fork |
 | `POST /api/admin/harvest` | admin | Run the harvester |
 | `POST /api/admin/suite` | admin | Run the stock suites against a fork ref |
@@ -192,6 +218,7 @@ An upgrade run and the fork's `lastRun` in the fleet carry `path` (`"replay"` or
 - Contests: a contest of N counts as N customizations of the owner (10 an hour), and 30 contests an hour run across the platform. Units already taken are given back when a later one is refused, or when the contest cannot start. If creating the contest workflow throws but the instance exists anyway (a dropped connection after the create), the contest is kept and the start answers 202. When the route cannot find the instance and abandons the contest, an instance that was made anyway stops at its first step without touching the run, the contest state, or the lease. If sending a pick fails, the pick is cleared so the owner can pick again. N is 2 or 3, one contest per fork at a time (a second gets a 409), a second pick gets a 409, the join window for the owner's agent is 5 minutes, and a contest waits at most an hour for a pick.
 - Wishes in flight (`GET /api/forks/:repo/wishes`): the per-client read quota and 300 reads a minute across the platform.
 - Refusals say why in a machine-readable way. A rate limit 429 (except a contest refused by its quota, which says why in `error` only) carries `{reason: "rate-limit", bucket, scope: "client" or "user" or "global", limit, windowSeconds, retryAfterSeconds}` and a `retry-after` header; a full fleet is a 429 with `reason: "fleet-full"`; a fork already being set up is a 409 with `reason: "busy"`. The UI turns these into plain words (`docs/UI.md`, "When the platform cannot give you a fork").
+- Requests to a fork with a renamed copy (`docs/POLYMORPH.md`) are scanned before the fork sees them, on every ref. A request gets a 403 `Request refused by a security check.` when any key, at any depth, is an original name that the copy renamed or another copy's renamed name. Both cases get the same answer. The platform records a security event and starts one rotation of that copy in each 10-minute window; the fork is not asked and no ledger row is written. A request nested deeper than 32 levels or with more than 10,000 keys (array elements count) gets a 400 `Request too large or too deeply nested.` When the stored copy cannot be built because a read failed in Artifacts, every ref answers 503 `The fork's renamed copy could not be loaded; retry shortly.` with a `retry-after: 10` header.
 - Fork claims are atomic in `Fleet.claimProvisioning`. A concurrent second request gets a 409, and failed attempts do not count toward the 500-fork cap.
 - Fleet streams are capped at 200 overall and 5 per client. A subscriber with more than 256 KB unread is dropped.
 - Ledger repos are created only for users with a fork, and the daily alarm stops when nothing is waiting.

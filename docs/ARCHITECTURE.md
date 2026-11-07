@@ -4,7 +4,7 @@ This document maps each concept in the spec (`docs/Fluid_ Personal Software for 
 
 For the platform in one page, with what is still medical-specific, see [OVERVIEW.md](OVERVIEW.md).
 
-Related documents: `docs/GATE_AND_AGENTS.md` (workflows and gate details), `docs/SPIKE_FINDINGS.md` (measured behavior of each primitive), `stock/README.md` (the stock runtime contract), `docs/UI.md`.
+Related documents: `docs/GATE_AND_AGENTS.md` (workflows and gate details), `docs/SPIKE_FINDINGS.md` (measured behavior of each primitive), `stock/README.md` (the stock runtime contract), `docs/UI.md`, `docs/POLYMORPH.md` (polymorphic installation).
 
 ## Repository layout
 
@@ -35,11 +35,14 @@ flowchart TB
   YW -- fail: revert main --> F
   YW -- fail --> RP
   YW --> BR["Browser Rendering: browser checks"]
-  CW & UW & GW --> RT["Worker Loader: fork isolate repo:sha"]
+  CW & UW & GW --> RT["Worker Loader: fork isolate repo:sha, or its renamed copy"]
   GW & UW --> RN["Worker Loader: stock runner isolate"]
   RN -- ask callback over RPC --> RT
   S -- tests at pinned tag --> RN
-  W & GW & UW --> DO["Durable Objects: Fleet, Runs, UserLedger, Quota"]
+  W & GW & UW & YW -- landed change, new fork, tripwire hit --> RO["Rotate Workflow: renamed copies, every 6 hours"]
+  RO -- check mode gate, plain fork and copy --> RT
+  RO --> RN
+  W & GW & UW & RO --> DO["Durable Objects: Fleet, Runs, UserLedger, Quota"]
   DO --> LG
   CW & UW & RP & HW --> AI["Workers AI through AI Gateway fluid"]
 ```
@@ -143,16 +146,25 @@ flowchart TB
 - **Code.** `platform/src/durable/quota.ts` and `platform/src/api/routes.ts`. Per-client and global quotas on sessions, forks, asks, Artifacts-backed reads, and outside git tokens (3 per hour per user, 6 per client, 60 overall). JSON-only POST bodies capped at 64 KB, same-origin checks, request ids on every error. The AI Gateway caps all model traffic at 300 requests per minute.
 - **Outside git access.** A token from `POST /api/forks/:repo/token` lasts one hour and can write only the fork's inbox repo (`inbox-<fork>`), never the fork, because Artifacts tokens cannot be limited to branches. Minting is one request per fork at a time and replaces the inbox, which ends earlier tokens; the inbox is deleted 15 minutes after its token expires. Each new `work/*` head in the inbox starts its own import workflow (10 per fork and 200 overall per hour), which imports it as `work/inbox/<name>` within caps (8 MB downloaded, 5000 tree entries, 50 commits, 200 files, 1 MB per file, no unsafe paths), and the gate decides as for any other change, without a repair agent if it fails. Inboxes are not fleet forks, so they do not count toward the 500 fork cap or the per-client fork quota; there is at most one per fork. Details and limits in `docs/GATE_AND_AGENTS.md`, "Outside pushes".
 
+### Polymorphic installation (issue #1, beyond the spec)
+
+- **Loader step.** `platform/src/runtime/loader.ts` builds a fork's module map as before. When a load asks for a renamed copy (`LoadOptions.morph`), `morphFork` (`platform/src/polymorph/morph.ts`) then renames the identifiers that upstream lists in `polymorph.json` (read from `stock` at the fork's pinned tag) and that the fork's own text and the runtime do not use. Each name gets a suffix from a seed derived from `POLYMORPH_SECRET`, the repo, the commit, and the epoch. The copy runs in its own isolate, keyed `repo:sha[:variant]:m<epoch>.<fingerprint>.<namesHash>`, where the variant is the gate's own when a gate loads the copy (see `docs/POLYMORPH.md`). When no copy can be made, the plain fork loads and the loader logs why.
+- **Gate.** A rotation's check mode gate (`GateInput.morph`) sends every runner request to the plain fork and to the copy, and any difference fails tier 1 as `polymorph-equivalence` (`platform/src/polymorph/equivalence.ts`, `platform/src/gate/run.ts`).
+- **Fleet's copy state.** The `Fleet` Durable Object keeps each fork's verified copy (epoch, commit, fingerprint, names hash, and time), which only a rotation changes, by compare-and-set. It also keeps the latest 100 security events per fork. The public fleet stream gets only an event's repo, kind, and time, at most one per fork and kind every 10 seconds; `rotation_refused` and `copy_cleared` are never broadcast.
+- **Live path.** `serveAsk` (`platform/src/api/ask.ts`) scans the keys of every request to a fork with a stored copy for the names the copy renamed and for those names with another copy's suffix (`platform/src/polymorph/tripwire.ts`), refuses a hit with a 403, and answers from the copy, with the model off, at the copy's commit.
+- **Rotate workflow.** `RotateWorkflow` (`fluid-rotate`, `platform/src/workflows/rotate.ts`) moves a fork to its next copy every 6 hours, after a change lands, after a tripwire hit, and when the fork is new.
+- **Primitives.** Worker Loader, Workflows with a cron schedule, Durable Objects, and WebCrypto HMAC-SHA256. Details in `docs/POLYMORPH.md`.
+
 ## Cloudflare primitives used
 
 | Primitive | Where | Used for |
 | :-- | :-- | :-- |
 | Artifacts binding | `env.ARTIFACTS`, `platform/src/runtime/repo-files.ts`, `platform/src/forks/provision.ts` | Create, fork, read files and logs, mint repo-scoped tokens |
 | isomorphic-git | `platform/src/git/ops.ts` | Commits, branches, tags, merges, and pushes from inside the Worker |
-| Worker Loader | `env.LOADER`, `platform/src/runtime/loader.ts` | One isolate per fork commit, and one per stock runner |
-| Workflows | `platform/src/workflows/*` | Gate, customize, contest, repair, release, upgrade, seed, harvest, yellow soak |
+| Worker Loader | `env.LOADER`, `platform/src/runtime/loader.ts` | One isolate per fork commit, one per renamed copy, and one per stock runner |
+| Workflows | `platform/src/workflows/*` | Gate, customize, contest, repair, release, upgrade, seed, harvest, yellow soak, rotate (also on a 6-hour schedule) |
 | Queues with event subscriptions | queue `fluid-events`, `platform/src/events/*` | Start a gate on every push |
-| Durable Objects (SQLite) | `platform/src/durable/*` | Fleet registry and stream, run timelines, run-time ledger, quotas |
+| Durable Objects (SQLite) | `platform/src/durable/*` | Fleet registry and stream (with each fork's verified copy and security events), run timelines, run-time ledger, quotas |
 | Workers AI with AI Gateway | `env.AI`, `platform/src/runtime/llm.ts`, gateway `fluid` | Agent planning, merge resolution, repair explanations, harvest labels, optional card wording |
 | Browser Rendering | `env.BROWSER`, `platform/src/yellow/browser.ts`, `@cloudflare/puppeteer` | The yellow soak's browser checks, once per yellow period |
 | Static assets | `platform/public/`, SPA fallback, `/api/*` runs the Worker first | The UI |
@@ -191,7 +203,7 @@ These rules are plain code in `stock/` and work with no model at all. Invariants
 - Every card has the override control, and every answer writes a run-time record.
 - Requests are validated and fail closed (for example, a chart counts as identified unless `identified` is exactly `false`).
 
-The platform side is also deterministic: the yellow soak and its rollback, the consumer filter, the choice of floor source, the merge decision (only a passing gate merges), pin monotonicity, quota checks, the fallback merge rule, and the safety-release stock-mode rule.
+The platform side is also deterministic: the yellow soak and its rollback, the consumer filter, the choice of floor source, the merge decision (only a passing gate merges), pin monotonicity, quota checks, the fallback merge rule, the safety-release stock-mode rule, and polymorphic installation (renaming, the equivalence check, the tripwire scan, and rotation).
 
 ### What models may do
 

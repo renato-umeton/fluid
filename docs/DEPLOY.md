@@ -79,7 +79,7 @@ npx cf queues purge status "$QUEUE_ID"
 The Worker needs two secrets:
 
 - `SESSION_SECRET` signs the demo session cookies.
-- `ADMIN_TOKEN` guards the admin routes (publish, release, seed, harvest). Clients send it as the `x-fluid-admin` header.
+- `ADMIN_TOKEN` guards the admin routes (publish, release, seed, harvest, rotate). Clients send it as the `x-fluid-admin` header.
 
 Keep the file **outside the repository**:
 
@@ -94,6 +94,19 @@ umask 077
 
 The first deploy of a new Worker fails until its secrets exist, so pass the file to the first deploy. Later deploys keep the secrets.
 
+One more secret is optional. `POLYMORPH_SECRET` turns on polymorphic installation: each fork runs its own renamed copy of upstream's code, and this secret seeds the new names (see `docs/POLYMORPH.md`). It must be at least 16 characters. It is deliberately not declared in `platform/cloudflare.config.ts`, because a declared secret must exist at deploy time, and Fluid runs without this one. To turn it on, add it to the same file:
+
+```sh
+umask 077
+echo "POLYMORPH_SECRET=$(openssl rand -hex 32)" >> ~/.config/fluid/secrets.env
+```
+
+Then pass the file to the next deploy (step 7). The deploy uploads every secret in the file, declared or not, and later deploys keep it. A renamed copy also needs the stock release that its fork pins to ship `polymorph.json`. When `stock` is new, step 8 publishes such a release, and each fork gets its first renamed copy at its first rotation. When `stock` already has releases from before the list existed, see [Polymorphic installation on an existing deployment](#polymorphic-installation-on-an-existing-deployment).
+
+Each rotation is a check mode gate that asks every probe twice, and the schedule runs one per fork every 6 hours. A 200-fork fleet adds 800 gate runs a day.
+
+Without `POLYMORPH_SECRET`, or with one shorter than 16 characters, every fork runs plain: no renamed copies, no tripwire scan, and no rotation. The `fluid-rotate` schedule still starts an instance every 6 hours, which records a rotate run marked `cancelled` ("Skipped: POLYMORPH_SECRET is not set or is shorter than 16 characters"). `POST /api/admin/fleet/rotate` still starts runs, which skip the same way. A secret that is set but too short also logs one warning per isolate.
+
 ## 7. Deploy
 
 ```sh
@@ -102,7 +115,7 @@ FLUID_PUBLIC_ORIGIN=https://fluid.<your-subdomain>.workers.dev \
 npx cf deploy --secrets-file ~/.config/fluid/secrets.env
 ```
 
-`npm run content` regenerates the bundled stock and synthetic content in `src/generated/`. `FLUID_PUBLIC_ORIGIN` becomes the Worker's `PUBLIC_ORIGIN` text binding: the URL users reach, where the yellow soak's browser checks load the app. Set it on every deploy (the value is part of the deployed configuration). Without it the browser tier reports `unavailable` and the API tiers decide alone. The deploy creates the Worker `fluid`, its four Durable Object classes (`UserLedger`, `Fleet`, `Runs`, `Quota`), its twelve Workflows (`fluid-gate`, `fluid-customize`, `fluid-contest`, `fluid-repair`, `fluid-upgrade`, `fluid-release`, `fluid-seed-fleet`, `fluid-seed-fork`, `fluid-harvest`, `fluid-yellow`, `fluid-import`, `fluid-inbox-cleanup`), the Browser Rendering binding `BROWSER` for the yellow soak's browser checks, and the queue consumer. It prints the Worker URL. A new version can take a few seconds to reach every request.
+`npm run content` regenerates the bundled stock and synthetic content in `src/generated/`. `FLUID_PUBLIC_ORIGIN` becomes the Worker's `PUBLIC_ORIGIN` text binding: the URL users reach, where the yellow soak's browser checks load the app. Set it on every deploy (the value is part of the deployed configuration). Without it the browser tier reports `unavailable` and the API tiers decide alone. The deploy creates the Worker `fluid`, its four Durable Object classes (`UserLedger`, `Fleet`, `Runs`, `Quota`), its thirteen Workflows (`fluid-gate`, `fluid-customize`, `fluid-contest`, `fluid-repair`, `fluid-upgrade`, `fluid-release`, `fluid-seed-fleet`, `fluid-seed-fork`, `fluid-harvest`, `fluid-yellow`, `fluid-import`, `fluid-inbox-cleanup`, and `fluid-rotate`), the Browser Rendering binding `BROWSER` for the yellow soak's browser checks, and the queue consumer. `fluid-rotate` also runs on a schedule, every 6 hours (`0 */6 * * *`). The deploy prints the Worker URL. A new version can take a few seconds to reach every request.
 
 Check it:
 
@@ -171,6 +184,33 @@ ADMIN_TOKEN=... FLUID_URL="$FLUID_URL" node scripts/e2e-yellow.mjs
 - `workers.dev` and preview URLs are on by default. Decide which ones you want public.
 - Write routes need a session cookie, and admin routes need the admin token. Per-client and global quotas limit forks, asks, and reads. Details are in `docs/API.md`, under Limits and protections.
 
+## Polymorphic installation on an existing deployment
+
+A renamed copy needs the stock release that its fork pins to ship `polymorph.json`. Stock tags published before the list existed lack it. Every rotation of a fork pinned to one of them runs a check mode gate and then skips (`stock <tag> publishes no polymorph.json`). `npm run publish-stock` leaves an existing tag alone, and `POST /api/admin/release` builds its new tag from the latest tag's files, so neither adds the list.
+
+After you add `POLYMORPH_SECRET` and deploy (steps 6 and 7), publish the bundled stock under a tag newer than every tag in `stock`, then upgrade the fleet to that tag. Replace `vX.Y.Z` with that tag:
+
+```sh
+ADMIN_TOKEN="$(grep '^ADMIN_TOKEN=' ~/.config/fluid/secrets.env | cut -d= -f2-)"
+curl -s -X POST "$FLUID_URL/api/admin/stock/publish" \
+  -H "content-type: application/json" -H "x-fluid-admin: $ADMIN_TOKEN" \
+  -d '{"tag": "vX.Y.Z"}'
+curl -s -X POST "$FLUID_URL/api/admin/release" \
+  -H "content-type: application/json" -H "x-fluid-admin: $ADMIN_TOKEN" \
+  -d '{"tag": "vX.Y.Z"}'
+```
+
+A fork with `auto_upgrade = false` (the default) moves to the new tag when its owner approves the upgrade. Until then it runs plain.
+
+A fork that pins a release with the list gets its first renamed copy at its next rotation: a landed upgrade starts one, and the schedule starts one every 6 hours. To start one for every fork at once, send `POST /api/admin/fleet/rotate` with body `{}` and the admin header:
+
+```sh
+ADMIN_TOKEN="$(grep '^ADMIN_TOKEN=' ~/.config/fluid/secrets.env | cut -d= -f2-)"
+curl -s -X POST "$FLUID_URL/api/admin/fleet/rotate" -H "x-fluid-admin: $ADMIN_TOKEN" -H "content-type: application/json" -d '{}'
+```
+
+To check it, watch the fleet stream with `curl -N "$FLUID_URL/api/fleet/stream"`. Each fork that moves to a new copy sends a `security` event of kind `rotated`. To see why one fork did not, rotate it alone with body `{"repo": "<repo>"}` and read the run that the answer names (`curl -s "$FLUID_URL/api/runs/<runId>"`). A skipped rotation gives its reason in `cancelReason`.
+
 ## Local development
 
 Local dev runs the Worker on your machine with **remote** Artifacts and Workers AI, plus local Durable Objects, Workflows, and Worker Loader. You still need steps 1 to 3 (namespace and gateway) on the account.
@@ -209,6 +249,7 @@ Notes:
 - Pushes made from local dev also reach a deployed consumer on the same account. Purge `fluid-events` (step 5) before a first deploy that follows local testing.
 - The UI works with no backend at all: serve `platform/public/` and open `/?mock=1`.
 - The yellow soak's browser checks need a public https URL that Browser Rendering can reach, so under `cf dev` the browser tier reports `unavailable` and the API tiers decide.
+- Polymorphic installation stays off under `cf dev`. The dev server passes only the secrets that `platform/cloudflare.config.ts` declares to the Worker, and `POLYMORPH_SECRET` is not declared. To see it locally, run the experiment with `npm run polymorph:demo` (`docs/POLYMORPH.md`, "Run the experiment").
 
 Tests:
 
@@ -231,8 +272,8 @@ npx cf queues delete "$QUEUE_ID"
 # 2. Worker (its Durable Objects go with it)
 npx cf workers delete fluid
 
-# 3. Workflows
-for wf in fluid-gate fluid-customize fluid-repair fluid-upgrade fluid-release fluid-seed-fleet fluid-seed-fork fluid-harvest fluid-yellow; do
+# 3. Workflows (all thirteen)
+for wf in fluid-gate fluid-customize fluid-contest fluid-repair fluid-upgrade fluid-release fluid-seed-fleet fluid-seed-fork fluid-harvest fluid-yellow fluid-import fluid-inbox-cleanup fluid-rotate; do
   npx cf workflows delete "$wf"
 done
 

@@ -1,7 +1,7 @@
 # Polymorphic installation: design
 
 Issue: [#1](https://github.com/renato-umeton/fluid/issues/1), "Can the polymorphic aspect of Fluid be turned into an advantage to protect from zeroday cyberattacks?"
-Date: 2026-11-06. Status: proof of concept on branch `issue-1-polymorphic-installation`. Plan: [../IMPLEMENTATION_PLAN.md](../IMPLEMENTATION_PLAN.md).
+Date: 2026-11-06. Status: the proof of concept is built on branch `issue-1-polymorphic-installation` and measured in tests (20 forks, with in-memory fakes for Artifacts and the Worker Loader). It has not run on the deployed site yet. Feature doc: [../POLYMORPH.md](../POLYMORPH.md). Plan: [../IMPLEMENTATION_PLAN.md](../IMPLEMENTATION_PLAN.md).
 
 ## The question
 
@@ -86,17 +86,50 @@ A fixture release changes one line in `app/cards.ts`: display options from `cont
 
 ### Fleet experiment
 
-Twenty forks on the fixture release, run through the real loader, gate, and ask path with in-memory fakes for Artifacts and the Worker Loader. The test measures compromise for a plain fleet and a polymorphic fleet, what the platform refuses, which rotations start, and the equivalence check for every copy. `npm run polymorph:demo` prints the scoreboard. Results: (filled in after the run)
+Twenty forks on the fixture release, run through the real loader, gate, and ask path with in-memory fakes for Artifacts and the Worker Loader. The test measures compromise for a plain fleet and a polymorphic fleet, what the platform refuses, which rotations start, and the equivalence check for every copy. `npm run polymorph:demo` prints the scoreboard, and these are its results. The Polymorph view replays a recording of this experiment, `platform/public/data/polymorph-demo.json`.
+
+| Attack | Plain fleet | Renamed copies, scan bypassed | Through the platform | Refused | Moved to a new copy |
+| :-- | :-- | :-- | :-- | :-- | :-- |
+| A: built from upstream's source | 20 of 20 | 0 of 20 | 0 of 20 | 20 of 20 | 20 of 20 |
+| A2: built from fork 7's leaked copy | 0 of 20 | 1 of 20 | 1 of 20 | 19 of 20 | 19 of 20 |
+| A3: 1000 blind guesses on fork 3 | 0 of 1000 | 0 of 1000 | 0 of 1000 | 1000 of 1000 | 1 of 1 fork |
+| B: public field only | 20 of 20 | 20 of 20 | 20 of 20 | 0 of 20 | 0 of 20 |
+
+The first three result columns count requests that released a held research dose (7 mg) while an identified patient was in context and no attestation was given. "Refused" counts requests, and "Moved to a new copy" counts forks.
+
+- **Equivalence.** Every copy renamed 74 of the 74 listed names. On 20 of 20 forks the copy answered all 70 probe requests like the plain fork, with 0 differences.
+- **A.** The exploit built from upstream's source compromised the whole plain fleet and no renamed copy. Every fork refused it as a decoy and moved to a new copy.
+- **A2.** Fork 7's leaked names compromised only fork 7, since a copy's own renamed names are never its tripwires. The other 19 forks refused them as foreign. After fork 7 moved to a new copy, the leaked names compromised 0 forks and were refused on fork 7.
+- **A3.** All 1000 guesses were refused, and one rotation started for fork 3.
+- **B.** The public-field bug compromised 20 of 20 forks, renamed or plain.
+
+So for this bug class the answer to the issue is yes: one exploit built from upstream's public source stopped working on every renamed copy, and every fork refused it and moved to a new copy. The public-field bug went through everywhere, as the limits below say.
+
+### Where the build differs from this design
+
+- **Where renaming happens.** The loader's entry point is `morphFork`, which skips names one by one; `morphModuleMap` is the strict form that refuses any skipped name. A copy is made only when a load asks for one: a rotation's gate, or the live path for a fork with a stored copy. Creating a fork starts a rotation, which makes its first copy.
+- **Which gates check a copy.** Only a rotation's check mode gate compares the copy with the plain fork. Gates of pushed changes run as before.
+- **Every ref is guarded.** Requests to any ref of a fork with a stored copy are scanned with that copy's names. The copy itself answers only at its commit. Any other commit, including `main` after a change lands and before its rotation, answers plain behind that scan.
+- **Model off.** A copy always answers with the model off: `useModel` comes from the request body, so honoring it would let any request bypass the copy.
+- **Reads fail closed.** When a read that the stored copy needs fails in Artifacts, the request gets a retryable 503, so the plain fork never answers it unscanned.
+- **When rotations start.** One rotation per copy in each 10-minute window after tripwire hits, and also for new forks, landed upgrades, one-tap approvals, yellow rollbacks, and stored copies that no longer build as verified.
 
 ## Limits and open questions
 
-- **Public behavior.** Exploit B works on every copy. Renaming cannot hide a name that callers use.
-- **Disclosure.** A leaked copy works on its own fork until the next rotation. Rotation bounds that window.
+- **Public behavior.** A bug reachable through public fields alone works on every copy (attack B). Renaming cannot hide a name that callers use.
+- **Disclosure.** A leaked copy works on its own fork until that fork rotates (attack A2). Rotation bounds that window.
 - **Coverage.** Only listed names move. Code a fork adds stays plain unless upstream lists its names.
-- **Other classes.** Logic bugs, timing, and denial of service are untouched.
-- **Cost.** The gate runs every probe twice for forks with a list, and each rotation is a check mode gate run.
-- **Hand-curated list.** A wrong entry fails closed: the copy fails the gate and the fork stays plain.
-- **Tests share one process.** In tests, isolates are simulated in one Node process. The experiment uses a bug class that leaves no shared state.
+- **Other classes.** Logic bugs, timing, and denial of service are untouched. Prototype pollution gadgets that read names fixed by the runtime survive renaming.
+- **Tested equivalence.** The gate checks equivalence only on the behavior that the probes test. A difference that no probe reaches goes unseen.
+- **Model off.** Copies answer with the model off.
+- **A fork's own fields.** When a fork reads a request field of its own whose name is on the list, that field stays plain only when the fork's tests (`tests/user/manifest.json`, `tests/user/e2e.json`), its `fluid.toml`, or its modules' text name it. Otherwise the copy renames the code that reads the field, so the copy answers differently, and a request that sends the field under its original name is refused as a decoy.
+- **Rotation needs a pass.** A rotation needs the whole check mode gate to pass. A fork whose `main` fails a tier keeps the copy it has, or stays plain.
+- **After a change lands.** Between a landed change and its rotation, the fork answers plain behind the stored copy's scan.
+- **Runtime upgrades.** A runtime upgrade can cost a name: a name the new runtime builds in is skipped from then on.
+- **Hand-curated list.** A wrong entry never ships a broken copy. It does leave the fork less protected, in one of three ways: the platform refuses the whole list (every fork on that release runs plain), the copy skips that name (it is neither renamed nor a tripwire, and the gate reports why), or the copy fails the gate (the fork keeps the copy it has, or stays plain).
+- **Cost.** Each rotation is a check mode gate that asks every probe twice, and the schedule runs one per fork every 6 hours.
+- **Tests share one process.** In tests, isolates are simulated in one Node process. The experiment uses a bug class that leaves no shared state, and it checks that no attack changed a built-in the isolates share.
+- **Not on the live site yet.** Nothing has run on the deployed site yet.
 
 ## Next steps beyond the proof of concept
 
