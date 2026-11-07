@@ -65,10 +65,13 @@ interface Answer {
 
 export async function serveAsk(deps: AskDeps, input: ServeAskInput): Promise<ServedCard> {
 	const { repo, ref, request, useModel } = input;
+	const fleet = fleetStub(deps.env);
 	// Safety fallback (spec 7): after a safety release's grace period, a fork still pinned below it is
 	// answered by stock at that release (production only: main). The card carries a visible signal.
-	// askState also returns the fork's verified renamed copy, which guards every ref, in the same call.
-	const state = repo !== STOCK_REPO ? await fleetStub(deps.env).askState(repo) : null;
+	// With a secret, askState also returns the fork's verified renamed copy, which guards every ref, in
+	// the same call. Without one, Fleet is read only as before: for the fallback, and only when it applies.
+	const guarded = repo !== STOCK_REPO && polymorphSecret(deps.env) !== null;
+	const state = guarded ? await fleet.askState(repo) : input.fallback && repo !== STOCK_REPO ? { fallback: await fleet.safetyFallback(repo), morph: null } : null;
 	const fallback = input.fallback ? (state?.fallback ?? null) : null;
 	if (fallback) {
 		const result = await askFork(deps, { repo: STOCK_REPO, ref: fallback.tag, request, useModel });

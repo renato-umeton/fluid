@@ -258,6 +258,21 @@ describe("serveAsk without a copy to serve", () => {
 	);
 
 	it(
+		"reads Fleet on a platform without a secret only as before: the safety fallback, and only for an ask that applies it",
+		async () => {
+			const noSecret = { ...deps, env: p.withoutSecret().env };
+			const askState = vi.spyOn(p.t.fleet, "askState");
+			const safetyFallback = vi.spyOn(p.t.fleet, "safetyFallback");
+			const input = { repo: "user-nosecret", ref: "main", request: requests.administrative, useModel: false, userId: "nosecret" };
+			await serveAsk(noSecret, { ...input, fallback: false });
+			expect([askState.mock.calls.length, safetyFallback.mock.calls.length]).toEqual([0, 0]);
+			await serveAsk(noSecret, { ...input, fallback: true });
+			expect([askState.mock.calls.length, safetyFallback.mock.calls.length]).toEqual([0, 1]);
+		},
+		SLOW_MS,
+	);
+
+	it(
 		"lets stock answer once a safety grace period is over, even for a fork with a copy",
 		async () => {
 			await storeCopy("user-safety", 1);
