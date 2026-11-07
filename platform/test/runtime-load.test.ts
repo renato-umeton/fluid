@@ -6,11 +6,11 @@
 // ref listing the gate reads to resolve the stock tag.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import stockSource from "../src/generated/stock-source.json";
-import { serveAsk } from "../src/api/ask.ts";
+import { serveAsk, type AskDeps } from "../src/api/ask.ts";
 import { runGate } from "../src/gate/run.ts";
 import { listRemoteRefs } from "../src/git/ops.ts";
 import { setTomlValue } from "../src/lib/toml.ts";
-import { askLoaded, loadForkRuntime, type RuntimeDeps } from "../src/runtime/loader.ts";
+import { askLoaded, loadForkRuntime } from "../src/runtime/loader.ts";
 import { isRuntimePath } from "../src/runtime/modules.ts";
 import { RefNotFoundError, resolveCommit } from "../src/runtime/refs.ts";
 import { listCommitFiles, openRepo, readCommitFiles } from "../src/runtime/repo-files.ts";
@@ -19,6 +19,7 @@ import { ledgerStub } from "../src/stubs.ts";
 import { apiEnv } from "./helpers/api-env.ts";
 import { fakeLoader } from "./helpers/fake-loader.ts";
 import { fakeGitRepo, type FakeGitRepo } from "./helpers/fake-repos.ts";
+import { fakeWorkflows } from "./helpers/workflows.ts";
 
 const TAG = stockSource.stockTag;
 // Stock at a release tag: the release files plus releases/<tag>.json, as publishStockRelease commits them.
@@ -33,7 +34,7 @@ const research = {
 
 let t: ReturnType<typeof apiEnv>;
 let loader: ReturnType<typeof fakeLoader>;
-let deps: RuntimeDeps;
+let deps: AskDeps;
 let stock: FakeGitRepo;
 let main: string;
 
@@ -52,6 +53,8 @@ beforeAll(() => {
 					throw new Error("these tests never use the model");
 				},
 			}),
+			// The platform here has no polymorph secret, so no ask starts a rotation and the binding only stands in.
+			RotateWorkflow: fakeWorkflows().exports.RotateWorkflow,
 		},
 	};
 });

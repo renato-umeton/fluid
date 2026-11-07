@@ -371,7 +371,9 @@ async function askDirectly(sends: Send[]): Promise<Pick<Outcome, "plain" | "dire
  * own (`<user>-off`), apart from the one the platform's answers are counted in.
  */
 async function askWithInstallationOff(sends: Send[]): Promise<ResearchAnswer[]> {
-	const deps = platform.withoutSecret();
+	const off = platform.withoutSecret();
+	// Without a secret no ask starts a rotation, so the binding only stands in.
+	const deps: AskDeps = { ...off, exports: { ...off.exports, RotateWorkflow: fakeWorkflows().exports.RotateWorkflow } };
 	const answers: ResearchAnswer[] = [];
 	for (const { repo, request } of sends) {
 		const served = await serveAsk(deps, { repo, ref: "main", request, useModel: false, userId: `${userIdFromForkRepo(repo)}-off`, fallback: true });

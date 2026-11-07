@@ -2,11 +2,12 @@
 // every ask), and security events. The fleet stream is public, so it learns
 // that something happened to a fork, never a name, path, or fingerprint.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { serveAsk } from "../src/api/ask.ts";
+import { serveAsk, type AskDeps } from "../src/api/ask.ts";
 import { Fleet, SECURITY_EVENTS_PER_REPO } from "../src/durable/fleet.ts";
 import { clipValue } from "../src/lib/clip.ts";
 import { construct, fakeState } from "./helpers/durable.ts";
 import { PUBLISHED, TAG, polymorphPlatform, type PolymorphPlatform } from "./helpers/polymorph-platform.ts";
+import { fakeWorkflows } from "./helpers/workflows.ts";
 
 const fork = (repo: string) => ({ repo, userId: repo.replace(/^user-/, ""), persona: "p", pinnedTag: "v1.1.0" });
 const SHA = "0123456789abcdef0123456789abcdef01234567";
@@ -271,7 +272,9 @@ describe("serveAsk", () => {
 		fleet.addRelease({ tag: TAG, notes: "", safety: true, date: iso(t0), graceDays: 14, graceUntil: iso(t0), commit: null });
 		const askState = vi.spyOn(fleet, "askState");
 		const request = { question: "Is Morphinex on formulary?", context: { documentType: "budget" } };
-		const card = await serveAsk(p.deps, { repo: "user-a", ref: "main", request, useModel: false, userId: "a", fallback: true });
+		// Stock answers, so no rotation starts and the binding only stands in.
+		const deps: AskDeps = { ...p.deps, exports: { ...p.deps.exports, RotateWorkflow: fakeWorkflows().exports.RotateWorkflow } };
+		const card = await serveAsk(deps, { repo: "user-a", ref: "main", request, useModel: false, userId: "a", fallback: true });
 		expect(card.fork).toMatchObject({ repo: "user-a", servedBy: { repo: "stock", ref: TAG }, safetyFallback: { tag: TAG, from: "v0.9.0" } });
 		expect(askState).toHaveBeenCalledTimes(1);
 	});
