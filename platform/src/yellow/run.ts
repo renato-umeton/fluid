@@ -176,7 +176,8 @@ async function hostOperation(deps: RuntimeDeps, scope: { repo: string; commit: s
 	switch (op) {
 		case "ask": {
 			const request = args.request as Record<string, unknown>;
-			const card = await serveAsk(deps, { repo: scope.repo, ref: scope.commit, request, useModel: false, userId: scope.testUser, fallback: false });
+			// As built: the soak checks the commit that landed, not a renamed copy (see ServeAskInput.asBuilt).
+			const card = await serveAsk(deps, { repo: scope.repo, ref: scope.commit, request, useModel: false, userId: scope.testUser, fallback: false, asBuilt: true });
 			return JSON.parse(JSON.stringify(card));
 		}
 		case "override": {

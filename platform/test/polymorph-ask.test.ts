@@ -14,6 +14,7 @@ import { rotateFork } from "../src/polymorph/rotate.ts";
 import { SCAN_LIMITS } from "../src/polymorph/tokens.ts";
 import { askLoaded, loadForkRuntime, type RuntimeDeps } from "../src/runtime/loader.ts";
 import { ledgerStub } from "../src/stubs.ts";
+import { hostCallback } from "../src/yellow/run.ts";
 import { copyKey, rotationId } from "../src/workflows/common.ts";
 import { cookieFor, post } from "./helpers/api-env.ts";
 import { LISTED, POLYMORPH_TEST_SECRET, PUBLISHED, TAG, polymorphPlatform, type PolymorphPlatform } from "./helpers/polymorph-platform.ts";
@@ -47,6 +48,8 @@ const MOVED = [PUBLISHED, { ...PUBLISHED, "app/moved.ts": "export const moved = 
 let p: PolymorphPlatform;
 const workflows = fakeWorkflows(MODEL);
 let deps: RuntimeDeps;
+/** The commit of user-ahead's work/next, one commit ahead of its main. */
+let aheadCommit: string;
 
 beforeAll(() => {
 	p = polymorphPlatform({
@@ -60,6 +63,7 @@ beforeAll(() => {
 		"user-deep": { ...PUBLISHED, "app/deep.ts": "export const deep = 1;\n" },
 		"user-route": { ...PUBLISHED, "app/route.ts": "export const route = 1;\n" },
 		"user-busy": { ...PUBLISHED, "app/busy.ts": "export const busy = 1;\n" },
+		"user-asbuilt": { ...PUBLISHED, "app/asbuilt.ts": "export const asbuilt = 1;\n" },
 		"user-flaky": { ...PUBLISHED, "app/flaky.ts": "export const flaky = 1;\n" },
 		"user-resecret": { ...PUBLISHED, "app/resecret.ts": "export const resecret = 1;\n" },
 		"user-renames": { ...PUBLISHED, "app/renames.ts": "export const renames = 1;\n" },
@@ -67,6 +71,11 @@ beforeAll(() => {
 		"user-unreadable": { ...PUBLISHED, "app/big.js": `// ${"x".repeat(SCAN_LIMITS.moduleChars)}\nexport const big = 1;\n` },
 	});
 	p.heads["user-moved"] = p.t.artifacts.seed("user-moved", { commits: MOVED }).commits[1]!;
+	// A merged work branch still at main's commit, and a branch one commit ahead of main.
+	p.heads["user-branchy"] = p.t.artifacts.seed("user-branchy", { commits: [{ ...PUBLISHED, "app/branchy.ts": "export const branchy = 1;\n" }], branches: { main: 0, "work/old-change": 0 } }).commits[0]!;
+	const ahead = p.t.artifacts.seed("user-ahead", { commits: [{ ...PUBLISHED, "app/ahead.ts": "export const ahead = 1;\n" }, { ...PUBLISHED, "app/ahead.ts": "export const ahead = 2;\n" }], branches: { main: 0, "work/next": 1 } });
+	p.heads["user-ahead"] = ahead.commits[0]!;
+	aheadCommit = ahead.commits[1]!;
 	for (const repo of Object.keys(p.heads)) p.t.fleet.register({ repo, userId: repo.slice(5), persona: "p", pinnedTag: TAG, status: "pinned" });
 	deps = { env: p.t.env, exports: workflows.exports as never };
 });
@@ -100,6 +109,27 @@ function answered(served: ServedCard): Record<string, unknown> {
 async function ledgerOf(repo: string) {
 	return (await ledgerStub(p.t.env, repo.slice(5)).list()).map((entry) => entry.record);
 }
+
+/** A research question whose display options set a key: an original listed name, or a renamed one. */
+const naming = (key: string) => ({ ...requests.research, context: { ...requests.research.context, display: { [key]: false } } });
+
+/** A renamed researchNeedsAttestation that is not the copy's own (of the fork's main at `epoch`): another copy's name. */
+async function foreignName(repo: string, epoch: number, sha = p.heads[repo]!): Promise<string> {
+	const own = (await variantNames(await deriveSeed(POLYMORPH_TEST_SECRET, repo, sha, epoch), LISTED)).get("researchNeedsAttestation")!;
+	return own.endsWith("$zzzzzzzz") ? "researchNeedsAttestation$yyyyyyyy" : "researchNeedsAttestation$zzzzzzzz";
+}
+
+/** The refusal a pending ask ends in, failing the test when it answered or failed otherwise. */
+async function refusal(pending: Promise<unknown>) {
+	const error = await pending.then(
+		() => null,
+		(thrown: unknown) => thrown,
+	);
+	if (!(error instanceof HttpError)) throw new Error(`expected a refusal, got ${String(error)}`);
+	return { status: error.status, message: error.message, extra: error.extra, headers: error.headers };
+}
+
+const rotationsOf = (repo: string) => workflows.of("RotateWorkflow").filter((instance) => (instance.params as { repo: string }).repo === repo);
 
 describe("serveAsk with a verified copy of main", () => {
 	it(
@@ -165,16 +195,18 @@ describe("serveAsk without a copy to serve", () => {
 	);
 
 	it(
-		"answers plain, honoring useModel, without trying the copy or logging, when the stored copy is of an older commit",
+		"answers plain, honoring useModel, when main moved past the stored copy, once the request passes the stored copy's wires",
 		async () => {
-			await storeCopy("user-moved", 1, p.t.artifacts.repos.get("user-moved")!.git.commits[0]!);
+			const old = p.t.artifacts.repos.get("user-moved")!.git.commits[0]!;
+			await storeCopy("user-moved", 1, old);
 			const warn = vi.spyOn(console, "warn");
-			const sign = vi.spyOn(crypto.subtle, "sign");
 			const served = await ask("user-moved", requests.administrative, { useModel: true });
 			expect(served.fork).toEqual({ repo: "user-moved", ref: "main", commit: p.heads["user-moved"] });
 			expect(served.signals).toContain(MODEL_WORDING);
 			expect(warn).not.toHaveBeenCalled();
-			expect(sign).not.toHaveBeenCalled();
+			// Until the landed rotation stores a copy of the new main, the old copy's wires still guard it.
+			expect((await refusal(ask("user-moved", naming("researchNeedsAttestation")))).status).toBe(403);
+			// The old copy's names were only built, never started.
 			expect(p.loader.built.filter((id) => id.startsWith("user-moved:") && id.includes(":m"))).toEqual([]);
 		},
 		SLOW_MS,
@@ -208,22 +240,6 @@ describe("serveAsk without a copy to serve", () => {
 });
 
 describe("serveAsk and a copy's tripwires", () => {
-	/** A research question whose display options set a key: an original listed name, or a renamed one. */
-	const naming = (key: string) => ({ ...requests.research, context: { ...requests.research.context, display: { [key]: false } } });
-	/** A renamed researchNeedsAttestation that is not this copy's own: another copy's name. */
-	async function foreignName(repo: string, epoch: number): Promise<string> {
-		const own = (await variantNames(await deriveSeed(POLYMORPH_TEST_SECRET, repo, p.heads[repo]!, epoch), LISTED)).get("researchNeedsAttestation")!;
-		return own.endsWith("$zzzzzzzz") ? "researchNeedsAttestation$yyyyyyyy" : "researchNeedsAttestation$zzzzzzzz";
-	}
-	const refusal = async (pending: Promise<unknown>) => {
-		const error = await pending.then(
-			() => null,
-			(thrown: unknown) => thrown,
-		);
-		if (!(error instanceof HttpError)) throw new Error(`expected a refusal, got ${String(error)}`);
-		return { status: error.status, message: error.message, extra: error.extra, headers: error.headers };
-	};
-	const rotationsOf = (repo: string) => workflows.of("RotateWorkflow").filter((instance) => (instance.params as { repo: string }).repo === repo);
 
 	it(
 		"refuses an original name and another copy's name with one and the same 403, records each, and neither asks the fork nor writes the ledger",
@@ -327,7 +343,6 @@ describe("serveAsk and a copy's tripwires", () => {
 });
 
 describe("serveAsk when main's verified copy does not load", () => {
-	const rotationsOf = (repo: string) => workflows.of("RotateWorkflow").filter((instance) => (instance.params as { repo: string }).repo === repo);
 
 	it(
 		"refuses as retryable when Artifacts fails to read what the copy needs, rather than let the plain fork answer, and serves the copy once it reads again",
@@ -378,6 +393,68 @@ describe("serveAsk when main's verified copy does not load", () => {
 			expect(rotationsOf(repo)).toEqual([{ workflow: "RotateWorkflow", id, params: { repo, reason: "mismatch", runId: `run_${id}` } }]);
 			expect((await ledgerOf(repo)).map((record) => "variant" in record)).toEqual([false, false, false]);
 			expect(warn).toHaveBeenCalledTimes(1);
+		},
+		SLOW_MS,
+	);
+});
+
+describe("serveAsk on another ref of a fork with a copy", () => {
+	it(
+		"guards a branch at the copy's commit as it guards main: the same 403 for an original name, and the copy's answer otherwise",
+		async () => {
+			const state = await storeCopy("user-branchy", 1);
+			const cookie = await cookieFor({ userId: "branchy" });
+			const askRoute = (body: Record<string, unknown>) => worker.fetch(post("/api/ask", { cookie }, { question: requests.research.question, ...body }), p.t.env, workflows.ctx);
+			const onMain = await askRoute({ context: naming("researchNeedsAttestation").context });
+			const onBranch = await askRoute({ context: naming("researchNeedsAttestation").context, ref: "work/old-change" });
+			expect([onMain.status, onBranch.status]).toEqual([403, 403]);
+			expect(await onBranch.json()).toEqual({ error: TRIPWIRE_REFUSAL, requestId: expect.any(String) });
+			const clean = await askRoute({ context: requests.research.context, ref: "work/old-change", useModel: true });
+			expect(clean.status).toBe(200);
+			const served = (await clean.json()) as ServedCard;
+			expect(served.fork).toEqual({ repo: "user-branchy", ref: "work/old-change", commit: p.heads["user-branchy"], variant: state.fingerprint });
+			expect(served.signals).not.toContain(MODEL_WORDING);
+		},
+		SLOW_MS,
+	);
+
+	it(
+		"answers another commit plain, model and all, but only for a request the stored copy's wires let through",
+		async () => {
+			const state = await storeCopy("user-ahead", 2);
+			const onNext = (request: Record<string, unknown>, useModel = false) => serveAsk(deps, { repo: "user-ahead", ref: "work/next", request, useModel, userId: "ahead", fallback: false });
+			vi.spyOn(Date, "now").mockReturnValue(t0);
+			const decoy = await refusal(onNext(naming("researchNeedsAttestation")));
+			const foreign = await refusal(onNext(naming(await foreignName("user-ahead", 2))));
+			expect(decoy).toEqual({ status: 403, message: TRIPWIRE_REFUSAL, extra: {}, headers: {} });
+			expect(foreign).toEqual(decoy);
+			let deep: Record<string, unknown> = { leaf: true };
+			for (let i = 0; i < 40; i++) deep = { inner: deep };
+			expect((await refusal(onNext({ question: "Is Morphinex on formulary?", context: deep }))).status).toBe(400);
+			expect(p.t.fleet.securityEvents("user-ahead").map((event) => [event.detail?.hit, event.detail?.epoch])).toEqual([
+				["foreign", 2],
+				["decoy", 2],
+			]);
+			const id = rotationId("user-ahead", copyKey(state, t0));
+			expect(rotationsOf("user-ahead")).toEqual([{ workflow: "RotateWorkflow", id, params: { repo: "user-ahead", reason: "tripwire", runId: `run_${id}` } }]);
+			const served = await onNext(requests.administrative, true);
+			expect(served.fork).toEqual({ repo: "user-ahead", ref: "work/next", commit: aheadCommit });
+			expect(served.signals).toContain(MODEL_WORDING);
+			expect((await ledgerOf("user-ahead")).map((record) => "variant" in record)).toEqual([false]);
+		},
+		SLOW_MS,
+	);
+
+	it(
+		"leaves the yellow soak's host asking the commit as built, even where Fleet holds a copy of it",
+		async () => {
+			await storeCopy("user-asbuilt", 1);
+			const host = hostCallback(deps, { repo: "user-asbuilt", commit: p.heads["user-asbuilt"]!, testUser: "soak-asbuilt" });
+			const card = (await host("ask", { request: naming("researchNeedsAttestation") })) as ServedCard;
+			expect(card.mode).toBe("research");
+			expect(card.fork).toEqual({ repo: "user-asbuilt", ref: p.heads["user-asbuilt"], commit: p.heads["user-asbuilt"] });
+			expect(p.t.fleet.securityEvents("user-asbuilt")).toEqual([]);
+			expect(rotationsOf("user-asbuilt")).toEqual([]);
 		},
 		SLOW_MS,
 	);
