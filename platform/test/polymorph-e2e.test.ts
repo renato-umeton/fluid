@@ -570,20 +570,22 @@ const readCommitted = () => JSON.parse(readFileSync(COMMITTED_RECORDING, "utf8")
  * Checks the committed recording, which the deployed page replays, against
  * this run: it passes the view's checks, has this run's release, list size,
  * and probes, and shows the outcome every run must record for its fleet.
- * With the default secret, the copies it shows for this run's forks must be
- * the ones this run made: a copy's seed names the fork's commit, which holds
- * the stock files, so any change to them makes other copies. A run of the
- * recording's fleet with the default secret and guesses must have recorded
- * exactly what it holds, apart from when. Each failure says how to record it
- * again.
+ * With the default secret, the copies it shows for the forks this run also
+ * has must be the ones this run made: a copy's seed names the fork's commit,
+ * which holds the stock files, so any change to them makes other copies. A
+ * run of the recording's fleet with the default secret and guesses must have
+ * recorded exactly what it holds, apart from when. Each failure says how to
+ * record it again.
  */
 function expectCommittedRecording(committed: Recording, recording: Recording): void {
 	expect(validateDemo(committed), `problems in the committed recording; ${RECORD_AGAIN}`).toEqual([]);
 	expect([committed.release, committed.listSize, committed.probes], `the committed recording's release, list size, and probes, against this run's; ${RECORD_AGAIN}`).toEqual([recording.release, recording.listSize, recording.probes]);
 	expect(outcomeOf(committed), `the committed recording's outcome; ${RECORD_AGAIN}`).toEqual(expectedOutcome(committed.forks.map((fork) => fork.repo)));
 	if (SECRET === POLYMORPH_TEST_SECRET) {
+		// Only the forks both recordings have: a run of another fleet size shares some of its forks with the recording, or none.
 		const mine = new Set(recording.forks.map((fork) => fork.repo));
-		expect(committed.forks.filter((fork) => mine.has(fork.repo)), `the committed recording's copies of this run's forks; ${RECORD_AGAIN}`).toEqual(recording.forks);
+		const theirs = new Set(committed.forks.map((fork) => fork.repo));
+		expect(committed.forks.filter((fork) => mine.has(fork.repo)), `the committed recording's copies of this run's forks; ${RECORD_AGAIN}`).toEqual(recording.forks.filter((fork) => theirs.has(fork.repo)));
 	}
 	if (committed.forks.length === recording.forks.length && SECRET === POLYMORPH_TEST_SECRET && GUESS_SEED === DEFAULT_GUESS_SEED) {
 		expect({ ...committed, recordedAt: "" }, `the committed recording, against this run's; ${RECORD_AGAIN}`).toEqual({ ...recording, recordedAt: "" });
