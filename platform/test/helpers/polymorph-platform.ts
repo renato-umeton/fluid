@@ -2,7 +2,8 @@
 // published at its bundled release tag with upstream's list, forks seeded
 // from stock files (patched where a test needs other behavior), the
 // polymorph secret set, a fake Worker Loader, and fetch answering only the
-// fake git remotes. Call cleanup() in afterAll.
+// fake git remotes. Call cleanup() in afterAll: it fails when anything asked
+// the model through these deps, which no test here should do.
 import { vi } from "vitest";
 import stockSource from "../../src/generated/stock-source.json";
 import { POLYMORPH_LIST_PATH, parsePolymorphList } from "../../src/polymorph/list.ts";
@@ -61,6 +62,12 @@ export interface PolymorphPlatform {
 	heads: Record<string, string>;
 	/** The same platform without the polymorph secret. */
 	withoutSecret(): RuntimeDeps;
+	/**
+	 * The prompts the model was asked through deps. Stock answers with its
+	 * template when the model fails, so a host that threw would never fail a
+	 * test: the calls are recorded instead, and cleanup() fails on any.
+	 */
+	modelCalls: string[];
 	cleanup(): void;
 }
 
@@ -73,10 +80,12 @@ export function polymorphPlatform(forks: Record<string, Record<string, string>>)
 	const loader = fakeLoader();
 	Object.assign(t.env, { LOADER: loader, POLYMORPH_SECRET: POLYMORPH_TEST_SECRET });
 	vi.stubGlobal("fetch", t.artifacts.fetch);
+	const modelCalls: string[] = [];
 	const exports = {
 		LlmHost: () => ({
-			complete: async () => {
-				throw new Error("these tests never use the model");
+			complete: async (prompt: string) => {
+				modelCalls.push(prompt);
+				return { body: "Reworded by the model." };
 			},
 		}),
 	};
@@ -87,9 +96,11 @@ export function polymorphPlatform(forks: Record<string, Record<string, string>>)
 		deps,
 		heads,
 		withoutSecret: () => ({ env: { ...t.env, POLYMORPH_SECRET: undefined } as unknown as Env, exports }),
+		modelCalls,
 		cleanup: () => {
 			loader.cleanup();
 			vi.unstubAllGlobals();
+			if (modelCalls.length > 0) throw new Error(`these tests never use the model, but it was asked ${modelCalls.length} times`);
 		},
 	};
 }
