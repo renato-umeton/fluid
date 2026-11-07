@@ -171,7 +171,7 @@ const rotationsOf = (repo: string) => workflows.of("RotateWorkflow").filter((ins
 
 describe("serveAsk with a verified copy of main", () => {
 	it(
-		"answers from the copy: the plain fork's card, named by fork.variant, and recorded with the copy's variant, never its fingerprint",
+		"answers from the copy: the plain fork's card, named and recorded by the copy's random variant",
 		async () => {
 			const rotated = await rotateFork(p.deps, "user-1", "schedule");
 			if (rotated.outcome !== "rotated") throw new Error(`expected a rotation, got ${rotated.outcome}`);

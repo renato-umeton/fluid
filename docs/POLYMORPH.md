@@ -161,7 +161,7 @@ Each rotation logs a `rotate` run (`GET /api/runs/:runId`): a rotated or refused
 - **Fleet's copy state.** Fleet keeps the verified copy of each fork: epoch, commit, fingerprint, names hash, the listed names it renamed, its variant, and when it was stored. Only a rotation changes it, by compare-and-set. Clearing the copy keeps its epoch. Deleting the fork deletes all of it except the latest epoch, which a fork created again under the same name starts from. It is never part of the public fleet entries.
 - **Security events.** `tripwire` (which kind of tripwire, the listed name, the key's path, the copy's epoch and fingerprint), `rotated` (reason, epoch, fingerprint, variant), `rotation_refused` (reason, epoch, number of failures), and `copy_cleared` (epoch, and why the stored copy no longer builds). Fleet keeps the latest 100 per fork. No route serves them yet.
 - **The public fleet stream** gets a `security` event with only the repo, the kind, and the time, at most one per fork and kind every 10 seconds. `rotation_refused` and `copy_cleared` are never broadcast.
-- **Answers and the ledger.** An answer from a copy carries `fork.variant` (the copy's random variant, never its fingerprint), and its ledger row carries `variant`. The `rotated` event links a variant to its epoch and fingerprint.
+- **Answers and the ledger.** An answer from a copy carries `fork.variant`, the copy's random variant, and its ledger row carries `variant`. The fingerprint stays inside the platform, and the `rotated` event links a variant to its epoch and fingerprint.
 
 ## Setup
 

@@ -116,7 +116,7 @@ async function deliver(deps: RuntimeDeps, input: Omit<ServeAskInput, "fallback">
 		served = { repo: STOCK_REPO, ref: pinned, fallback: null };
 	}
 	if (input.reaskOf) card = { ...card, ledger: { ...card.ledger, reask_of: input.reaskOf } };
-	// A copy's answer names the copy by its variant, in the ledger as in the response, never by its fingerprint.
+	// A copy's answer names the copy by its variant, in the ledger as in the response; its fingerprint stays inside the platform.
 	if (result.variant) card = { ...card, ledger: { ...card.ledger, variant: result.variant } };
 	await ledgerStub(env, input.userId).append(input.userId, repo, card.ledger as unknown as RunTimeRecord);
 	return { ...card, fork: { repo, ref: result.ref, commit: result.sha, ...(result.variant ? { variant: result.variant } : {}), ...(served.repo !== repo ? { servedBy: { repo: served.repo, ref: served.ref } } : {}), ...(served.fallback ? { safetyFallback: served.fallback } : {}) } };
