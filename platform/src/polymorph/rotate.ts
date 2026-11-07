@@ -1,10 +1,10 @@
 // Rotation: moves a fork to its next renamed copy, and only once a check mode
 // gate shows the new copy answers every probe like the plain fork. Whatever an
 // attacker learned about the old copy goes stale; a copy that fails the check
-// never goes live, and the fork keeps the copy it has. A busy fork runs no
-// gate and keeps its copy, stale or not. A gate that could make no copy
-// changes nothing, except that a stored copy the live path found stale and
-// that no longer builds at all is cleared.
+// never goes live, and the fork keeps the copy it has. A busy fork keeps its
+// copy, stale or not. A gate that could make no copy changes nothing, except
+// that a stored copy the live path found stale and that no longer builds at
+// all is cleared.
 import type { MorphState } from "../durable/fleet.ts";
 import { runGate } from "../gate/run.ts";
 import type { GateFailure, GateResult } from "../gate/tiers.ts";
