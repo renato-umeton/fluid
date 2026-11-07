@@ -151,7 +151,7 @@ flowchart TB
 - **Loader step.** `platform/src/runtime/loader.ts` builds a fork's module map as before. When a load asks for a renamed copy (`LoadOptions.morph`), `morphFork` (`platform/src/polymorph/morph.ts`) then renames the identifiers that upstream lists in `polymorph.json` (read from `stock` at the fork's pinned tag) and that the fork's own text and the runtime do not use. Each name gets a suffix from a seed derived from `POLYMORPH_SECRET`, the repo, the commit, and the epoch. The copy runs in its own isolate, keyed `repo:sha[:variant]:m<epoch>.<fingerprint>.<namesHash>`, where the variant is the gate's own when a gate loads the copy (see `docs/POLYMORPH.md`). When no copy can be made, the plain fork loads and the loader logs why.
 - **Gate.** A rotation's check mode gate (`GateInput.morph`) sends every runner request to the plain fork and to the copy, and any difference fails tier 1 as `polymorph-equivalence` (`platform/src/polymorph/equivalence.ts`, `platform/src/gate/run.ts`).
 - **Fleet's copy state.** The `Fleet` Durable Object keeps each fork's verified copy (epoch, commit, fingerprint, names hash, and time), which only a rotation changes, by compare-and-set. It also keeps the latest 100 security events per fork. The public fleet stream gets only an event's repo, kind, and time, at most one per fork and kind every 10 seconds; `rotation_refused` and `copy_cleared` are never broadcast.
-- **Live path.** `serveAsk` (`platform/src/api/ask.ts`) scans the keys of every request to a fork with a stored copy for the names the copy renamed and for those names with another copy's suffix (`platform/src/polymorph/tripwire.ts`), refuses a hit with a 403, and answers from the copy, with the model off, at the copy's commit.
+- **Live path.** `serveAsk` (`platform/src/api/ask.ts`) scans the keys of every request to a fork with a stored copy (`platform/src/polymorph/tripwire.ts`). It refuses a request with a 403 when a key is a name the copy renamed, or one of those names with another copy's suffix. Otherwise the copy answers at its own commit, with the model off, and the plain fork answers at any other commit.
 - **Rotate workflow.** `RotateWorkflow` (`fluid-rotate`, `platform/src/workflows/rotate.ts`) moves a fork to its next copy every 6 hours, after a change lands, after a tripwire hit, and when the fork is new.
 - **Primitives.** Worker Loader, Workflows with a cron schedule, Durable Objects, and WebCrypto HMAC-SHA256. Details in `docs/POLYMORPH.md`.
 
@@ -203,7 +203,7 @@ These rules are plain code in `stock/` and work with no model at all. Invariants
 - Every card has the override control, and every answer writes a run-time record.
 - Requests are validated and fail closed (for example, a chart counts as identified unless `identified` is exactly `false`).
 
-The platform side is also deterministic: the yellow soak and its rollback, the consumer filter, the choice of floor source, the merge decision (only a passing gate merges), pin monotonicity, quota checks, the fallback merge rule, the safety-release stock-mode rule, and polymorphic installation (renaming, the equivalence check, the tripwire scan, and rotation).
+The platform side is also deterministic: the yellow soak and its rollback, the consumer filter, the choice of floor source, the merge decision (only a passing gate merges), pin monotonicity, quota checks, the fallback merge rule, the safety-release stock-mode rule, and polymorphic installation.
 
 ### What models may do
 
