@@ -67,7 +67,7 @@ Renaming touches identifiers only. A name that reaches the fork's code as text c
 - names the runtime defines: globals and the properties of built-ins in that runtime;
 - names the runtime reads from objects the fork creates, such as stream sources, event listener options, and WebCrypto parameters.
 
-A skipped name is neither renamed nor a tripwire, so it costs the copy that one name. The gate reports each skipped name with its reason. In the experiment, every copy renamed all 74 names.
+A skipped name is neither renamed nor a tripwire, so it costs the copy that one name. The gate's result lists each skipped name with its reason (`GateResult.polymorph.skipped`). A rotation keeps that list in neither its run nor a security event, so nothing shows it yet. In the experiment, every copy renamed all 74 names.
 
 ### When no copy can be made
 
