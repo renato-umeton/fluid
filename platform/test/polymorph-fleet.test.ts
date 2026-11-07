@@ -97,6 +97,25 @@ describe("Fleet morph state", () => {
 		expect(fleet.morphState("user-a")).toBeNull();
 	});
 
+	it("keeps a removed fork's latest epoch, so a fork created again under its name stores its next copy above it", () => {
+		const fleet = fleetWith("user-a");
+		fleet.setMorph("user-a", { ...copy, epoch: 4 }, { from: null }, t0);
+		fleet.remove("user-a");
+		expect(fleet.morphEpoch("user-a")).toBeNull();
+		fleet.register({ ...fork("user-a"), status: "pinned" });
+		expect([fleet.morphState("user-a"), fleet.morphEpoch("user-a")]).toEqual([null, 4]);
+		// A writer that read no epoch, as for a new fork, stores nothing; one that read the kept epoch does.
+		expect(fleet.setMorph("user-a", copy, { from: null }, t0)).toBe(false);
+		expect(fleet.setMorph("user-a", { ...copy, epoch: 5 }, { from: 4 }, t0)).toBe(true);
+		// Removed and created again once more, it keeps the newer epoch.
+		fleet.remove("user-a");
+		fleet.register({ ...fork("user-a"), status: "pinned" });
+		expect(fleet.morphEpoch("user-a")).toBe(5);
+		// A fork that never had a copy starts with none.
+		fleet.register({ ...fork("user-b"), status: "pinned" });
+		expect(fleet.morphEpoch("user-b")).toBeNull();
+	});
+
 	it("stays out of the fork records and the snapshot the public fleet view shows", () => {
 		const fleet = fleetWith("user-a");
 		fleet.setMorph("user-a", copy, { from: null }, t0);

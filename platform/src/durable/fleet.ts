@@ -202,12 +202,15 @@ export class Fleet extends DurableObject<Env> {
 		sql.exec("CREATE TABLE IF NOT EXISTS gates (seq INTEGER PRIMARY KEY AUTOINCREMENT, repo TEXT NOT NULL, at TEXT NOT NULL, result TEXT NOT NULL)");
 		sql.exec("CREATE INDEX IF NOT EXISTS gates_repo ON gates (repo, seq)");
 		sql.exec("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL)");
+		// The latest copy epoch of each removed fork, which a fork created again under the same name starts from.
+		sql.exec("CREATE TABLE IF NOT EXISTS morph_epochs (repo TEXT PRIMARY KEY, epoch INTEGER NOT NULL)");
 	}
 
 	register(input: { repo: string; userId: string; persona: string; pinnedTag: string; status?: ForkStatusInput; seeded?: boolean }, at = Date.now()): FleetFork {
 		const now = new Date(at).toISOString();
+		// A new row starts at the latest epoch a removed fork of the same name reached (morphEpoch), so no copy comes back.
 		this.ctx.storage.sql.exec(
-			"INSERT INTO forks (repo, user_id, persona, pinned_tag, status, seeded, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(repo) DO UPDATE SET persona = excluded.persona, pinned_tag = excluded.pinned_tag, status = excluded.status, updated_at = excluded.updated_at",
+			"INSERT INTO forks (repo, user_id, persona, pinned_tag, status, seeded, created_at, updated_at, morph_epoch) VALUES (?, ?, ?, ?, ?, ?, ?, ?, (SELECT epoch FROM morph_epochs WHERE repo = ?)) ON CONFLICT(repo) DO UPDATE SET persona = excluded.persona, pinned_tag = excluded.pinned_tag, status = excluded.status, updated_at = excluded.updated_at",
 			input.repo,
 			input.userId,
 			input.persona,
@@ -216,6 +219,7 @@ export class Fleet extends DurableObject<Env> {
 			input.seeded ? 1 : 0,
 			now,
 			now,
+			input.repo,
 		);
 		const fork = this.get(input.repo)!;
 		this.broadcast({ type: "fork", fork });
@@ -353,8 +357,9 @@ export class Fleet extends DurableObject<Env> {
 
 	/**
 	 * The latest epoch a copy of this fork was stored at, kept when the copy
-	 * is cleared, or null when the fork never had one (or is not in the
-	 * fleet). A rotation numbers its copy one above it and stores the copy
+	 * is cleared and when the fork is removed and created again under the same
+	 * name, or null when no fork of that name ever had one (or it is not in
+	 * the fleet). A rotation numbers its copy one above it and stores the copy
 	 * over it, so no epoch is used twice: the seed is the fork, the commit,
 	 * and the epoch, and a reused epoch on an unmoved main would bring a
 	 * retired copy back, names and all.
@@ -422,7 +427,12 @@ export class Fleet extends DurableObject<Env> {
 		return this.ctx.storage.sql.exec("SELECT event FROM security_events WHERE repo = ? ORDER BY seq DESC LIMIT ?", repo, limit).toArray().map((r) => JSON.parse(r.event as string) as SecurityEvent);
 	}
 
+	/** Removes a fork and its records, keeping only its latest copy epoch (morphEpoch). */
 	remove(repo: string): boolean {
+		this.ctx.storage.sql.exec(
+			"INSERT INTO morph_epochs (repo, epoch) SELECT repo, morph_epoch FROM forks WHERE repo = ? AND morph_epoch IS NOT NULL ON CONFLICT(repo) DO UPDATE SET epoch = max(epoch, excluded.epoch)",
+			repo,
+		);
 		this.ctx.storage.sql.exec("DELETE FROM health_history WHERE repo = ?", repo);
 		this.ctx.storage.sql.exec("DELETE FROM security_events WHERE repo = ?", repo);
 		this.ctx.storage.sql.exec("DELETE FROM gates WHERE repo = ?", repo);

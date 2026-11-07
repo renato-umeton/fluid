@@ -38,6 +38,7 @@ beforeAll(() => {
 		"user-retired": { ...PUBLISHED, "app/retired.ts": "export const retired = 1;\n" },
 		"user-resecret-2": { ...PUBLISHED, "app/resecret.ts": "export const resecret = 2;\n" },
 		"user-unread": { ...PUBLISHED, "app/unread.ts": "export const unread = 1;\n" },
+		"user-again": { ...PUBLISHED, "app/again.ts": "export const again = 1;\n" },
 	});
 	for (const repo of Object.keys(p.heads)) p.t.fleet.register({ repo, userId: repo.replace(/^user-/, ""), persona: "p", pinnedTag: TAG, status: "pinned" });
 });
@@ -95,6 +96,20 @@ describe("rotateFork", () => {
 			expect(await slow).toEqual({ outcome: "skipped", repo: "user-race", reason: "schedule", why: "another rotation moved the fork first" });
 			expect(fleet.morphState("user-race")).toMatchObject({ epoch: 2, fingerprint: await printOf("user-race", 2) });
 			expect(fleet.securityEvents("user-race").map((event) => event.detail?.epoch)).toEqual([2, 1]);
+		},
+		SLOW_MS,
+	);
+
+	it(
+		"numbers the first copy of a fork created again under the same name above the deleted fork's, so no retired seed comes back",
+		async () => {
+			const fleet = p.t.fleet;
+			const first = await rotateFork(p.deps, "user-again", "install");
+			expect(first).toMatchObject({ outcome: "rotated", epoch: 1, fingerprint: await printOf("user-again", 1) });
+			fleet.remove("user-again");
+			// Created again at the same commit, as when deleting its repo failed and provisioning reused it.
+			fleet.register({ repo: "user-again", userId: "again", persona: "p", pinnedTag: TAG, status: "pinned" });
+			expect(await rotateFork(p.deps, "user-again", "install")).toMatchObject({ outcome: "rotated", epoch: 2, fingerprint: await printOf("user-again", 2) });
 		},
 		SLOW_MS,
 	);

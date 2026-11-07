@@ -35,7 +35,7 @@ seed   = HMAC-SHA256(POLYMORPH_SECRET, "polymorph:v1:<repo>:<sha>:<epoch>")
 suffix = 8 base36 characters from HMAC-SHA256(seed, name), one per listed name
 ```
 
-`researchNeedsAttestation` becomes `researchNeedsAttestation$` followed by its 8 characters. A suffix holds about 41 bits (36^8 is about 2.8 trillion). Each name gets its own suffix, so learning one renamed name tells nothing about the others. A public fingerprint of 8 hex characters, also derived from the seed, names the copy in answers and in the ledger without revealing the seed. A second 8 hex character hash names which listed names the copy renamed. A new commit or a new epoch gives a new copy. A fork's first copy is epoch 1. Each later copy is numbered one above the fork's latest epoch, which Fleet keeps even when it clears the copy (`Fleet.morphEpoch`). So a fork's epochs never repeat, and no retired copy comes back. Deleting the fork drops its epoch too (see "Limits").
+`researchNeedsAttestation` becomes `researchNeedsAttestation$` followed by its 8 characters. A suffix holds about 41 bits (36^8 is about 2.8 trillion). Each name gets its own suffix, so learning one renamed name tells nothing about the others. A public fingerprint of 8 hex characters, also derived from the seed, names the copy in answers and in the ledger without revealing the seed. A second 8 hex character hash names which listed names the copy renamed. A new commit or a new epoch gives a new copy. A fork's first copy is epoch 1. Each later copy is numbered one above the fork's latest epoch, which Fleet keeps even when it clears the copy (`Fleet.morphEpoch`). Fleet also keeps a deleted fork's latest epoch, and a fork created again under the same name starts from it. So a fork's epochs never repeat, and no retired copy comes back.
 
 ### The loader renames at load time
 
@@ -158,7 +158,7 @@ Each rotation logs a `rotate` run (`GET /api/runs/:runId`): a rotated or refused
 
 ## Records
 
-- **Fleet's copy state.** Fleet keeps the verified copy of each fork: epoch, commit, fingerprint, names hash, the listed names it renamed, and when it was stored. Only a rotation changes it, by compare-and-set. Clearing the copy keeps its epoch. Deleting the fork deletes all of it. It is never part of the public fleet entries.
+- **Fleet's copy state.** Fleet keeps the verified copy of each fork: epoch, commit, fingerprint, names hash, the listed names it renamed, and when it was stored. Only a rotation changes it, by compare-and-set. Clearing the copy keeps its epoch. Deleting the fork deletes all of it except the latest epoch, which a fork created again under the same name starts from. It is never part of the public fleet entries.
 - **Security events.** `tripwire` (which kind of tripwire, the listed name, the key's path, the copy's epoch and fingerprint), `rotated` (reason, epoch, fingerprint), `rotation_refused` (reason, epoch, number of failures), and `copy_cleared` (epoch, and why the stored copy no longer builds). Fleet keeps the latest 100 per fork. No route serves them yet.
 - **The public fleet stream** gets a `security` event with only the repo, the kind, and the time, at most one per fork and kind every 10 seconds. `rotation_refused` and `copy_cleared` are never broadcast.
 - **Answers and the ledger.** An answer from a copy carries `fork.variant` (the fingerprint), and its ledger row carries `variant`.
@@ -231,7 +231,6 @@ The recording is `platform/public/data/polymorph-demo.json`.
 - **Public behavior.** A bug reachable through public fields alone works on every copy (attack B). Renaming cannot hide a name that callers use.
 - **Disclosure.** A leaked copy works on its own fork until that fork rotates (attack A2): within 6 hours on the schedule, sooner after a change lands, and longer while its rotations are refused or skip.
 - **One secret.** Every copy's names come from `POLYMORPH_SECRET`. Whoever reads it can compute every fork's renamed names, so the design assumes it never leaves the platform. If it leaks, replace it: copies made with the old one stop matching, and each fork rotates to a new copy (see "Setup"). Until its rotation stores one, a fork answers plain, behind a scan with the names its stored copy renamed.
-- **A fork created again.** Deleting a fork drops its Fleet row, and its epoch with it. A fork created again under the same name starts at epoch 1. At the same commit it can then get the old fork's seeds, and so the old copies' names.
 - **Coverage.** Only listed names move. Code a fork adds stays plain unless upstream lists its names.
 - **Other classes.** Logic bugs, timing, and denial of service are untouched. Prototype pollution gadgets that read names fixed by the runtime survive renaming.
 - **Tested equivalence.** The gate checks equivalence only on the behavior that the probes test. A difference that no probe reaches goes unseen.
