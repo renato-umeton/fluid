@@ -12,14 +12,21 @@ Code: `platform/src/polymorph/`, the loader (`platform/src/runtime/loader.ts`), 
 
 `stock/polymorph.json` holds `{ "version": 1, "description": "...", "names": [...] }`. It lists 74 internal names of the medical app, for example `researchNeedsAttestation`, `enforceContract`, and `buildCard`. Upstream checks its own list in `stock/tests/unit/polymorph-list.test.ts`. Each listed name must be:
 
-- a plain identifier that is neither a keyword nor a global or a property of a standard built-in;
+- a plain identifier other than a keyword, a global, or a property of a standard built-in;
 - used as an identifier in runtime code;
 - absent from every string, template text, and regular expression of runtime code, from runtime JSON and the synthetic data (keys and string values), and from the probe suites and the demo overlay;
 - absent from the request, card, ledger, and env shapes, from what `app/types.ts`, `app/toml.ts`, and `app/index.ts` export, and from the names the platform and the browser bundle import from stock.
 
 The list ships with stock. `platform/scripts/bundle-content.mjs` bundles it with the other `STOCK_INCLUDE` files into `src/generated/stock-source.json`, and the stock publisher (`platform/src/stock/publish.ts`, run by `POST /api/admin/stock/publish` or `npm run publish-stock`) commits that bundle to the `stock` repo.
 
-The platform reads the list from stock at the tag the fork's `fluid.toml` pins, the way the gate reads the probes, so a fork cannot shrink it. A release without a list runs every fork plain. The platform also refuses a list that is not valid JSON, is not version 1, lists a name twice, or holds a name that is not a plain identifier or is reserved (a keyword, or a name the language or the runtime contract reads, such as `then` or `fluidToml`). Every fork on that release then runs plain.
+The platform reads the list from stock at the tag the fork's `fluid.toml` pins, the way the gate reads the probes, so a fork cannot shrink it. A release without a list runs every fork plain. So does a release whose list the platform refuses. It refuses a list that:
+
+- is not valid JSON, or not a JSON object;
+- has a version other than 1;
+- has `names` that are not a list of strings;
+- lists a name twice;
+- holds a name that is not a plain identifier;
+- holds a reserved name: a keyword, or a name the language or the runtime contract reads, such as `then` or `fluidToml`.
 
 ### A secret seed per fork, commit, and epoch
 
@@ -41,7 +48,7 @@ Two callers ask for a copy:
 - **A rotation's gate.** `rotateFork` runs a check mode gate with `GateInput.morph`, and only `rotateFork` passes it (see "How the gate checks a copy").
 - **The live ask path.** It asks for a copy when Fleet holds a verified copy of the fork. At the copy's commit it loads the copy. At any other commit it builds the stored copy without starting it, only to get its names for the tripwire scan.
 
-Nothing is renamed when a fork is created. `POST /api/forks` and `SeedForkWorkflow` start a rotation, and that rotation makes and checks the fork's first copy.
+A fork's first copy comes from a rotation: `POST /api/forks` and `SeedForkWorkflow` each start one, and it makes and checks that copy.
 
 A built copy is cached in the platform isolate under its own isolate id, so each copy runs in its own Worker Loader isolate:
 
@@ -49,7 +56,7 @@ A built copy is cached in the platform isolate under its own isolate id, so each
 repo:sha[:variant][:m<epoch>.<fingerprint>.<namesHash>][:llm]
 ```
 
-Without a copy, isolate ids are as they were.
+Without a copy, the id has no `:m<epoch>.<fingerprint>.<namesHash>` part.
 
 ### What a copy skips, and why
 
@@ -109,7 +116,7 @@ Error bodies carry `error` and `requestId`, like every other API error.
 Which code answers a request that passes:
 
 - **At the copy's commit,** the copy answers, always with the model off. `useModel` comes from the request body, so honoring it would let any request bypass the copy, and the gate checked the copy with the model off. The answer carries `fork.variant` (the copy's fingerprint), and its ledger row gets `variant`.
-- **At any other commit** (another branch or tag, or `main` after a change landed and before its rotation stores a copy of it), the request is scanned with the stored copy's names and then answered by the plain fork, with the model if asked.
+- **At any other commit,** the platform scans the request with the stored copy's names, and then the plain fork answers, with the model if asked. That covers another branch or tag, and `main` after a change lands and before its rotation stores a copy of it.
 
 The stored copy was made from the commit that `main` had at its last passing rotation. That commit may no longer be `main`'s head.
 
@@ -161,7 +168,7 @@ Polymorphic installation is optional. It needs one secret, `POLYMORPH_SECRET`, o
 
 Without it, or with one shorter than 16 characters, every fork runs plain: no copies, no scan, no rotation. The schedule still starts a `fluid-rotate` instance every 6 hours, which records a rotate run marked `cancelled` ("Skipped: POLYMORPH_SECRET is not set or is shorter than 16 characters"). `POST /api/admin/fleet/rotate` still starts runs, which skip the same way. A secret that is set but shorter than 16 characters also logs one warning per isolate.
 
-Copies also need the stock release that a fork pins to publish `polymorph.json`. On a deployment whose stock tags were published before the list existed, every rotation skips (`stock <tag> publishes no polymorph.json`) until its forks pin a release that has the list. [DEPLOY.md](DEPLOY.md#polymorphic-installation-on-an-existing-deployment) shows how to publish one and move the fleet to it.
+Copies also need `polymorph.json` in the stock release that a fork pins. On a deployment whose stock tags were published before the list existed, every rotation skips (`stock <tag> publishes no polymorph.json`) until its forks pin a release that has the list. [DEPLOY.md](DEPLOY.md#polymorphic-installation-on-an-existing-deployment) shows how to publish one and move the fleet to it.
 
 Once the secret is set and the pinned release has the list, each fork gets its first copy at its next rotation. To give every fork one now, send `POST /api/admin/fleet/rotate` with body `{}`. A new secret makes new copies: a stored copy made with the old one no longer matches, so its fork answers plain and starts a rotation on its next request.
 
