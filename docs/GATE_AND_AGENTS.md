@@ -19,6 +19,7 @@ All agent work runs in Workflows, declared in `platform/cloudflare.config.ts` an
 | `ImportWorkflow` | `fluid-import` | push of a `work/*` branch to an inbox | Takes the import quotas, fetches that branch head, refuses it over a cap or with an unsafe path, pushes it to `work/inbox/<name>` in the fork, and starts its gate (see "Outside pushes"). |
 | `InboxCleanupWorkflow` | `fluid-inbox-cleanup` | outside token | Deletes the inbox 15 minutes after its token expires, unless a newer token replaced it. |
 | `HarvestWorkflow` | `fluid-harvest` | harvest run | Reads intent records from forks that opted in, clusters them, labels the clusters with the model, and drafts the eligible ones as `harvest/<slug>` branches in `stock`. Each run replaces earlier drafts. |
+| `RotateWorkflow` | `fluid-rotate` | fork and what asked (a stored copy in a 10-minute window, a landed commit, a new fork, a fleet-wide run, or an admin request), or a fleet-wide run (every 6 hours on a schedule, or an admin request with no repo) | With a repo: gates `main` in check mode with the renamed copy for the next epoch and stores the copy only on a pass. Without one: starts one rotation per fork that is not provisioning, in batches of 20 with a 2 second pause (see "Polymorphic installation"). |
 
 If a step fails after all its retries, the run is marked `failed` with the error and the instance ends as errored. A run is never left showing `running`.
 
@@ -34,7 +35,7 @@ Steps that use git retry 5 times with exponential backoff from 3 seconds (93 sec
 - **Time limits.** Each fork call from the platform is limited to 10 seconds, and each sample in the runner to 5 seconds.
 - **Tier 3.** Tier 3 is the fork's `tests/user/manifest.json`, always run as tier `user`. It is validated before it runs (the runner's rules, unique ids, positive integer samples, and the regex limits: a `notMatches` pattern of at most 200 characters with no group that repeats an unbounded quantifier without bound, such as `(a+)+`). The platform checks the regex limits itself too, because a fork may pin a stock tag whose runner predates them (`platform/src/gate/regex.ts`). Sample counts are capped at 10 (manifest and per probe) and the list at 20 probes; the tier notes any probes left out. A probe with `"disabled": true` is skipped, and the gate logs it with its `disabledReason` in the run steps and the tier summary.
 - **Test ids.** Suggested tests are named `t-<intentId>-<name>` (near-invariant copies `near-<intentId>-<probe>`). Adding accepted tests never replaces a probe that belongs to another intent or that the user wrote; a retried commit may replace its own intent's probes.
-- **Model access.** Fork isolates have no model access by default. Only the `:llm` variant, which `POST /api/ask` uses when `useModel` is set, gets the `LLM` capability. `LlmHost` limits model calls to 20 per minute per repo and 200 per minute across the platform.
+- **Model access.** Fork isolates have no model access by default. Only the `:llm` variant, which `POST /api/ask` uses when `useModel` is set, gets the `LLM` capability. A renamed copy always answers with the model off (see "Polymorphic installation"). `LlmHost` limits model calls to 20 per minute per repo and 200 per minute across the platform.
 - **Gateway backstop.** The `fluid` AI Gateway itself allows at most 300 requests per minute (fixed window), set with `cf ai-gateway gateways update fluid --rate-limiting-limit 300 --rate-limiting-interval 60 --rate-limiting-technique fixed`. The update is a full PUT, so it repeats every current setting unchanged (`workers_ai_billing_mode` stays `postpaid`, `byok_only` stays false, no spend limits); rate limiting is not billed. It caps every model caller together, including the platform's own agents, if a code path ever skips the per-repo and global budgets.
 - **Repairs.** Repair branches are never merged automatically. Applying one (`POST /api/forks/:repo/repairs/:sha/apply`, or the Apply button) gates it in merge mode, and `main` fast-forwards to it only if every tier passes.
 
@@ -190,6 +191,47 @@ For each customization the suggester also proposes end-to-end scenarios for `tes
 
 Spec 7's grace period is enforced. When the newest safety release whose grace period has ended is newer than a fork's pinned tag, and the fork has no passed upgrade to it waiting for approval, `POST /api/ask` on the fork's `main` is answered by `stock` at that release. The card carries the signal `safety_fallback:stock` and a framing line, the UI shows it as a notice, and the ledger records the signal. Asking a named branch is not redirected. As a backstop, the platform never serves a card (or alternative) in clinical mode with a computed dose: it refuses the fork's answer, answers with `stock` at the fork's pin, and marks the card `safety_guard:clinical_dose`.
 
+## Polymorphic installation
+
+Each fork can run its own renamed copy of upstream's internal names, made with a secret seed per fork, commit, and epoch, and checked by a gate before it goes live. The overview, the tripwires on `POST /api/ask`, setup, and the experiment are in [POLYMORPH.md](POLYMORPH.md). This section covers the gate's part and the Rotate workflow.
+
+### Equivalence check
+
+- **Who asks for it.** Only a rotation: `rotateFork` (`platform/src/polymorph/rotate.ts`) runs `runGate` in check mode on `main`, with one sample per probe (answers with the model off do not vary) and `morph: { epoch }` for the next epoch (`GateInput.morph`). Gates of pushed changes, upgrades, and repairs run as before.
+- **Two loads.** The gate loads the plain fork at the gated commit, then the renamed copy of that commit, both in the gate's own variant, so the copy runs apart from production and shares the build production would run. When no copy can be made, the gate runs as without one: `GateResult.polymorph` is null and `polymorphPlain` says why, as the loader said it.
+- **Every request to both.** Each request stock's runner sends goes to the plain fork and to the copy at once (`equivalenceCheck` in `platform/src/polymorph/equivalence.ts`). The runner sees the copy's answer, card or error, so tiers 1 to 3 judge the copy. Both answers come through `askLoaded`, which maps the copy's names back to the originals first.
+- **What differs.** `cardDifferences` compares the two cards value by value: every character of every string, every element of every array. Only `answer_id` and `fork_commit` are ignored, at any depth. A key whose value is undefined counts as absent, and key order does not matter. Two errors match when their messages match. A card on one side and an error on the other is a difference at the whole answer.
+- **Failures.** Each difference fails tier 1 as probe `polymorph-equivalence`, ahead of whatever the suites found, with the path, the plain fork's value as `expected`, and the copy's value as `actual`. The first 10 differences are recorded; when there were more, the last one says how many requests differed in all. A copy that no request reached fails too. The tier 1 summary gains one `polymorph-equivalence` probe whose samples are the requests compared. Failure text names the request. It never names the copy.
+- **Result.** `GateResult.polymorph` is `{ epoch, fingerprint, namesHash, compared, mismatches, skipped }`, where `skipped` lists the names the copy left as they are, each with its reason.
+
+### Rotation
+
+`rotateFork(deps, repo, reason)` moves one fork to its next epoch:
+
+1. It skips when `POLYMORPH_SECRET` is missing or shorter than 16 characters, when the fork is not in the fleet, or when the fork is `provisioning`, `upgrading`, or `gating`, since its `main` is about to change or its gate is running.
+2. It reads the stored epoch and runs the equivalence check for the next one. A gate that made no copy skips the rotation and says why. A read that failed in Artifacts throws instead, so the workflow step retries.
+3. On a failed gate, it records a `rotation_refused` security event, and the fork keeps the copy it has. The result carries the gate's first 10 failures, with copy names mapped back.
+4. On a pass, it checks that `main` is still at the gated commit (a commit that landed meanwhile gets a rotation of its own), then stores the copy in Fleet by compare-and-set on the epoch read in step 2. A rotation that finished first wins, so a retired copy stays retired. It records a `rotated` security event.
+
+**The workflow.** `RotateWorkflow` (`fluid-rotate`, `platform/src/workflows/rotate.ts`) runs `rotateFork` for one fork in a step that retries like a gate step (4 retries from 5 seconds). An instance with no repo starts one instance per fork that is not provisioning, in batches of 20 with a 2 second pause. Without a usable secret it starts none, and its run ends `cancelled`.
+
+**Triggers.** Each trigger starts an instance whose id, `rot-<fork hash>-<key>`, names what asked for it, so asking again starts nothing new (`startRotation` in `platform/src/workflows/common.ts`). Without a usable secret, `startRotation` starts nothing.
+
+| Trigger | Reason | One rotation per |
+| :-- | :-- | :-- |
+| The schedule, `0 */6 * * *` (every 6 hours), through a fleet-wide instance | `schedule` | fork and fleet-wide run |
+| A request that trips a copy's wires on `POST /api/ask` | `tripwire` | copy and 10-minute window |
+| A stored copy that no longer builds as verified on `POST /api/ask` (another fingerprint or names hash, or code the renamer refuses now) | `mismatch` | copy and 10-minute window |
+| A merge mode gate that lands on `main` (customizations, outside imports, contest picks, repair applies), once the gate sets the fork back to `pinned` | `landed` | landed commit |
+| An upgrade that lands with `auto_upgrade`, and a one-tap upgrade approval | `landed` | landed commit |
+| A yellow rollback's revert commit | `landed` | landed commit |
+| `POST /api/forks` once it provisions a fork, and `SeedForkWorkflow` for a seeded fork with no change still gating | `install` | fork |
+| `POST /api/admin/fleet/rotate`, with or without a repo | `admin` | request |
+
+Until a landed commit's rotation stores a copy of it, `main` answers plain, behind the stored copy's tripwire scan. A fork whose rotation skipped or was refused gets its next try from the schedule within 6 hours.
+
+**Runs.** Every rotation logs a `rotate` run (`GET /api/runs/:runId`) with one step, "Rotate to the next renamed copy". It ends `passed` (rotated, with the epoch and the commit), `failed` (refused, with the failures), or `cancelled` (skipped, with `cancelReason`). An error that outlasts the step's retries also ends it `failed`, with the error. The run keeps the epoch and the commit. It never keeps the copy's fingerprint, because anyone who knows a run id can read the run. A fleet-wide run has the step "Rotate every fork" and ends `passed` with the number of forks; each fork's rotation logs its own run. The run format is in [API.md](API.md#rotate-run-record).
+
 ## Harvest is opt-in
 
 Stock's `fluid.toml` ships `harvest_opt_in = false`, new forks write both preferences explicitly (default false), and a missing `harvest_opt_in` reads as false. The harvester reads only forks that set it to true; seeded forks opt in explicitly in their `fluid.toml`. A cluster is never drafted when any member touched the floor: `fluid.toml`, `intent/`, the clinical and research policy paths, the registry, the runner's stock modules (`app/toml.ts`, `app/types.ts`), or stock suites under `tests/` (a fork's `tests/user/` is not floor). A draft copies only the runtime files that the reference fork's matching intent record lists. Drafts are for maintainers to review; harvest changes no fork, and nothing retires fork code when a draft ships.
@@ -219,7 +261,7 @@ POST /api/admin/fleet/baseline      {offset?, limit?, concurrency?, record?} -> 
 GET  /api/harvest                   -> HarvestProposal[]
 ```
 
-The fleet view shows these fork statuses: `provisioning`, `pinned` (idle on its tag), `upgrading`, `gating`, `passed` (`pendingUpgrade` is set while the upgrade waits for approval), `failed`, and `repair_open`. `POST /api/ask` cards on a redirected fork carry `fork.servedBy` and `fork.safetyFallback`.
+The fleet view shows these fork statuses: `provisioning`, `pinned` (idle on its tag), `upgrading`, `gating`, `passed` (`pendingUpgrade` is set while the upgrade waits for approval), `failed`, and `repair_open`. `POST /api/ask` cards on a redirected fork carry `fork.servedBy` and `fork.safetyFallback`, and a card from a renamed copy carries `fork.variant`, the copy's fingerprint.
 
 ## Releases
 
