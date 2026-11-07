@@ -35,11 +35,16 @@ which those identifiers carry a secret suffix. An exploit written against this
 public source then does not find them (see `docs/POLYMORPH.md` in the Fluid
 repository). `tests/unit/polymorph-list.test.ts` checks that the file is
 version 1 with a description and a sorted list without duplicates. It also
-checks each listed name: it is a plain identifier that is neither a keyword
-nor a global or a property of a standard built-in; it is used in runtime code;
-it appears nowhere as text (a string, template text, regular expression,
-runtime JSON, synthetic data, or a probe); and no contract reads it by name. A
-name that leaves runtime code must leave the list too.
+checks each listed name:
+
+- It is a plain identifier other than a keyword, a global, or a property of a
+  standard built-in.
+- Runtime code uses it as an identifier.
+- It appears nowhere as text: in a string, template text, or regular
+  expression, in runtime JSON or the synthetic data, or in a probe.
+- No contract reads it by name.
+
+A name that leaves runtime code must leave the list too.
 
 ## Runtime contract
 
