@@ -730,6 +730,8 @@ describe(`a fleet of ${FLEET} forks on a release with a planted zero-day`, () =>
 			// The committed recording is what the deployed page replays: every run checks it still passes the view's checks
 			// and shows this outcome for its own fleet, unless this run is about to replace it.
 			if (RECORD_PATH === undefined || resolve(RECORD_PATH) !== COMMITTED_RECORDING) expectCommittedRecording(readCommitted(), recording);
+			// cleanup() fails a run that asked the model only after this test ends, too late to keep its recording unwritten.
+			expect(platform.modelCalls, "prompts the platform sent to the model; this experiment never uses it").toEqual([]);
 			// A run with a failed check writes no recording, so the page never replays one.
 			if (RECORD_PATH && task.result?.state !== "fail") {
 				const path = resolve(RECORD_PATH);
