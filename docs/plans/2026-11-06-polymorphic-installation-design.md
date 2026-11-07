@@ -28,7 +28,7 @@ Limits, stated plainly: a transform that keeps behavior also keeps every bug tha
 | Finding | Rule we follow |
 | :-- | :-- |
 | Randomization that is not refreshed falls to brute force and to probing, and fast re-randomization adds little on its own ([Shacham et al., CCS 2004](https://doi.org/10.1145/1030083.1030124); [Bittau et al., S&P 2014](https://doi.org/10.1109/SP.2014.22)). | Strength comes from entropy per copy: every listed name gets its own 41-bit suffix. Copies are seeded independently, and a tripwire hit rotates that copy. |
-| A tripwire that takes a service down turns detection into denial of service (Shacham et al.). | A hit refuses that one request and rotates the copy. The fork keeps serving. One rotation starts per copy, however many hits it gets. |
+| A tripwire that takes a service down turns detection into denial of service (Shacham et al.). | A hit refuses that one request and starts a rotation of the fork. The fork keeps serving. Hits start at most one rotation per fork in each 10-minute window, however many there are. |
 | One leak can reveal a randomized layout ([Snow et al., S&P 2013](https://doi.org/10.1109/SP.2013.45)). | Copies and seeds stay inside the platform. Renamed names are mapped back to the originals in error messages before they leave it, as SQLrand does. |
 | Diversity gives no advantage against attacks that do not depend on the randomized detail, and helps most against probing ([Evans, Nguyen-Tuong, Knight 2011](https://doi.org/10.1007/978-1-4614-0977-9_2)). | We claim protection only for exploits that name internal properties or functions, and the experiment includes an exploit that does not. Wrong guesses all get the same refusal, so names cannot be learned one at a time. |
 | A test-based check shows equivalence only on tested behavior ([Baudry, Allier, Monperrus, ISSTA 2014](https://doi.org/10.1145/2610384.2610415)). | The rename is a consistent change of identifiers, and the list checks rule out the usual ways names leak into behavior (strings, JSON keys, card fields). The gate compares every probe answer on top of that. |
@@ -69,7 +69,7 @@ Seeds and renamed copies never leave the platform. Everything a renamed copy sen
 
 ### 7. Rotation
 
-A new workflow, `fluid-rotate`, moves every fork to its next epoch every 6 hours, moves one fork at once after a tripwire hit, and moves a fork right after a change lands on its `main`. It runs the equivalence check first and keeps the old copy when the new one fails. A rotation starts at most once per copy, so a flood of hits costs one gate run. Whatever an attacker learned about a copy goes stale at the next rotation.
+A new workflow, `fluid-rotate`, moves every fork to its next epoch every 6 hours, moves one fork at once after a tripwire hit, and moves a fork right after a change lands on its `main`. It runs the equivalence check first and keeps the old copy when the new one fails. Hits on one fork start at most one rotation in each 10-minute window, whatever copy they trip, so a flood of hits costs one gate run per window. Whatever an attacker learned about a copy goes stale at the next rotation.
 
 ## The proof of concept
 
@@ -112,7 +112,7 @@ So for this bug class the answer to the issue is yes: one exploit built from ups
 - **Every ref is guarded.** Requests to any ref of a fork with a stored copy are scanned with that copy's names. The copy itself answers only at its commit. Any other commit, including `main` after a change lands and before its rotation, answers plain behind that scan.
 - **Model off.** A copy always answers with the model off: `useModel` comes from the request body, so honoring it would let any request bypass the copy.
 - **Reads fail closed.** When a read that the stored copy needs fails in Artifacts, the request gets a retryable 503, so the plain fork never answers it unscanned.
-- **When rotations start.** One rotation per copy in each 10-minute window after tripwire hits, and also for new forks, landed upgrades, one-tap approvals, yellow rollbacks, and stored copies that no longer build as verified.
+- **When rotations start.** Tripwire hits start one rotation per fork in each 10-minute window, even when that rotation stores a new copy that the next hits trip. So a sustained flood on one fork runs at most one check mode gate every 10 minutes. Rotations also start for new forks, landed upgrades, one-tap approvals, yellow rollbacks, and stored copies that no longer build as verified.
 - **Stale copies.** A stored copy that no longer builds as verified starts a `mismatch` rotation. Until a new copy is stored, the plain fork answers behind a scan with the names Fleet stored for the old copy, in which every suffix is foreign. When that rotation stores no new copy and the old one still does not build, it clears the old one. Fleet keeps a cleared copy's epoch, and the next copy is numbered above it. So a fork's epochs never repeat, and no retired copy comes back.
 
 ## Limits and open questions

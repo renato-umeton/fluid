@@ -17,7 +17,7 @@ import { resolveCommit } from "../runtime/refs.ts";
 import { openRepo } from "../runtime/repo-files.ts";
 import type { RunTimeRecord } from "../durable/user-ledger.ts";
 import { fleetStub, ledgerStub } from "../stubs.ts";
-import { copyKey, errorText, startRotation, type RotateParams, type WorkflowBinding } from "../workflows/common.ts";
+import { copyKey, errorText, startRotation, tripKey, type RotateParams, type WorkflowBinding } from "../workflows/common.ts";
 import { HttpError } from "./http.ts";
 import { hasClinicalDose, markSafety, SAFETY_SIGNALS } from "./safety.ts";
 
@@ -195,9 +195,10 @@ async function enforceGuard(deps: AskDeps, repo: string, request: Record<string,
 /**
  * Refuses, before the fork sees it, a request that names one of the copy's
  * dead original names or another copy's renamed one (polymorph/tripwire.ts).
- * The hit is recorded as a security event and starts one rotation of this
- * copy, however many requests trip it; the fork keeps serving. A request too
- * deep or too wide to scan is refused too, and records and starts nothing.
+ * The hit is recorded as a security event and starts one rotation of the fork
+ * in each ten-minute window (tripKey), however many requests trip it, and
+ * whichever copy they trip; the fork keeps serving. A request too deep or too
+ * wide to scan is refused too, and records and starts nothing.
  */
 async function checkTripwires(deps: AskDeps, repo: string, request: Record<string, unknown>, copy: Pick<LoadedCopy, "names" | "epoch" | "fingerprint">): Promise<void> {
 	let hit: TripwireHit | null;
@@ -214,7 +215,7 @@ async function checkTripwires(deps: AskDeps, repo: string, request: Record<strin
 		// The refusal stands either way: the event is for admins, and a failure here must not answer differently.
 		console.error(`polymorph: a tripwire hit on ${repo} was not recorded: ${errorText(error)}`);
 	}
-	await startRotation(deps.env, deps.exports.RotateWorkflow, { repo, reason: "tripwire", key: copyKey(copy) });
+	await startRotation(deps.env, deps.exports.RotateWorkflow, { repo, reason: "tripwire", key: tripKey() });
 	throw new HttpError(403, TRIPWIRE_REFUSAL);
 }
 

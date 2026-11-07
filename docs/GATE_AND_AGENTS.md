@@ -221,7 +221,7 @@ Each fork can run its own renamed copy of its code, in which upstream's internal
 | Trigger | Reason | One rotation per |
 | :-- | :-- | :-- |
 | The schedule, `0 */6 * * *` (every 6 hours), through a fleet-wide instance | `schedule` | fork and fleet-wide run |
-| A request that hits a copy's tripwires on `POST /api/ask` | `tripwire` | copy and 10-minute window |
+| A request that hits a copy's tripwires on `POST /api/ask` | `tripwire` | fork and 10-minute window, so a new copy stored in that window starts no new one |
 | A stored copy that no longer builds as verified on `POST /api/ask` (another fingerprint or names hash, or code the renamer refuses now) | `mismatch` | copy and 10-minute window |
 | A merge mode gate that lands on `main` (customizations, outside imports, contest picks, repair applies), once the gate sets the fork back to `pinned` | `landed` | landed commit |
 | An upgrade that lands with `auto_upgrade`, and a one-tap upgrade approval | `landed` | landed commit |

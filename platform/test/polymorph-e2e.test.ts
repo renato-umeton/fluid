@@ -9,7 +9,7 @@
 // installation off (serveAsk with no secret); on the renamed copies with
 // nothing scanning the request (askLoaded alone, as if the platform's scan
 // were bypassed); and through the platform (serveAsk), which refuses a request
-// that trips a copy's wires and starts one rotation of that copy. Each
+// that trips a copy's wires and starts one rotation of that fork. Each
 // rotation started then runs, as the rotate workflow would.
 //
 // POLYMORPH_FLEET sets the number of forks (default 4, at least 4).
@@ -388,8 +388,8 @@ async function askThroughPlatform(sends: Send[]): Promise<{ answers: PlatformAns
 	const rowsBefore = new Map<string, number>();
 	for (const repo of targets) rowsBefore.set(repo, await ledgerRows(repo));
 	const answers: PlatformAnswer[] = [];
-	// The live path starts one rotation per copy in each ten-minute window (copyKey), so the clock stands still while
-	// the requests go out: a batch that ran across a window's end would otherwise start a second rotation of a copy.
+	// The live path starts one tripwire rotation per fork in each ten-minute window (tripKey), so the clock stands still
+	// while the requests go out: a batch that ran across a window's end would otherwise start a second rotation of a fork.
 	const now = Date.now();
 	const clock = vi.spyOn(Date, "now").mockReturnValue(now);
 	try {
@@ -439,7 +439,7 @@ async function attack(forks: Fork[], plan: Attack, before: BuiltIns): Promise<At
 	restoreInstalled(forks);
 	const { outcomes, rotations } = await send(plan.sends);
 	const rotated = rotations.map((params) => params.repo!);
-	// One rotation per copy, however many requests tripped it, and one for each copy that refused a request.
+	// One rotation per fork, however many requests tripped it, and one for each fork that refused a request.
 	expect(new Set(rotated).size, `attack ${plan.id}: rotations started per fork`).toBe(rotated.length);
 	const refused = reposWhere(outcomes, (outcome) => outcome.platform === "refused");
 	expect([...rotated].sort(), `attack ${plan.id}: forks that started a rotation, against the forks that refused a request`).toEqual([...refused].sort());

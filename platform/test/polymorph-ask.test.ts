@@ -15,7 +15,7 @@ import { SCAN_LIMITS } from "../src/polymorph/tokens.ts";
 import { askLoaded, loadForkRuntime, type RuntimeDeps } from "../src/runtime/loader.ts";
 import { ledgerStub } from "../src/stubs.ts";
 import { hostCallback } from "../src/yellow/run.ts";
-import { copyKey, rotationId } from "../src/workflows/common.ts";
+import { copyKey, rotationId, tripKey } from "../src/workflows/common.ts";
 import { cookieFor, post } from "./helpers/api-env.ts";
 import { BUILD_CARD, LISTED, patched, POLYMORPH_TEST_SECRET, PUBLISHED, TAG, polymorphPlatform, type PolymorphPlatform } from "./helpers/polymorph-platform.ts";
 import { fakeWorkflows } from "./helpers/workflows.ts";
@@ -75,6 +75,7 @@ beforeAll(() => {
 		"user-safety": { ...PUBLISHED, "app/safety.ts": "export const safety = 1;\n" },
 		"user-trip": { ...PUBLISHED, "app/trip.ts": "export const trip = 1;\n" },
 		"user-flood": { ...PUBLISHED, "app/flood.ts": "export const flood = 1;\n" },
+		"user-chain": { ...PUBLISHED, "app/chain.ts": "export const chain = 1;\n" },
 		"user-deep": { ...PUBLISHED, "app/deep.ts": "export const deep = 1;\n" },
 		"user-route": { ...PUBLISHED, "app/route.ts": "export const route = 1;\n" },
 		"user-busy": { ...PUBLISHED, "app/busy.ts": "export const busy = 1;\n" },
@@ -315,14 +316,14 @@ describe("serveAsk and a copy's tripwires", () => {
 	);
 
 	it(
-		"starts exactly one rotation of the copy, named by its epoch but not its fingerprint, however many requests trip it",
+		"starts exactly one rotation of the fork, named by its window and never by its copy, however many requests trip it",
 		async () => {
 			const state = await storeCopy("user-flood", 2);
 			vi.spyOn(Date, "now").mockReturnValue(t0);
 			for (let i = 0; i < 5; i++) await refusal(ask("user-flood", naming("researchNeedsAttestation")));
 			await refusal(ask("user-flood", naming(await foreignName("user-flood", 2))));
-			const id = rotationId("user-flood", copyKey(state, t0));
-			expect(id).toContain(`-c${state.epoch}-`);
+			const id = rotationId("user-flood", tripKey(t0));
+			expect(id).not.toContain(`-c${state.epoch}-`);
 			expect(id).not.toContain(state.fingerprint);
 			expect(rotationsOf("user-flood")).toEqual([{ workflow: "RotateWorkflow", id, params: { repo: "user-flood", reason: "tripwire", runId: `run_${id}` } }]);
 			expect(p.t.fleet.securityEvents("user-flood")).toHaveLength(6);
@@ -331,9 +332,28 @@ describe("serveAsk and a copy's tripwires", () => {
 	);
 
 	it(
-		"starts the copy's rotation again ten minutes on when the first one skipped because the fork was busy",
+		"starts one tripwire rotation per fork in each window, even after that rotation stores a new copy for the next hit to trip",
 		async () => {
-			const state = await storeCopy("user-busy", 3);
+			await storeCopy("user-chain", 2);
+			const now = vi.spyOn(Date, "now").mockReturnValue(t0);
+			await refusal(ask("user-chain", naming("researchNeedsAttestation")));
+			// The rotation it started stores the next copy, and the hits go on.
+			await storeCopy("user-chain", 3);
+			now.mockReturnValue(t0 + 9 * 60_000);
+			for (let i = 0; i < 3; i++) await refusal(ask("user-chain", naming("researchNeedsAttestation")));
+			expect(rotationsOf("user-chain").map((instance) => instance.id)).toEqual([rotationId("user-chain", tripKey(t0))]);
+			now.mockReturnValue(t0 + 10 * 60_000);
+			await refusal(ask("user-chain", naming("researchNeedsAttestation")));
+			expect(rotationsOf("user-chain").map((instance) => instance.id)).toEqual([rotationId("user-chain", tripKey(t0)), rotationId("user-chain", tripKey(t0 + 10 * 60_000))]);
+			expect(p.t.fleet.securityEvents("user-chain")).toHaveLength(5);
+		},
+		SLOW_MS,
+	);
+
+	it(
+		"starts the fork's rotation again ten minutes on when the first one skipped because the fork was busy",
+		async () => {
+			await storeCopy("user-busy", 3);
 			p.t.fleet.update("user-busy", { status: "gating" });
 			const now = vi.spyOn(Date, "now").mockReturnValue(t0);
 			await refusal(ask("user-busy", naming("researchNeedsAttestation")));
@@ -345,8 +365,8 @@ describe("serveAsk and a copy's tripwires", () => {
 			expect(rotationsOf("user-busy")).toHaveLength(1);
 			now.mockReturnValue(t0 + 10 * 60_000);
 			await refusal(ask("user-busy", naming("researchNeedsAttestation")));
-			expect(rotationsOf("user-busy").map((instance) => instance.id)).toEqual([rotationId("user-busy", copyKey(state, t0)), rotationId("user-busy", copyKey(state, t0 + 10 * 60_000))]);
-			expect(rotationId("user-busy", copyKey(state, t0))).not.toBe(rotationId("user-busy", copyKey(state, t0 + 10 * 60_000)));
+			expect(rotationsOf("user-busy").map((instance) => instance.id)).toEqual([rotationId("user-busy", tripKey(t0)), rotationId("user-busy", tripKey(t0 + 10 * 60_000))]);
+			expect(rotationId("user-busy", tripKey(t0))).not.toBe(rotationId("user-busy", tripKey(t0 + 10 * 60_000)));
 		},
 		SLOW_MS,
 	);
@@ -472,8 +492,7 @@ describe("serveAsk when main's verified copy does not load", () => {
 				["tripwire", "decoy", 4],
 			]);
 			expect(await ledgerOf(repo)).toEqual([]);
-			// The hits rotate this copy in this window, which the first request's mismatch rotation already does.
-			expect(rotationsOf(repo).map((instance) => (instance.params as { reason: string }).reason)).toEqual(["mismatch"]);
+			expect(rotationsOf(repo).map((instance) => (instance.params as { reason: string }).reason)).toEqual(["mismatch", "tripwire"]);
 			// A request that names none of them still gets the plain fork's answer.
 			expect((await ask(repo, requests.administrative)).fork).toEqual({ repo, ref: "main", commit: p.heads[repo] });
 		},
@@ -504,7 +523,7 @@ describe("serveAsk on another ref of a fork with a copy", () => {
 	it(
 		"answers another commit plain, model and all, but only for a request the stored copy's wires let through",
 		async () => {
-			const state = await storeCopy("user-ahead", 2);
+			await storeCopy("user-ahead", 2);
 			const onNext = (request: Record<string, unknown>, useModel = false) => serveAsk(deps, { repo: "user-ahead", ref: "work/next", request, useModel, userId: "ahead", fallback: false });
 			vi.spyOn(Date, "now").mockReturnValue(t0);
 			const decoy = await refusal(onNext(naming("researchNeedsAttestation")));
@@ -518,7 +537,7 @@ describe("serveAsk on another ref of a fork with a copy", () => {
 				["foreign", 2],
 				["decoy", 2],
 			]);
-			const id = rotationId("user-ahead", copyKey(state, t0));
+			const id = rotationId("user-ahead", tripKey(t0));
 			expect(rotationsOf("user-ahead")).toEqual([{ workflow: "RotateWorkflow", id, params: { repo: "user-ahead", reason: "tripwire", runId: `run_${id}` } }]);
 			const served = await onNext(requests.administrative, true);
 			expect(served.fork).toEqual({ repo: "user-ahead", ref: "work/next", commit: aheadCommit });
@@ -589,12 +608,12 @@ describe("the live path at the HTTP layer", () => {
 	it(
 		"starts one rotation for a copy that 40 requests trip at once",
 		async () => {
-			const state = await storeCopy("user-crowd", 7);
+			await storeCopy("user-crowd", 7);
 			vi.spyOn(Date, "now").mockReturnValue(t0);
 			const foreign = await foreignName("user-crowd", 7);
 			const settled = await Promise.allSettled(Array.from({ length: 40 }, (_, i) => ask("user-crowd", naming(i % 2 ? foreign : "researchNeedsAttestation"), { useModel: i % 3 === 0 })));
 			expect(new Set(settled.map((outcome) => (outcome.status === "rejected" && outcome.reason instanceof HttpError ? outcome.reason.status : outcome.status)))).toEqual(new Set([403]));
-			const id = rotationId("user-crowd", copyKey(state, t0));
+			const id = rotationId("user-crowd", tripKey(t0));
 			expect(rotationsOf("user-crowd")).toEqual([{ workflow: "RotateWorkflow", id, params: { repo: "user-crowd", reason: "tripwire", runId: `run_${id}` } }]);
 			expect(p.t.fleet.securityEvents("user-crowd")).toHaveLength(40);
 		},

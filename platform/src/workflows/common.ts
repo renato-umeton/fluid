@@ -306,19 +306,33 @@ export function rotationId(repo: string, key: string): string {
 	return `rot-${fnv1a(repo)}-${key}`;
 }
 
-/** How long the live path's rotation of a stored copy stands for every request that trips the copy or finds it stale. */
+/** How long a live-path rotation stands for every request that trips a fork's copy, or finds the stored copy stale. */
 export const LIVE_ROTATION_WINDOW_MS = 10 * 60 * 1000;
 
+const windowOf = (now: number) => Math.floor(now / LIVE_ROTATION_WINDOW_MS).toString(36);
+
 /**
- * The key of the live path's rotation of a stored copy at `now`: however many
- * requests trip the copy or find it stale, one rotation starts per copy in
+ * The key of the live path's rotation of a fork for tripwire hits at `now`:
+ * one per fork in each LIVE_ROTATION_WINDOW_MS, whatever copy the fork has.
+ * A rotation that stores a new copy gives the next hit a new copy to trip, so
+ * a key per copy would let a steady flood of hits run one check mode gate
+ * after another. One that skipped (the fork was busy) can start again in the
+ * next window.
+ */
+export function tripKey(now = Date.now()): string {
+	return `t${windowOf(now)}`;
+}
+
+/**
+ * The key of the live path's mismatch rotation of a stored copy at `now`:
+ * however many requests find the copy stale, one rotation starts per copy in
  * each LIVE_ROTATION_WINDOW_MS, and one that skipped (the fork was busy) can
  * start again in the next. The epoch names the stored copy (a fork stores
  * each epoch once), so nothing derived from the fingerprint goes into the
  * key: anyone who knows a run id can read the run, and the key is part of it.
  */
 export function copyKey(copy: { epoch: number }, now = Date.now()): string {
-	return `c${copy.epoch}-t${Math.floor(now / LIVE_ROTATION_WINDOW_MS).toString(36)}`;
+	return `c${copy.epoch}-t${windowOf(now)}`;
 }
 
 /**

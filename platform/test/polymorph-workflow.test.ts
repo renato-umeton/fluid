@@ -11,7 +11,7 @@ import * as entry from "../src/index.ts";
 import { forkRepoName } from "../src/lib/names.ts";
 import { runsStub } from "../src/stubs.ts";
 import { deriveSeed, fingerprint } from "../src/polymorph/names.ts";
-import { copyKey, GATE_STEP, installKey, LIVE_ROTATION_WINDOW_MS, rotationId, startRotation, type RotateParams } from "../src/workflows/common.ts";
+import { copyKey, GATE_STEP, installKey, LIVE_ROTATION_WINDOW_MS, rotationId, startRotation, tripKey, type RotateParams } from "../src/workflows/common.ts";
 import { SeedForkWorkflow } from "../src/workflows/fleet.ts";
 import { GateWorkflow } from "../src/workflows/gate.ts";
 import { RotateWorkflow } from "../src/workflows/rotate.ts";
@@ -253,8 +253,20 @@ describe("RotateWorkflow without a repo", () => {
 	});
 });
 
+describe("tripKey", () => {
+	it("names the live path's tripwire rotation of a fork by the ten-minute window alone, so a new copy starts no new rotation in it", () => {
+		const at = Date.parse("2026-11-06T10:07:00Z");
+		const window = Math.floor(at / LIVE_ROTATION_WINDOW_MS).toString(36);
+		expect(tripKey(at)).toBe(`t${window}`);
+		expect(tripKey(at + 2 * 60_000)).toBe(`t${window}`);
+		expect(tripKey(at + 3 * 60_000)).not.toBe(`t${window}`);
+		// No other key starts with "t", so a tripwire rotation never shares an instance with another kind.
+		expect([copyKey({ epoch: 3 }, at), installKey({ createdAt: new Date(at).toISOString() })].map((key) => key[0])).toEqual(["c", "i"]);
+	});
+});
+
 describe("copyKey", () => {
-	it("names the live path's rotation of a stored copy by the copy's epoch and the ten-minute window, and nothing about its fingerprint", () => {
+	it("names the live path's mismatch rotation of a stored copy by the copy's epoch and the ten-minute window, and nothing about its fingerprint", () => {
 		const at = Date.parse("2026-11-06T10:07:00Z");
 		const window = Math.floor(at / LIVE_ROTATION_WINDOW_MS).toString(36);
 		expect(copyKey({ epoch: 3, fingerprint: "a1b2c3d4" }, at)).toBe(`c3-t${window}`);

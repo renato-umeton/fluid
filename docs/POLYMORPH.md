@@ -106,7 +106,7 @@ Only the keys of plain objects are checked, at any depth up to 32 levels and 10,
 
 | Case | Answer |
 | :-- | :-- |
-| A key hits a tripwire | 403 `Request refused by a security check.`, the same for both kinds. The platform records a `tripwire` security event and starts one rotation of this copy in each 10-minute window, however many requests trip it. The fork is not asked, and no ledger row is written. |
+| A key hits a tripwire | 403 `Request refused by a security check.`, the same for both kinds. The platform records a `tripwire` security event and starts one rotation of the fork in each 10-minute window, however many requests trip it, and whichever copy they trip. The fork is not asked, and no ledger row is written. |
 | The request is too deep or has too many keys to scan | 400 `Request too large or too deeply nested.` Nothing is recorded, and no rotation starts. |
 | The stored copy cannot be built because a read failed in Artifacts | 503 `The fork's renamed copy could not be loaded; retry shortly.`, with `retry-after: 10`, on every ref. Nothing is recorded, and no rotation starts. |
 | The stored copy no longer builds as verified for another reason (a changed secret, other names, code the renamer refuses now) | The request is scanned with the names Fleet stored for the copy. None of the copy's renamed names runs now, so every suffix is foreign, the copy's own included. A request that passes gets the plain fork's answer, with the model off at the copy's commit. One rotation of this copy starts in each 10-minute window (reason `mismatch`). If that rotation stores no new copy, it builds the stored copy again. When that still fails, for a reason other than a failed read, the rotation clears the stored copy, keeping its epoch, and records `copy_cleared`. The fork then answers as one with no copy until a later rotation stores one. |
@@ -147,7 +147,7 @@ Rotations run in the `fluid-rotate` workflow. What starts one:
 | Trigger | Reason | How often |
 | :-- | :-- | :-- |
 | The schedule, `0 */6 * * *`: an instance with no repo starts one rotation per fork that is not provisioning, in batches of 20 | `schedule` | every 6 hours |
-| A tripwire hit on the live path | `tripwire` | one per copy in each 10-minute window |
+| A tripwire hit on the live path | `tripwire` | one per fork in each 10-minute window |
 | A stored copy that no longer builds as verified | `mismatch` | one per copy in each 10-minute window |
 | A change landing on `main`: a merge mode gate (customizations, outside imports, contest picks, repair applies), an upgrade with `auto_upgrade`, a one-tap upgrade approval, or a yellow rollback | `landed` | one per landed commit |
 | A new fork: `POST /api/forks`, and `SeedForkWorkflow` for a seeded fork with no change still gating | `install` | one per fork, and one more for a fork deleted and created again under the same name |
