@@ -507,15 +507,17 @@ describe("LoadedFork.plain says why a fork loaded plain", () => {
 		expect((await loadForkRuntime(deps, "user-1", "main")).plain).toEqual({ kind: "none", reason: "no copy was asked for" });
 	});
 
+	// Epoch 101, which no other test loads: a reason is logged once per fork, commit, and epoch in ten minutes, and the
+	// plainCases above log these same reasons at epoch 1.
 	const cases: [PlainKind, string, () => Promise<LoadedFork>, RegExp][] = [
-		["none", "the platform has no secret", () => loadForkRuntime(withoutSecret(), "user-1", "main", { morph: { epoch: 1 } }), /^POLYMORPH_SECRET is not set$/],
-		["none", "the pinned release publishes no list", () => loadForkRuntime(deps, "user-old", "main", { morph: { epoch: 1 } }), /^stock v0\.9\.0 publishes no polymorph\.json$/],
-		["mismatch", "the ref is not at the commit the copy is for", () => loadForkRuntime(deps, "user-1", "main", { morph: { epoch: 1, onlyAt: "f".repeat(40) } }), /only for commit fffffff/],
-		["mismatch", "the seed makes another fingerprint than the verified copy's", () => loadForkRuntime(deps, "user-1", "main", { morph: { epoch: 1, fingerprint: "00000000" } }), /is not the verified copy's \(00000000\)/],
-		["mismatch", "the copy renames other names than the verified one", () => loadForkRuntime(deps, "user-1", "main", { morph: { epoch: 1, namesHash: "00000000" } }), /than the verified copy \(00000000\)/],
-		["unavailable", "the renamer cannot read the fork", () => loadForkRuntime(deps, "user-big", "main", { morph: { epoch: 1 } }), /app\/big\.js: /],
-		["unavailable", "the pinned release's list does not parse", () => loadForkRuntime(deps, "user-broken", "main", { morph: { epoch: 1 } }), /^stock v0\.8\.0: polymorph\.json: version must be 1/],
-		["unavailable", "the build has extra files", () => loadForkRuntime(deps, "user-1", "main", { extraFiles: { "app/extra.ts": "export const extra = 2;\n" }, variant: "candidate-2", morph: { epoch: 1 } }), /extra files/],
+		["none", "the platform has no secret", () => loadForkRuntime(withoutSecret(), "user-1", "main", { morph: { epoch: 101 } }), /^POLYMORPH_SECRET is not set$/],
+		["none", "the pinned release publishes no list", () => loadForkRuntime(deps, "user-old", "main", { morph: { epoch: 101 } }), /^stock v0\.9\.0 publishes no polymorph\.json$/],
+		["mismatch", "the ref is not at the commit the copy is for", () => loadForkRuntime(deps, "user-1", "main", { morph: { epoch: 101, onlyAt: "f".repeat(40) } }), /only for commit fffffff/],
+		["mismatch", "the seed makes another fingerprint than the verified copy's", () => loadForkRuntime(deps, "user-1", "main", { morph: { epoch: 101, fingerprint: "00000000" } }), /is not the verified copy's \(00000000\)/],
+		["mismatch", "the copy renames other names than the verified one", () => loadForkRuntime(deps, "user-1", "main", { morph: { epoch: 101, namesHash: "00000000" } }), /than the verified copy \(00000000\)/],
+		["unavailable", "the renamer cannot read the fork", () => loadForkRuntime(deps, "user-big", "main", { morph: { epoch: 101 } }), /app\/big\.js: /],
+		["unavailable", "the pinned release's list does not parse", () => loadForkRuntime(deps, "user-broken", "main", { morph: { epoch: 101 } }), /^stock v0\.8\.0: polymorph\.json: version must be 1/],
+		["unavailable", "the build has extra files", () => loadForkRuntime(deps, "user-1", "main", { extraFiles: { "app/extra.ts": "export const extra = 2;\n" }, variant: "candidate-2", morph: { epoch: 101 } }), /extra files/],
 	];
 
 	it.each(cases)(

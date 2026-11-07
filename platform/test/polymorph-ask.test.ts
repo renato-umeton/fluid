@@ -83,6 +83,9 @@ beforeAll(() => {
 		"user-other": { ...PUBLISHED, "app/other.ts": "export const other = 1;\n" },
 		"user-crowd": { ...PUBLISHED, "app/crowd.ts": "export const crowd = 1;\n" },
 		"user-dosing": DOSING,
+		"user-reask": { ...PUBLISHED, "app/reask.ts": "export const reask = 1;\n" },
+		"user-live-names": { ...PUBLISHED, "app/live.ts": "export const live = 1;\n" },
+		"user-http-model": { ...PUBLISHED, "app/httpmodel.ts": "export const httpModel = 1;\n" },
 		"user-flag": { ...PUBLISHED, "app/flag.ts": "export const flag = 1;\n" },
 		"user-unbound": { ...PUBLISHED, "app/unbound.ts": "export const unbound = 1;\n" },
 		// Its stored copy no longer builds, as after a change to the renamer's limits.
@@ -185,9 +188,9 @@ describe("serveAsk with a verified copy of main", () => {
 	it(
 		"records a re-ask with both the question it re-asks and the copy that answered",
 		async () => {
-			const state = p.t.fleet.morphState("user-1")!;
-			const first = await ask("user-1", requests.research);
-			const again = await ask("user-1", { ...requests.research, attestation: true }, { reaskOf: first.answer_id });
+			const state = await storeCopy("user-reask", 1);
+			const first = await ask("user-reask", requests.research);
+			const again = await ask("user-reask", { ...requests.research, attestation: true }, { reaskOf: first.answer_id });
 			expect(again.ledger).toMatchObject({ reask_of: first.answer_id, variant: state.fingerprint });
 		},
 		SLOW_MS,
@@ -350,9 +353,9 @@ describe("serveAsk and a copy's tripwires", () => {
 	it(
 		"leaves the original names alone on a fork with no copy, where they are live",
 		async () => {
-			const served = await ask("user-plain", naming("researchNeedsAttestation"));
+			const served = await ask("user-live-names", naming("researchNeedsAttestation"));
 			expect(served.mode).toBe("research");
-			expect(p.t.fleet.securityEvents("user-plain")).toEqual([]);
+			expect(p.t.fleet.securityEvents("user-live-names")).toEqual([]);
 		},
 		SLOW_MS,
 	);
@@ -550,15 +553,15 @@ describe("the live path at the HTTP layer", () => {
 	it(
 		"answers from the copy with the model off when the request body asks for the model",
 		async () => {
-			const state = await storeCopy("user-http", 6);
+			const state = await storeCopy("user-http-model", 1);
 			const calls = modelCalls.length;
-			const response = await worker.fetch(post("/api/ask", { cookie: await cookieFor({ userId: "http" }) }, { ...requests.administrative, useModel: true }), p.t.env, workflows.ctx);
+			const response = await worker.fetch(post("/api/ask", { cookie: await cookieFor({ userId: "http-model" }) }, { ...requests.administrative, useModel: true }), p.t.env, workflows.ctx);
 			expect(response.status).toBe(200);
 			const served = (await response.json()) as ServedCard;
 			expect(served.fork).toMatchObject({ variant: state.fingerprint });
 			expect(served.signals).not.toContain(MODEL_WORDING);
 			expect(modelCalls.length).toBe(calls);
-			expect(p.loader.built.filter((id) => id.startsWith("user-http:") && id.endsWith(":llm"))).toEqual([]);
+			expect(p.loader.built.filter((id) => id.startsWith("user-http-model:") && id.endsWith(":llm"))).toEqual([]);
 		},
 		SLOW_MS,
 	);
