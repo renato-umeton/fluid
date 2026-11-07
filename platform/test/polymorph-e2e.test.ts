@@ -47,10 +47,13 @@ if (!Number.isInteger(FLEET) || FLEET < 4) {
 }
 const DEMO = process.env.POLYMORPH_DEMO === "1";
 const RECORD_PATH = process.env.POLYMORPH_DEMO_RECORD;
+const HERE = dirname(fileURLToPath(import.meta.url));
 /** The recording the deployed Polymorph view replays (polymorph:record writes it). */
-const COMMITTED_RECORDING = resolve(dirname(fileURLToPath(import.meta.url)), "../public/data/polymorph-demo.json");
+const COMMITTED_RECORDING = resolve(HERE, "../public/data/polymorph-demo.json");
 /** What a failed check of the committed recording tells the reader to do. */
 const RECORD_AGAIN = "record it again with npm run polymorph:record";
+/** The documents that report the recorded results, from the repository's root. */
+const RESULT_DOCS = ["README.md", "docs/POLYMORPH.md", "docs/plans/2026-11-06-polymorphic-installation-design.md"];
 /** A run takes about a second per fork on a quiet machine (about 20 seconds for 20 forks); this leaves room for a loaded one. */
 const EXPERIMENT_MS = FLEET * 30_000;
 /** The platform secret that seeds every copy. */
@@ -748,5 +751,22 @@ describe("the check of the committed recording", () => {
 		const stale = readCommitted();
 		edit(stale);
 		expect(() => expectCommittedRecording(stale, readCommitted())).toThrow(/; record it again with npm run polymorph:record/);
+	});
+
+	it.each(RESULT_DOCS)("finds the recorded results in %s: the scoreboard's rows, the list's size, and the probe requests", (doc) => {
+		const committed = readCommitted();
+		const text = readFileSync(resolve(HERE, "../..", doc), "utf8");
+		const update = `${doc}; ${RECORD_AGAIN} and update the results in the docs`;
+		const lines = text.split("\n");
+		const header = lines.indexOf(`| Attack | ${(SCORE_COLUMNS as [string, string][]).map(([, name]) => name).join(" | ")} |`);
+		expect(header, `the results table's header in ${update}`).toBeGreaterThanOrEqual(0);
+		const rows: ScoreRow[] = scoreRows(committed);
+		// The row after the header separates it; each attack's row follows, its first cell naming the attack.
+		const shown = lines.slice(header + 2, header + 2 + rows.length).map((line) => line.split("|").slice(1, -1).map((cell) => cell.trim()));
+		const table = shown.map(([first, ...cells]) => [first?.split(":")[0], ...cells]);
+		expect(table, `the results table in ${update}`).toEqual(rows.map((row) => [row.id, ...(SCORE_COLUMNS as [string, string][]).map(([key]) => row[key])]));
+		const names = [...text.matchAll(/\b(\d+) (?:of (?:the )?(\d+) )?(?:internal |listed )?names\b/g)].flatMap((match) => [match[1], match[2]].filter((n) => n !== undefined).map(Number));
+		const requests = [...text.matchAll(/\b[Aa]ll (\d+) (?:probe |test )?requests\b/g)].map((match) => Number(match[1]));
+		expect({ names: [...new Set(names)], requests: [...new Set(requests)] }, `the counts of listed names and probe requests in ${update}`).toEqual({ names: [committed.listSize], requests: [committed.probes] });
 	});
 });
