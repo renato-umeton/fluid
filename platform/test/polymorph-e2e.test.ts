@@ -4,11 +4,13 @@
 // installed as its own renamed copy, then attacked through the platform's own
 // code (rotateFork, runGate, loadForkRuntime, askLoaded, serveAsk) on
 // in-memory repos and a fake Worker Loader. Every attack starts from the
-// installed copies and is measured three ways: on the plain fleet; on the
-// renamed copies with nothing scanning the request (askLoaded alone, as if the
-// platform's scan were bypassed); and through the platform (serveAsk), which
-// refuses a request that trips a copy's wires and starts one rotation of that
-// copy. Each rotation started then runs, as the rotate workflow would.
+// installed copies and is measured four ways: on the plain fleet (askLoaded
+// alone), checked request by request against the platform with polymorphic
+// installation off (serveAsk with no secret); on the renamed copies with
+// nothing scanning the request (askLoaded alone, as if the platform's scan
+// were bypassed); and through the platform (serveAsk), which refuses a request
+// that trips a copy's wires and starts one rotation of that copy. Each
+// rotation started then runs, as the rotate workflow would.
 //
 // POLYMORPH_FLEET sets the number of forks (default 4, at least 4).
 // POLYMORPH_DEMO=1 prints the scoreboard, and POLYMORPH_DEMO_RECORD=<path>
@@ -98,10 +100,15 @@ interface Fork {
 /** A research answer held for attestation, or released with a computed dose: the exploit worked. */
 type ResearchAnswer = "held" | "released";
 
-/** What one request did: on the plain fork, on the fork's copy with nothing scanning it, and through the platform. */
+/**
+ * What one request did: on the plain fork asked directly, through the
+ * platform with polymorphic installation off, on the fork's copy asked
+ * directly with nothing scanning the request, and through the platform.
+ */
 interface Outcome {
 	repo: string;
 	plain: ResearchAnswer;
+	off: ResearchAnswer;
 	direct: ResearchAnswer;
 	platform: ResearchAnswer | "refused";
 	/** For a refused request, the wire it tripped as Fleet recorded it: an original name (decoy) or another copy's (foreign). */
@@ -308,6 +315,24 @@ async function askDirectly(sends: Send[]): Promise<Pick<Outcome, "plain" | "dire
 	return answers;
 }
 
+/**
+ * Each request's research answer through the platform with polymorphic
+ * installation off (no platform secret), by the same code path as with
+ * copies: what the plain fleet serves. Its answers go to a ledger of their
+ * own (`<user>-off`), apart from the one the platform's answers are counted in.
+ */
+async function askWithInstallationOff(sends: Send[]): Promise<ResearchAnswer[]> {
+	const deps = platform.withoutSecret();
+	const answers: ResearchAnswer[] = [];
+	for (const { repo, request } of sends) {
+		const served = await serveAsk(deps, { repo, ref: "main", request, useModel: false, userId: `${userIdFromForkRepo(repo)}-off`, fallback: true });
+		// Without the secret the plain fork answers: no copy, and not stock.
+		expect(served.fork, `${repo}: what answered with installation off`).toEqual({ repo, ref: "main", commit: platform.heads[repo] });
+		answers.push(researchAnswer(served, `${repo}, through the platform with installation off`));
+	}
+	return answers;
+}
+
 /** One request through serveAsk on production main: answered by the fork's stored copy, or refused at one of its wires. */
 async function askPlatformOnce(deps: AskDeps, { repo, request }: Send): Promise<PlatformAnswer> {
 	try {
@@ -352,12 +377,20 @@ async function askThroughPlatform(sends: Send[]): Promise<{ answers: PlatformAns
 	return { answers, rotations: workflows.of("RotateWorkflow").map((instance) => instance.params as RotateParams) };
 }
 
-/** Sends each request to its fork, directly first, which changes nothing, then through the platform. Returns what each request did and the rotations started. */
+/**
+ * Sends each request to its fork: directly, then through the platform with
+ * installation off, which change nothing the next step reads, then through
+ * the platform with copies. Returns what each request did and the rotations
+ * started.
+ */
 async function send(sends: Send[]): Promise<{ outcomes: Outcome[]; rotations: RotateParams[] }> {
 	frozen(sends);
 	const direct = await askDirectly(sends);
+	const off = await askWithInstallationOff(sends);
+	// The plain fork asked directly stands for the fleet with installation off: the platform must answer each request the same.
+	expect(off, "each request's answer through the platform with installation off, against the plain fork's").toEqual(direct.map((answer) => answer.plain));
 	const { answers, rotations } = await askThroughPlatform(sends);
-	return { outcomes: sends.map(({ repo }, i) => ({ repo, ...direct[i]!, ...answers[i]! })), rotations };
+	return { outcomes: sends.map(({ repo }, i) => ({ repo, ...direct[i]!, off: off[i]!, ...answers[i]! })), rotations };
 }
 
 /** Keeps a fork's copy after one rotation, which is the same whichever rotation moved it: the seed names the fork, commit, and epoch. */
@@ -502,7 +535,7 @@ describe(`a fleet of ${FLEET} forks on a release with a planted zero-day`, () =>
 
 			// Control: without display options the answer is held everywhere, and with attestation the same question gets its dose.
 			const control = await send(everyFork(HELD));
-			expect(control.outcomes.map((outcome) => [outcome.repo, outcome.plain, outcome.direct, outcome.platform])).toEqual(forks.map((fork) => [fork.repo, "held", "held", "held"]));
+			expect(control.outcomes.map((outcome) => [outcome.repo, outcome.plain, outcome.off, outcome.direct, outcome.platform])).toEqual(forks.map((fork) => [fork.repo, "held", "held", "held", "held"]));
 			expect(control.rotations).toEqual([]);
 			const attested = frozen({ ...HELD, attestation: true });
 			for (const fork of forks) {
