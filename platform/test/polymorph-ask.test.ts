@@ -175,7 +175,7 @@ describe("serveAsk with a verified copy of main", () => {
 		async () => {
 			const rotated = await rotateFork(p.deps, "user-1", "schedule");
 			if (rotated.outcome !== "rotated") throw new Error(`expected a rotation, got ${rotated.outcome}`);
-			// The variant is random, so an answer gives no way to test a guess of the secret, which the fingerprint comes from.
+			// That the variant is random is checked in polymorph-rotate.test.ts. Here answers and the ledger show it, and no answer shows the fingerprint.
 			const variant = p.t.fleet.morphState("user-1")!.variant!;
 			expect(variant).toMatch(/^[0-9a-f]{8}$/);
 			expect(variant).not.toBe(rotated.fingerprint);

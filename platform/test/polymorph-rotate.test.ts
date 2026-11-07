@@ -39,6 +39,7 @@ beforeAll(() => {
 		"user-resecret-2": { ...PUBLISHED, "app/resecret.ts": "export const resecret = 2;\n" },
 		"user-unread": { ...PUBLISHED, "app/unread.ts": "export const unread = 1;\n" },
 		"user-again": { ...PUBLISHED, "app/again.ts": "export const again = 1;\n" },
+		"user-variant": { ...PUBLISHED, "app/variant.ts": "export const variant = 1;\n" },
 	});
 	for (const repo of Object.keys(p.heads)) p.t.fleet.register({ repo, userId: repo.replace(/^user-/, ""), persona: "p", pinnedTag: TAG, status: "pinned" });
 });
@@ -74,6 +75,22 @@ describe("rotateFork", () => {
 			const state = fleet.morphState("user-1")!;
 			const loaded = await loadForkRuntime(p.deps, "user-1", "main", { morph: { epoch: state.epoch, onlyAt: state.sha, namesHash: state.namesHash, fingerprint: state.fingerprint } });
 			expect(loaded.morph?.fingerprint).toBe(state.fingerprint);
+		},
+		SLOW_MS,
+	);
+
+	it(
+		"draws a new variant each time it stores a copy, even for the same copy from the same seed, so nothing about the secret is in it",
+		async () => {
+			const fleet = p.t.fleet;
+			await rotateFork(p.deps, "user-variant", "schedule");
+			const { at: _installedAt, ...installed } = fleet.morphState("user-variant")!;
+			await rotateFork(p.deps, "user-variant", "schedule");
+			const { at: _secondAt, ...second } = fleet.morphState("user-variant")!;
+			// The platform never stores an epoch twice. Moved back to epoch 1, the fork's next rotation makes the epoch 2 copy again, from the same seed.
+			expect(fleet.setMorph("user-variant", installed, { from: 2 })).toBe(true);
+			expect(await rotateFork(p.deps, "user-variant", "schedule")).toMatchObject({ outcome: "rotated", epoch: 2, fingerprint: second.fingerprint });
+			expect(fleet.morphState("user-variant")!.variant).not.toBe(second.variant);
 		},
 		SLOW_MS,
 	);
