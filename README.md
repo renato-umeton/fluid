@@ -32,7 +32,7 @@ To measure the protection, a test fixture plants two zero-days in a release of t
 | A3: 1000 blind guesses on fork 3 | 0 of 1000 | 0 of 1000 | 0 of 1000 | 1000 of 1000 | 1 of 1 fork |
 | B: public field only | 20 of 20 | 20 of 20 | 20 of 20 | 0 of 20 | 0 of 20 |
 
-The first three result columns count requests that released a held research dose (7 mg) while an identified patient was in context and no attestation was given. The "scan bypassed" column sends each request straight to the fork's renamed copy, as if the tripwire scan were skipped. "Refused" counts requests, and "Moved to a new copy" counts forks. Every copy renamed all 74 names and answered all 70 probe requests like the plain fork, with 0 differences. After fork 7 moved to a new copy, its leaked names were refused there too.
+The first three result columns count requests that released a held research dose (7 mg) while an identified patient was in context and no attestation was given. The "scan bypassed" column sends each request straight to the fork's renamed copy, as if the tripwire scan were skipped. "Refused" counts requests, and "Moved to a new copy" counts forks. Every copy renamed all 74 names and answered all 70 test requests like the plain fork, with 0 differences. After fork 7 moved to a new copy, its leaked names were refused there too.
 
 The limits, stated plainly: renaming cannot stop a bug that public fields alone reach, so attack B works on every copy. A leaked copy works on its own fork until that fork rotates (attack A2). These results come from tests; nothing has run on the deployed site yet.
 
