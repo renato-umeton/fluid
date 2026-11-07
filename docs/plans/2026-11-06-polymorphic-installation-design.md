@@ -15,7 +15,7 @@ Yes, for a large class of exploits, and Fluid is well placed to do it safely.
 - The hard part of software diversity has always been knowing that the changed copy still works. Fluid already checks that for every change: the gate runs upstream's probes. A renamed copy goes live only when every probe gives the same answer as the plain fork. That shows equivalence on tested behavior; it is not a formal proof.
 - The original names stay behind as tripwires. Only someone working from upstream's source would use them, so a blind attempt raises an alarm, and the platform moves that fork to a new copy at once.
 
-Limits, stated plainly: a transform that keeps behavior also keeps every bug that the public behavior exposes. A wrong rule or a missing check on a public request field stays exploitable. Polymorphic installation does not replace a patch. It buys time between "bug found" and "fix shipped", and it stops one exploit from reaching the whole fleet in that window.
+Limits, stated plainly: a transform that keeps behavior also keeps every bug that the public behavior exposes. A wrong rule or a missing check on a public request field stays exploitable. Polymorphic installation buys time between "bug found" and "fix shipped", and in that window it stops one exploit from reaching the whole fleet. The bug still needs a patch.
 
 ## Background
 
