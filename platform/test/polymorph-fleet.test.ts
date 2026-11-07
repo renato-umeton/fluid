@@ -4,7 +4,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { serveAsk } from "../src/api/ask.ts";
 import { Fleet, SECURITY_EVENTS_PER_REPO } from "../src/durable/fleet.ts";
-import { clipValue } from "../src/gate/tiers.ts";
+import { clipValue } from "../src/lib/clip.ts";
 import { construct, fakeState } from "./helpers/durable.ts";
 import { PUBLISHED, TAG, polymorphPlatform, type PolymorphPlatform } from "./helpers/polymorph-platform.ts";
 

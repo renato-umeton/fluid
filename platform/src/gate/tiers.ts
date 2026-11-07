@@ -12,7 +12,6 @@ import type { PlainLoad } from "../runtime/loader.ts";
 export type TierName = "invariant" | "functional" | "user";
 export const TIER_NAMES: readonly TierName[] = ["invariant", "functional", "user"];
 export { USER_MANIFEST_PATH } from "../lib/names.ts";
-export { clipValue } from "../lib/clip.ts";
 
 export interface RunnerFailure {
 	sample: number;
