@@ -4,11 +4,11 @@
 
 Fluid gives every user a git fork of the software they use, and lets them and any agent reshape it. A change reaches the user's `main` only when it behaves: upstream's tests pass, the user's own tests pass, and a live soak stays clean. It runs on Cloudflare Workers and Artifacts, and every commit of every fork is runnable as soon as it is pushed.
 
-Patrick Collison [posted](https://x.com/patrickc/status/2116636967517798672) that he is building an "improvements" feature into all of his personal apps: a free-form text box hooked to an agent that implements whatever is submitted. [Renato Umeton](https://x.com/renato_umeton), Fluid's author, replied in a two-post thread on 2026-11-06 that Fluid makes such apps maintainable, collaborative, and secure:
+Patrick Collison [posted](https://x.com/patrickc/status/2116636967517798672) about building an "improvements" feature into all of Collison's personal apps: a free-form text box hooked to an agent that implements whatever is submitted. Renato Umeton, Fluid's author, [replied](https://x.com/renato_umeton/status/2118827212770251163) in a two-post thread on 2026-11-06 that Fluid makes such apps maintainable, collaborative, and secure:
 
 - **Maintainable.** On every release, a fork whose wishes all came from recipes is rebuilt by replaying each wish (a change and its intent record) on the new code, and any other fork upgrades by merge. Either way the gate checks the upgrade, including the user's own tests. See [Intent replay](#intent-replay).
 - **Collaborative.** Agents compete to grant a wish, and behavior picks the winner. See [Contest](#1-behavior-is-the-merge-rule).
-- **Secure.** Fluid is polymorphic: "AI made zero-days cheap because we all run the same code; a fleet of forks is a moving target." See [Secure](#secure-a-fleet-of-forks-is-a-moving-target).
+- **Secure.** Fluid is polymorphic: "AI made zero-days cheap because we all run the same code; a fleet of forks is a moving target," as the [second post](https://x.com/renato_umeton/status/2118827582502162486) says. See [Secure](#secure-a-fleet-of-forks-is-a-moving-target).
 
 Fluid is an entry to Cloudflare's "Build the next Git platform" competition. Live demo: https://fluid.frontier-software.workers.dev (synthetic data only). To deploy your own copy, see [docs/DEPLOY.md](docs/DEPLOY.md). For the platform in one page, see [docs/OVERVIEW.md](docs/OVERVIEW.md).
 
