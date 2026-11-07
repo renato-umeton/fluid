@@ -28,6 +28,13 @@ const NO_SECRET = "POLYMORPH_SECRET is not set or is shorter than 16 characters"
 export const BUSY_RETRIES = 5;
 const BUSY_WAIT = "1 minute";
 
+/**
+ * A rotation's result as its run shows it. cleared stays set once any try
+ * cleared the stored copy: a try that clears it and then waits for a busy
+ * fork leaves the next try no copy to clear, whatever that try ends with.
+ */
+type RunResult = RotationResult & { cleared?: true };
+
 export class RotateWorkflow extends WorkflowEntrypoint<Env, RotateParams> {
 	async run(event: Readonly<WorkflowEvent<RotateParams>>, workflowStep: WorkflowStep) {
 		// An instance the schedule starts has no params.
@@ -36,10 +43,10 @@ export class RotateWorkflow extends WorkflowEntrypoint<Env, RotateParams> {
 		const reason = p.reason ?? "schedule";
 		const step = steps(workflowStep);
 		const repo = p.repo;
-		return guarded<RotationResult | { started: number }>(step, this.env, { runId, kind: "rotate", repo: repo ?? null }, () => (repo ? this.rotateOne(step, runId, repo, reason) : this.rotateFleet(step, runId, reason)));
+		return guarded<RunResult | { started: number }>(step, this.env, { runId, kind: "rotate", repo: repo ?? null }, () => (repo ? this.rotateOne(step, runId, repo, reason) : this.rotateFleet(step, runId, reason)));
 	}
 
-	private async rotateOne(step: Steps, runId: string, repo: string, reason: RotationReason): Promise<RotationResult> {
+	private async rotateOne(step: Steps, runId: string, repo: string, reason: RotationReason): Promise<RunResult> {
 		const log = runLog(this.env, runId);
 		await step.do("start", async () => {
 			await ensureRun(this.env, { id: runId, kind: "rotate", repo, fields: { reason } });
@@ -48,7 +55,8 @@ export class RotateWorkflow extends WorkflowEntrypoint<Env, RotateParams> {
 		});
 		// rotateFork throws, like runGate, when Artifacts fails, so this step retries rather than skip.
 		const rotate = () => rotateFork({ env: this.env, exports: appExports(this.ctx) }, repo, reason);
-		let result = await step.do("rotate", GATE_STEP, rotate);
+		let result: RunResult = await step.do("rotate", GATE_STEP, rotate);
+		let cleared = result.cleared === true;
 		for (let attempt = 1; attempt <= BUSY_RETRIES && result.outcome === "skipped" && result.busy; attempt++) {
 			const why = result.why;
 			await step.do(`note busy ${attempt}`, async () => {
@@ -57,7 +65,9 @@ export class RotateWorkflow extends WorkflowEntrypoint<Env, RotateParams> {
 			});
 			await step.sleep(`wait while busy ${attempt}`, BUSY_WAIT);
 			result = await step.do(`rotate ${attempt}`, GATE_STEP, rotate);
+			cleared ||= result.cleared === true;
 		}
+		if (cleared) result = { ...result, cleared: true };
 		await step.do("finish", async () => {
 			const shown = runOutcome(result);
 			await log.step(ROTATE_STEP, shown.step, shown.detail);
@@ -118,9 +128,15 @@ export class RotateWorkflow extends WorkflowEntrypoint<Env, RotateParams> {
  * the copy's fingerprint: a run can be read by anyone who knows its id, and
  * which copy a fork serves stays with the platform.
  */
-function runOutcome(result: RotationResult): { step: StepStatus; status: RunStatus; detail: string; fields: Record<string, unknown> } {
+function runOutcome(result: RunResult): { step: StepStatus; status: RunStatus; detail: string; fields: Record<string, unknown> } {
 	if (result.outcome === "rotated") {
-		return { step: "done", status: "passed", detail: `The renamed copy for epoch ${result.epoch} of ${result.sha.slice(0, 7)} answered every probe like the plain fork, and the fork serves it now`, fields: { outcome: result.outcome, epoch: result.epoch, commit: result.sha } };
+		const replaced = result.cleared ? { detail: "; the copy it replaces no longer built, so an earlier try cleared it", fields: { cleared: true } } : { detail: "", fields: {} };
+		return {
+			step: "done",
+			status: "passed",
+			detail: `The renamed copy for epoch ${result.epoch} of ${result.sha.slice(0, 7)} answered every probe like the plain fork, and the fork serves it now${replaced.detail}`,
+			fields: { outcome: result.outcome, epoch: result.epoch, commit: result.sha, ...replaced.fields },
+		};
 	}
 	const cleared = result.cleared ? { detail: "; the stored copy no longer builds, so it was cleared and the fork answers as one with no copy", fields: { cleared: true } } : { detail: "", fields: {} };
 	if (result.outcome === "refused") {
