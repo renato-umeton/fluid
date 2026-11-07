@@ -126,7 +126,7 @@ describe("runGate with a renamed copy", () => {
 	);
 
 	it(
-		"says why it ran without a copy, as the loader said, and nothing when the copy loaded",
+		"says why it ran without a copy, as the loader said, and nothing when the copy loaded or none was asked for",
 		async () => {
 			const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 			const plain = await runGate(p.withoutSecret(), { repo: "user-1", ref: "main", mode: "check", samples: 1, morph: { epoch: 2 } });
@@ -136,6 +136,7 @@ describe("runGate with a renamed copy", () => {
 			const renamed = await gateOf("user-1", { epoch: 2 });
 			expect(renamed.polymorph).not.toBeNull();
 			expect("polymorphPlain" in renamed).toBe(false);
+			expect("polymorphPlain" in (await gateOf("user-1"))).toBe(false);
 		},
 		SLOW_MS,
 	);
@@ -146,7 +147,6 @@ describe("runGate with a renamed copy", () => {
 			const gate = await gateOf("user-1");
 			expect(gate.passed).toBe(true);
 			expect("polymorph" in gate).toBe(false);
-			expect("polymorphPlain" in gate).toBe(false);
 			expect(gate.tiers.invariant!.probes.map((probe) => probe.id)).not.toContain("polymorph-equivalence");
 		},
 		SLOW_MS,
