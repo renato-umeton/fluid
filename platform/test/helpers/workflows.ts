@@ -3,9 +3,9 @@
 // exists (the platform counts that as started), createBatch creates each
 // instance in turn, and get finds only instances that exist. Params are
 // copied as the binding serializes them. Every instance created is recorded
-// in order; nothing runs, a test runs a workflow class itself. Export names
-// ending in "Workflow" are bindings; any other name comes from `extra` (for
-// example LlmHost).
+// in order (onCreate sees each as it is created); nothing runs, a test runs a
+// workflow class itself. Export names ending in "Workflow" are bindings; any
+// other name comes from `extra` (for example LlmHost).
 export interface CreatedInstance {
 	workflow: string;
 	id: string;
@@ -14,16 +14,18 @@ export interface CreatedInstance {
 
 const WORKFLOW_EXPORT = /^[A-Z][A-Za-z]*Workflow$/;
 
-export function fakeWorkflows(extra: Record<string, unknown> = {}) {
+export function fakeWorkflows(extra: Record<string, unknown> = {}, options: { onCreate?: (instance: CreatedInstance) => void } = {}) {
 	const created: CreatedInstance[] = [];
 	const batches: { workflow: string; ids: string[] }[] = [];
 	const exists = (workflow: string, id: string) => created.some((instance) => instance.workflow === workflow && instance.id === id);
 	const handle = (id: string) => ({ id, status: async () => ({ status: "running" }), sendEvent: async () => undefined });
 	const binding = (workflow: string) => {
-		const create = async (options: { id?: string; params: unknown }) => {
-			const id = options.id ?? crypto.randomUUID();
+		const create = async (request: { id?: string; params: unknown }) => {
+			const id = request.id ?? crypto.randomUUID();
 			if (exists(workflow, id)) throw new Error(`instance ${id} already exists`);
-			created.push({ workflow, id, params: structuredClone(options.params) });
+			const instance = { workflow, id, params: structuredClone(request.params) };
+			created.push(instance);
+			options.onCreate?.(instance);
 			return handle(id);
 		};
 		return {

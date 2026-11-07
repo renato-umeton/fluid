@@ -18,7 +18,7 @@ import { mainMovedNote, planMainAdvance } from "../gate/advance.ts";
 import { gateBrief, type GateResult } from "../gate/tiers.ts";
 import { fleetStub } from "../stubs.ts";
 import { landedEarlier } from "../yellow/landing.ts";
-import { appExports, asJson, ensureRun, GATE_STEP, gateLinkOf, GIT_STEP, guarded, linkGateParent, mainBeforePush, notifyParent, recordMainBeforePush, repoRemote, runLog, setFleet, startGateInstance, startInstance, startYellowRun, steps, type GateParams } from "./common.ts";
+import { appExports, asJson, ensureRun, GATE_STEP, gateLinkOf, GIT_STEP, guarded, landedKey, linkGateParent, mainBeforePush, notifyParent, recordMainBeforePush, repoRemote, runLog, setFleet, startGateInstance, startInstance, startRotation, startYellowRun, steps, type GateParams } from "./common.ts";
 
 export function gateRunId(instanceId: string): string {
 	return `run_${instanceId}`;
@@ -160,6 +160,14 @@ export class GateWorkflow extends WorkflowEntrypoint<Env, GateParams> {
 				if (merged.landed) await syncInboxMain(this.env, p.repo);
 				return true;
 			});
+			// The new main runs plain until a rotation stores a verified copy of it. It starts only now that the
+			// fork is pinned again: a rotation that found it gating would skip.
+			if (merged.landed) {
+				await step.do("rotate the new main", async () => {
+					await startRotation(this.env, exports.RotateWorkflow, { repo: p.repo, reason: "landed", key: landedKey(p.commit) });
+					return true;
+				});
+			}
 			return { ...gateBrief(gate), merged: merged.ok };
 		}
 

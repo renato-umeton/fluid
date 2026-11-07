@@ -310,6 +310,11 @@ export function copyKey(copy: { epoch: number; fingerprint: string }): string {
 	return `c${copy.epoch}-${copy.fingerprint}`;
 }
 
+/** The key of a commit that landed on main: one rotation per landing, however often its gate run is replayed. */
+export function landedKey(commit: string): string {
+	return `l${commit.slice(0, 16)}`;
+}
+
 /**
  * Starts the rotation of one fork that `key` names (see rotationId), with the
  * run that logs it; an instance that already exists counts as started.

@@ -9,6 +9,7 @@ import worker from "../src/index.ts";
 import * as entry from "../src/index.ts";
 import { runsStub } from "../src/stubs.ts";
 import { GATE_STEP, rotationId, startRotation, type RotateParams } from "../src/workflows/common.ts";
+import { GateWorkflow } from "../src/workflows/gate.ts";
 import { RotateWorkflow } from "../src/workflows/rotate.ts";
 import { FAN_OUT } from "../src/workflows/upgrade.ts";
 import { apiEnv, post } from "./helpers/api-env.ts";
@@ -27,7 +28,12 @@ const NO_MODEL = {
 let p: PolymorphPlatform;
 
 beforeAll(() => {
-	p = polymorphPlatform({ "user-1": PUBLISHED, "user-reflective": REFLECTIVE });
+	p = polymorphPlatform({
+		"user-1": PUBLISHED,
+		"user-reflective": REFLECTIVE,
+		"user-landed": { ...PUBLISHED, "app/landed.ts": "export const landed = 1;\n" },
+		"user-unmoved": { ...PUBLISHED, "app/unmoved.ts": "export const unmoved = 1;\n" },
+	});
 	for (const repo of Object.keys(p.heads)) p.t.fleet.register({ repo, userId: repo.replace(/^user-/, ""), persona: "p", pinnedTag: TAG, status: "pinned" });
 });
 
@@ -216,6 +222,55 @@ describe("POST /api/admin/fleet/rotate", () => {
 			expect([response.status, workflows.created]).toEqual([status, []]);
 		}
 	});
+});
+
+describe("the gate workflow after a merge mode pass", () => {
+	/**
+	 * Gates the fork's head in merge mode through GateWorkflow. The git work
+	 * around the gate (checking the change, moving main) is stood in for, with
+	 * what it decided given; the tiers run for real.
+	 */
+	async function mergeGate(repo: string, workflows: ReturnType<typeof fakeWorkflows>, moved: Record<string, unknown>) {
+		const gate = Object.assign(new GateWorkflow(), { env: p.t.env, ctx: workflows.ctx });
+		Object.assign(gate, { checkChange: async () => ({ status: "ok", appendOnly: [], platformClaims: [] }), advanceMain: async () => moved });
+		const payload = { repo, branch: "work/change", commit: p.heads[repo]!, mode: "merge", source: "customize", runId: `run_gate_${repo}` };
+		const steps = fakeSteps();
+		const output = await gate.run({ payload, timestamp: new Date(), instanceId: `gate-${repo}`, workflowName: "fluid-gate" } as never, steps.step as never);
+		return { output, steps };
+	}
+
+	it(
+		"starts a landed rotation once the change is on main and the fork is pinned again, and one only per landed commit",
+		async () => {
+			const repo = "user-landed";
+			const head = p.heads[repo]!;
+			const statuses: string[] = [];
+			const workflows = fakeWorkflows(NO_MODEL, { onCreate: (instance) => instance.workflow === "RotateWorkflow" && statuses.push(p.t.fleet.get(repo)!.status) });
+			const landed = { ok: true, oid: head, regate: null, previous: head, landed: true };
+			const { output } = await mergeGate(repo, workflows, landed);
+			expect(output).toMatchObject({ merged: true });
+			const [rotation, ...more] = workflows.of("RotateWorkflow");
+			expect(more).toEqual([]);
+			expect(rotation).toEqual({ workflow: "RotateWorkflow", id: rotationId(repo, `l${head.slice(0, 16)}`), params: { repo, reason: "landed", runId: `run_${rotation!.id}` } });
+			// While the fork is gating a rotation skips, so it must start after the gate set the fork back to pinned.
+			expect(statuses).toEqual(["pinned"]);
+			// The same commit landing again (a replayed run) starts no second rotation.
+			await mergeGate(repo, workflows, landed);
+			expect(workflows.of("RotateWorkflow")).toHaveLength(1);
+		},
+		SLOW_MS,
+	);
+
+	it(
+		"starts none when the pass moved nothing onto main",
+		async () => {
+			const workflows = fakeWorkflows(NO_MODEL);
+			const { output } = await mergeGate("user-unmoved", workflows, { ok: true, oid: p.heads["user-unmoved"], regate: null });
+			expect(output).toMatchObject({ merged: true });
+			expect(workflows.of("RotateWorkflow")).toEqual([]);
+		},
+		SLOW_MS,
+	);
 });
 
 describe("fluid-rotate in the platform's config", () => {
