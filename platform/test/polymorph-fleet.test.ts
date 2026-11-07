@@ -272,11 +272,13 @@ describe("serveAsk", () => {
 		fleet.addRelease({ tag: TAG, notes: "", safety: true, date: iso(t0), graceDays: 14, graceUntil: iso(t0), commit: null });
 		const askState = vi.spyOn(fleet, "askState");
 		const request = { question: "Is Morphinex on formulary?", context: { documentType: "budget" } };
-		// Stock answers, so no rotation starts and the binding only stands in.
-		const deps: AskDeps = { ...p.deps, exports: { ...p.deps.exports, RotateWorkflow: fakeWorkflows().exports.RotateWorkflow } };
+		// Stock answers, so no rotation starts.
+		const workflows = fakeWorkflows();
+		const deps: AskDeps = { ...p.deps, exports: { ...p.deps.exports, RotateWorkflow: workflows.exports.RotateWorkflow } };
 		const card = await serveAsk(deps, { repo: "user-a", ref: "main", request, useModel: false, userId: "a", fallback: true });
 		expect(card.fork).toMatchObject({ repo: "user-a", servedBy: { repo: "stock", ref: TAG }, safetyFallback: { tag: TAG, from: "v0.9.0" } });
 		expect(askState).toHaveBeenCalledTimes(1);
+		expect(workflows.created).toEqual([]);
 	});
 });
 

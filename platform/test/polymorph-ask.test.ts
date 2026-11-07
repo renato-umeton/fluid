@@ -293,6 +293,7 @@ describe("serveAsk without a copy to serve", () => {
 			const served = await ask("user-safety", requests.administrative);
 			expect(served.fork).toMatchObject({ repo: "user-safety", servedBy: { repo: "stock", ref: TAG } });
 			expect(served.fork).not.toHaveProperty("variant");
+			expect(rotationsOf("user-safety")).toEqual([]);
 		},
 		SLOW_MS,
 	);
