@@ -338,24 +338,42 @@ export class Fleet extends DurableObject<Env> {
 	/** The verified renamed copy a fork serves, or null: then it runs plain. */
 	morphState(repo: string): MorphState | null {
 		const row = this.ctx.storage.sql.exec("SELECT morph_epoch, morph_sha, morph_fp, morph_names_hash, morph_at FROM forks WHERE repo = ?", repo).toArray()[0];
-		if (!row || row.morph_epoch === null || row.morph_epoch === undefined) return null;
+		// A cleared copy leaves its epoch behind (see setMorph), so the copy is there only while its commit is.
+		if (!row || row.morph_sha === null || row.morph_sha === undefined) return null;
 		return { epoch: row.morph_epoch as number, sha: row.morph_sha as string, fingerprint: row.morph_fp as string, namesHash: row.morph_names_hash as string, at: row.morph_at as string };
 	}
 
 	/**
-	 * Stores the copy a gate verified for a fork, or clears it with null, but
-	 * only while the fork's stored epoch is still `from` (null: no copy), the
-	 * one the caller read before its gate ran. A rotation that took longer
-	 * than another then stores nothing, rather than bring back a copy the
-	 * other one retired. False when nothing changed: the epoch moved, or the
-	 * fork is not in the fleet. Nothing is broadcast: which copy a fork runs is
-	 * the platform's own business.
+	 * The latest epoch a copy of this fork was stored at, kept when the copy
+	 * is cleared, or null when the fork never had one (or is not in the
+	 * fleet). A rotation numbers its copy one above it and stores the copy
+	 * over it, so no epoch is used twice: the seed is the fork, the commit,
+	 * and the epoch, and a reused epoch on an unmoved main would bring a
+	 * retired copy back, names and all.
+	 */
+	morphEpoch(repo: string): number | null {
+		const row = this.ctx.storage.sql.exec("SELECT morph_epoch FROM forks WHERE repo = ?", repo).toArray()[0];
+		return row && typeof row.morph_epoch === "number" ? row.morph_epoch : null;
+	}
+
+	/**
+	 * Stores the copy a gate verified for a fork, but only while the fork's
+	 * epoch (morphEpoch) is still `from`, the one the caller read before its
+	 * gate ran. A rotation that took longer than another then stores nothing,
+	 * rather than bring back a copy the other one retired. With null, clears
+	 * the stored copy, again only over `from`, and keeps its epoch, so no later
+	 * copy reuses it. False when nothing changed: the epoch moved, there was no
+	 * copy to clear, or the fork is not in the fleet. Nothing is broadcast:
+	 * which copy a fork runs is the platform's own business.
 	 */
 	setMorph(repo: string, state: Omit<MorphState, "at"> | null, expected: { from: number | null }, at = Date.now()): boolean {
-		if (state !== null) checkMorphState(state);
-		const values = state === null ? [null, null, null, null, null] : [state.epoch, state.sha, state.fingerprint, state.namesHash, new Date(at).toISOString()];
-		const sql = "UPDATE forks SET morph_epoch = ?, morph_sha = ?, morph_fp = ?, morph_names_hash = ?, morph_at = ? WHERE repo = ? AND morph_epoch IS ? RETURNING repo";
-		return this.ctx.storage.sql.exec(sql, ...values, repo, expected.from).toArray().length > 0;
+		const sql = this.ctx.storage.sql;
+		if (state === null) {
+			return sql.exec("UPDATE forks SET morph_sha = NULL, morph_fp = NULL, morph_names_hash = NULL, morph_at = NULL WHERE repo = ? AND morph_epoch IS ? AND morph_sha IS NOT NULL RETURNING repo", repo, expected.from).toArray().length > 0;
+		}
+		checkMorphState(state);
+		const values = [state.epoch, state.sha, state.fingerprint, state.namesHash, new Date(at).toISOString()];
+		return sql.exec("UPDATE forks SET morph_epoch = ?, morph_sha = ?, morph_fp = ?, morph_names_hash = ?, morph_at = ? WHERE repo = ? AND morph_epoch IS ? RETURNING repo", ...values, repo, expected.from).toArray().length > 0;
 	}
 
 	/**

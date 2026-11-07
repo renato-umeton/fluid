@@ -55,6 +55,22 @@ describe("Fleet morph state", () => {
 		expect(fleet.morphState("user-a")).toBeNull();
 	});
 
+	it("clears a copy but keeps its epoch, so only a writer that read that epoch stores the next copy, and no epoch comes back", () => {
+		const fleet = fleetWith("user-a");
+		expect(fleet.morphEpoch("user-a")).toBeNull();
+		fleet.setMorph("user-a", copy, { from: null }, t0);
+		expect(fleet.setMorph("user-a", null, { from: 1 })).toBe(true);
+		expect([fleet.morphState("user-a"), fleet.morphEpoch("user-a")]).toEqual([null, 1]);
+		expect(fleet.askState("user-a").morph).toBeNull();
+		// There is no copy left to clear.
+		expect(fleet.setMorph("user-a", null, { from: 1 })).toBe(false);
+		// A writer that read "no epoch" stores nothing over the kept one; one that read it does.
+		expect(fleet.setMorph("user-a", { ...copy, epoch: 2 }, { from: null }, t0)).toBe(false);
+		expect(fleet.setMorph("user-a", { ...copy, epoch: 2 }, { from: 1 }, t0)).toBe(true);
+		expect([fleet.morphState("user-a"), fleet.morphEpoch("user-a")]).toEqual([{ ...copy, epoch: 2, at: iso(t0) }, 2]);
+		expect(fleet.morphEpoch("user-zz")).toBeNull();
+	});
+
 	it("stores nothing for a repo not in the fleet", () => {
 		const fleet = fleetWith("user-a");
 		expect(fleet.setMorph("user-zz", copy, { from: null })).toBe(false);

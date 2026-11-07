@@ -6,9 +6,9 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { deriveSeed, fingerprint, namesHash } from "../src/polymorph/names.ts";
 import { PolymorphTransientError } from "../src/polymorph/install.ts";
-import { rotateFork } from "../src/polymorph/rotate.ts";
+import { rotateFork, type RotationResult } from "../src/polymorph/rotate.ts";
 import { SCAN_LIMITS } from "../src/polymorph/tokens.ts";
-import { loadForkRuntime } from "../src/runtime/loader.ts";
+import { clearRuntimeCache, loadForkRuntime } from "../src/runtime/loader.ts";
 import { LISTED, POLYMORPH_TEST_SECRET, PUBLISHED, REFLECTIVE, TAG, polymorphPlatform, type PolymorphPlatform } from "./helpers/polymorph-platform.ts";
 
 const SLOW_MS = 120_000;
@@ -35,6 +35,8 @@ beforeAll(() => {
 		"user-outgrown": { ...PUBLISHED, "app/big.js": `// ${"x".repeat(SCAN_LIMITS.moduleChars)}\nexport const outgrown = 1;\n` },
 		"user-outgrown-2": { ...PUBLISHED, "app/big.js": `// ${"x".repeat(SCAN_LIMITS.moduleChars)}\nexport const outgrown = 2;\n` },
 		"user-stale-busy": { ...PUBLISHED, "app/stale.ts": "export const stale = 1;\n" },
+		"user-retired": { ...PUBLISHED, "app/retired.ts": "export const retired = 1;\n" },
+		"user-resecret-2": { ...PUBLISHED, "app/resecret.ts": "export const resecret = 2;\n" },
 	});
 	for (const repo of Object.keys(p.heads)) p.t.fleet.register({ repo, userId: repo.replace(/^user-/, ""), persona: "p", pinnedTag: TAG, status: "pinned" });
 });
@@ -266,6 +268,56 @@ describe("rotateFork", () => {
 			expect(result).not.toHaveProperty("cleared");
 			expect(p.t.fleet.morphState("user-stale-busy")).toEqual({ ...state, at: iso(t0) });
 			expect(p.t.fleet.securityEvents("user-stale-busy")).toEqual([]);
+		},
+		SLOW_MS,
+	);
+
+	const printsOf = (...results: RotationResult[]) => results.map((result) => (result.outcome === "rotated" ? result.fingerprint : result.outcome));
+
+	it(
+		"keeps a cleared copy's epoch, so the rotations after it make new copies rather than rebuild retired ones",
+		async () => {
+			vi.spyOn(console, "warn").mockImplementation(() => undefined);
+			const repo = "user-retired";
+			const first = await rotateFork(p.deps, repo, "schedule");
+			const second = await rotateFork(p.deps, repo, "schedule");
+			expect([first, second].map((result) => result.outcome)).toEqual(["rotated", "rotated"]);
+			// A change to the renamer's limits leaves the stored copy unbuildable, and a mismatch rotation clears it.
+			const limits = SCAN_LIMITS as { moduleChars: number };
+			const limit = limits.moduleChars;
+			try {
+				limits.moduleChars = 1000;
+				clearRuntimeCache();
+				expect(await rotateFork(p.deps, repo, "mismatch")).toMatchObject({ outcome: "skipped", cleared: true });
+			} finally {
+				limits.moduleChars = limit;
+				clearRuntimeCache();
+			}
+			expect(p.t.fleet.morphState(repo)).toBeNull();
+			const third = await rotateFork(p.deps, repo, "schedule");
+			const fourth = await rotateFork(p.deps, repo, "schedule");
+			expect([third, fourth].map((result) => (result.outcome === "rotated" ? result.epoch : result.outcome))).toEqual([3, 4]);
+			expect(new Set(printsOf(first, second, third, fourth)).size).toBe(4);
+		},
+		SLOW_MS,
+	);
+
+	it(
+		"keeps the epoch through a secret change and back, so the first secret's retired copies stay retired",
+		async () => {
+			vi.spyOn(console, "warn").mockImplementation(() => undefined);
+			const repo = "user-resecret-2";
+			const first = await rotateFork(p.deps, repo, "schedule");
+			const second = await rotateFork(p.deps, repo, "schedule");
+			// Under another secret the stored copy is not the one the seed makes; the fork is gating, so the mismatch rotation only clears it.
+			const otherSecret = { ...p.deps, env: { ...p.t.env, POLYMORPH_SECRET: "another-platform-secret-for-a-while" } as unknown as Env };
+			p.t.fleet.update(repo, { status: "gating" });
+			expect(await rotateFork(otherSecret, repo, "mismatch")).toMatchObject({ outcome: "skipped", busy: true, cleared: true });
+			// The first secret is back.
+			p.t.fleet.update(repo, { status: "pinned" });
+			const third = await rotateFork(p.deps, repo, "schedule");
+			expect(third).toMatchObject({ outcome: "rotated", epoch: 3 });
+			expect(printsOf(first, second)).not.toContain(printsOf(third)[0]);
 		},
 		SLOW_MS,
 	);

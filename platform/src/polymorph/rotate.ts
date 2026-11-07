@@ -60,7 +60,9 @@ export async function rotateFork(deps: RuntimeDeps, repo: string, reason: Rotati
 	const fork = await fleet.get(repo);
 	if (!fork) return skipped("the fork is not in the fleet");
 	const current = await fleet.morphState(repo);
-	const result: RotationResult = BUSY.has(fork.status) ? { outcome: "skipped", repo, reason, why: `the fork is ${fork.status}`, busy: true } : await nextCopy(deps, repo, reason, current);
+	// A cleared copy keeps its epoch: the next copy is numbered above it, never at an epoch a retired copy had.
+	const epochBefore = current?.epoch ?? (await fleet.morphEpoch(repo));
+	const result: RotationResult = BUSY.has(fork.status) ? { outcome: "skipped", repo, reason, why: `the fork is ${fork.status}`, busy: true } : await nextCopy(deps, repo, reason, epochBefore);
 	if (reason !== "mismatch" || result.outcome === "rotated" || current === null) return result;
 	return (await clearUnbuildable(deps, repo, current)) ? { ...result, cleared: true } : result;
 }
@@ -69,12 +71,12 @@ export async function rotateFork(deps: RuntimeDeps, repo: string, reason: Rotati
  * A stored copy the live path found stale, which this rotation did not
  * replace, is checked again; when it no longer builds at all, for a reason
  * that will not pass (the renamer or its limits changed, the secret makes
- * another copy, the pin or list broke), it is cleared and that is recorded
- * as a security event (never broadcast). The fork then answers as one with
- * no copy, plain, model and all, instead of starting a rotation that cannot
- * succeed in every window, until a rotation (the schedule's, at the latest)
- * installs a fresh one. A failed read clears nothing. Returns whether it
- * cleared the copy.
+ * another copy, the pin or list broke), it is cleared, keeping its epoch so
+ * no later copy reuses it, and that is recorded as a security event (never
+ * broadcast). The fork then answers as one with no copy, plain, model and
+ * all, instead of starting a rotation that cannot succeed in every window,
+ * until a rotation (the schedule's, at the latest) installs a fresh one. A
+ * failed read clears nothing. Returns whether it cleared the copy.
  */
 async function clearUnbuildable(deps: RuntimeDeps, repo: string, current: MorphState): Promise<boolean> {
 	const stored = await buildStoredCopy(deps, repo, current);
@@ -86,11 +88,11 @@ async function clearUnbuildable(deps: RuntimeDeps, repo: string, current: MorphS
 	return true;
 }
 
-/** The gate and the store of a rotation of a fork that is free to rotate, from the stored copy `current` (or none). */
-async function nextCopy(deps: RuntimeDeps, repo: string, reason: RotationReason, current: MorphState | null): Promise<RotationResult> {
+/** The gate and the store of a rotation of a fork that is free to rotate, from the fork's epoch before it (null: it never had a copy). */
+async function nextCopy(deps: RuntimeDeps, repo: string, reason: RotationReason, epochBefore: number | null): Promise<RotationResult> {
 	const skipped = (why: string): RotationResult => ({ outcome: "skipped", repo, reason, why });
 	const fleet = fleetStub(deps.env);
-	const epoch = (current?.epoch ?? 0) + 1;
+	const epoch = (epochBefore ?? 0) + 1;
 	const gate = await runGate(deps, { repo, ref: "main", mode: "check", samples: 1, morph: { epoch } });
 	if (!gate.polymorph) {
 		if (gate.polymorphPlain?.kind === "transient") throw new PolymorphTransientError(`the gate could not read what the renamed copy of main needs: ${gate.polymorphPlain.reason}`);
@@ -105,7 +107,7 @@ async function nextCopy(deps: RuntimeDeps, repo: string, reason: RotationReason,
 	const head = await mainHead(deps.env, repo);
 	if (head !== gate.commit) return skipped(head === null ? "main could not be read after the gate" : "main moved during the rotation");
 	// Stored only over the epoch read before the gate: a rotation that finished first wins, and a retired copy stays retired.
-	if (!(await fleet.setMorph(repo, { epoch, sha: gate.commit, fingerprint, namesHash }, { from: current?.epoch ?? null }))) {
+	if (!(await fleet.setMorph(repo, { epoch, sha: gate.commit, fingerprint, namesHash }, { from: epochBefore }))) {
 		return skipped((await fleet.get(repo)) ? "another rotation moved the fork first" : "the fork left the fleet during the rotation");
 	}
 	await fleet.recordSecurityEvent(repo, { kind: "rotated", detail: { reason, epoch, fingerprint } });
