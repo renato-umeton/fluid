@@ -575,19 +575,20 @@ const readCommitted = () => JSON.parse(readFileSync(COMMITTED_RECORDING, "utf8")
  * which holds the stock files, so any change to them makes other copies. A
  * run of the recording's fleet with the default secret and guesses must have
  * recorded exactly what it holds, apart from when. Each failure says how to
- * record it again.
+ * record it again. `run` holds the secret and the guesses' seed that made
+ * `recording`: this run's own by default.
  */
-function expectCommittedRecording(committed: Recording, recording: Recording): void {
+function expectCommittedRecording(committed: Recording, recording: Recording, run: { secret: string; guessSeed: number } = { secret: SECRET, guessSeed: GUESS_SEED }): void {
 	expect(validateDemo(committed), `problems in the committed recording; ${RECORD_AGAIN}`).toEqual([]);
 	expect([committed.release, committed.listSize, committed.probes], `the committed recording's release, list size, and probes, against this run's; ${RECORD_AGAIN}`).toEqual([recording.release, recording.listSize, recording.probes]);
 	expect(outcomeOf(committed), `the committed recording's outcome; ${RECORD_AGAIN}`).toEqual(expectedOutcome(committed.forks.map((fork) => fork.repo)));
-	if (SECRET === POLYMORPH_TEST_SECRET) {
+	if (run.secret === POLYMORPH_TEST_SECRET) {
 		// Only the forks both recordings have: a run of another fleet size shares some of its forks with the recording, or none.
 		const mine = new Set(recording.forks.map((fork) => fork.repo));
 		const theirs = new Set(committed.forks.map((fork) => fork.repo));
 		expect(committed.forks.filter((fork) => mine.has(fork.repo)), `the committed recording's copies of this run's forks; ${RECORD_AGAIN}`).toEqual(recording.forks.filter((fork) => theirs.has(fork.repo)));
 	}
-	if (committed.forks.length === recording.forks.length && SECRET === POLYMORPH_TEST_SECRET && GUESS_SEED === DEFAULT_GUESS_SEED) {
+	if (committed.forks.length === recording.forks.length && run.secret === POLYMORPH_TEST_SECRET && run.guessSeed === DEFAULT_GUESS_SEED) {
 		expect({ ...committed, recordedAt: "" }, `the committed recording, against this run's; ${RECORD_AGAIN}`).toEqual({ ...recording, recordedAt: "" });
 	}
 }
@@ -752,7 +753,9 @@ describe("the check of the committed recording", () => {
 	])("tells the reader to record it again when it %s", (_what, edit) => {
 		const stale = readCommitted();
 		edit(stale);
-		expect(() => expectCommittedRecording(stale, readCommitted())).toThrow(/; record it again with npm run polymorph:record/);
+		// The committed recording stands for a run with the default settings, whatever this run's are.
+		const recorded = { secret: POLYMORPH_TEST_SECRET, guessSeed: DEFAULT_GUESS_SEED };
+		expect(() => expectCommittedRecording(stale, readCommitted(), recorded)).toThrow(/; record it again with npm run polymorph:record/);
 	});
 
 	it.each(RESULT_DOCS)("finds the recorded results in %s: the scoreboard's rows, the list's size, and the probe requests", (doc) => {
