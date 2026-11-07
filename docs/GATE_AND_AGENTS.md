@@ -208,14 +208,15 @@ Each fork can run its own renamed copy of upstream's internal names, made with a
 
 `rotateFork(deps, repo, reason)` moves one fork to its next epoch:
 
-1. It skips when `POLYMORPH_SECRET` is missing or shorter than 16 characters, when the fork is not in the fleet, or when the fork is `provisioning`, `upgrading`, or `gating`, since its `main` is about to change or its gate is running.
+1. It skips when `POLYMORPH_SECRET` is missing or shorter than 16 characters, or when the fork is not in the fleet. When the fork is `provisioning`, `upgrading`, or `gating`, it skips as busy, since its `main` is about to change or its gate is running. The workflow then tries again a minute later, up to 5 times, and notes each wait on the run.
 2. It reads the stored epoch and runs the equivalence check for the next one. A gate that made no copy skips the rotation and says why. A read that failed in Artifacts throws instead, so the workflow step retries.
 3. On a failed gate, it records a `rotation_refused` security event, and the fork keeps the copy it has. The result carries the gate's first 10 failures, with copy names mapped back.
 4. On a pass, it checks that `main` is still at the gated commit (a commit that landed meanwhile gets a rotation of its own), then stores the copy in Fleet by compare-and-set on the epoch read in step 2. A rotation that finished first wins, so a retired copy stays retired. It records a `rotated` security event.
+5. A `mismatch` rotation that stores no new copy builds the stored copy again. If it still does not build, for any reason other than a failed read, the rotation clears it by compare-and-set on its epoch and records a `copy_cleared` security event, which is never broadcast. The run gets `cleared: true`, and the fork answers as one with no copy until a later rotation stores one.
 
 **The workflow.** `RotateWorkflow` (`fluid-rotate`, `platform/src/workflows/rotate.ts`) runs `rotateFork` for one fork in a step that retries like a gate step (4 retries from 5 seconds). An instance with no repo starts one instance per fork that is not provisioning, in batches of 20 with a 2 second pause. Without a usable secret it starts none, and its run ends `cancelled`.
 
-**Triggers.** Each trigger starts an instance whose id, `rot-<fork hash>-<key>`, names what asked for it, so asking again starts nothing new (`startRotation` in `platform/src/workflows/common.ts`). Without a usable secret, `startRotation` starts nothing.
+**Triggers.** A fork's rotation runs under the instance id `rot-<fork hash>-<key>`, where the key names what asked for it, so asking again starts nothing new (`rotationId` in `platform/src/workflows/common.ts`). The live path, landed changes, and new forks start one through `startRotation`, which starts nothing without a usable secret. A fleet-wide run starts one per fork, keyed by that run. The admin route is the exception: each request starts a new instance under its run id, `run_rotate_<hex>`, even without a secret, and that run then skips.
 
 | Trigger | Reason | One rotation per |
 | :-- | :-- | :-- |
@@ -228,9 +229,9 @@ Each fork can run its own renamed copy of upstream's internal names, made with a
 | `POST /api/forks` once it provisions a fork, and `SeedForkWorkflow` for a seeded fork with no change still gating | `install` | fork |
 | `POST /api/admin/fleet/rotate`, with or without a repo | `admin` | request |
 
-Until a landed commit's rotation stores a copy of it, `main` answers plain, behind the stored copy's tripwire scan. A fork whose rotation skipped or was refused gets its next try from the schedule within 6 hours.
+Until a landed commit's rotation stores a copy of it, `main` answers plain, behind the stored copy's tripwire scan. A fork whose rotation was refused, or skipped even after the busy retries, gets its next try from the schedule within 6 hours.
 
-**Runs.** Every rotation logs a `rotate` run (`GET /api/runs/:runId`) with one step, "Rotate to the next renamed copy". It ends `passed` (rotated, with the epoch and the commit), `failed` (refused, with the failures), or `cancelled` (skipped, with `cancelReason`). An error that outlasts the step's retries also ends it `failed`, with the error. The run keeps the epoch and the commit. It never keeps the copy's fingerprint, because anyone who knows a run id can read the run. A fleet-wide run has the step "Rotate every fork" and ends `passed` with the number of forks; each fork's rotation logs its own run. The run format is in [API.md](API.md#rotate-run-record).
+**Runs.** Every rotation logs a `rotate` run (`GET /api/runs/:runId`) with one step, "Rotate to the next renamed copy". It ends `passed` (rotated), `failed` (refused, with the failures), or `cancelled` (skipped, with `cancelReason`). A rotated or refused run also keeps the epoch and the commit. An error that outlasts the step's retries also ends it `failed`, with the error. No run keeps the copy's fingerprint, because anyone who knows a run id can read the run. A fleet-wide run has the step "Rotate every fork" and ends `passed` with the number of forks; each fork's rotation logs its own run. The run format is in [API.md](API.md#rotate-run-record).
 
 ## Harvest is opt-in
 
