@@ -39,7 +39,7 @@ Git keeps the readable code. The customize agent, recipes, contests, merges, and
 Two callers ask for a copy:
 
 - **A rotation's gate.** `rotateFork` runs a check mode gate with `GateInput.morph`, and only `rotateFork` passes it (see "How the gate checks a copy").
-- **The live ask path,** for a fork that Fleet holds a verified copy for. At the copy's commit it loads the copy. At any other commit it builds the stored copy without starting it, only to get its names for the tripwire scan.
+- **The live ask path.** It asks for a copy when Fleet holds a verified copy of the fork. At the copy's commit it loads the copy. At any other commit it builds the stored copy without starting it, only to get its names for the tripwire scan.
 
 Nothing is renamed when a fork is created. `POST /api/forks` and `SeedForkWorkflow` start a rotation, and that rotation makes and checks the fork's first copy.
 
@@ -79,7 +79,7 @@ On the live path, a failed read of a stored copy gets a 503 instead, and a store
 
 ## How the gate checks a copy
 
-A rotation runs `runGate` in check mode on `main`, with one sample per probe and `morph: { epoch }` for the next epoch. The gate loads the plain fork and the renamed copy at the gated commit, both in the gate's own isolate variant. Every request stock's runner sends goes to both at once. The runner sees the copy's answer, so tiers 1 to 3 judge the copy too.
+A rotation runs `runGate` in check mode on `main`, with one sample per probe and `morph: { epoch }` for the next epoch. The gate loads the plain fork and the renamed copy at the gated commit, both in the gate's own isolate variant. Every request that stock's runner sends goes to both at once. The runner sees the copy's answer, so tiers 1 to 3 judge the copy too.
 
 - **Names mapped back first.** Everything a copy sends back, its cards and its error messages, passes through `askLoaded`, which maps renamed names back to the originals (`unmorphText`) before anything else sees it.
 - **Exact match.** Every value of the two cards must match (`cardDifferences` in `platform/src/polymorph/equivalence.ts`). Only `answer_id` and `fork_commit` are ignored, at any depth. A key whose value is undefined counts as absent, and key order does not matter. Two errors match when their messages match. A card on one side and an error on the other is a difference.
@@ -99,7 +99,7 @@ Only the keys of plain objects are checked, at any depth up to 32 levels and 10,
 
 | Case | Answer |
 | :-- | :-- |
-| A key trips a wire | 403 `Request refused by a security check.`, the same for both kinds. The platform records a `tripwire` security event and starts one rotation of this copy in each 10-minute window, however many requests trip it. The fork is not asked, and no ledger row is written. |
+| A key hits a tripwire | 403 `Request refused by a security check.`, the same for both kinds. The platform records a `tripwire` security event and starts one rotation of this copy in each 10-minute window, however many requests trip it. The fork is not asked, and no ledger row is written. |
 | The request is too deep or has too many keys to scan | 400 `Request too large or too deeply nested.` Nothing is recorded, and no rotation starts. |
 | The stored copy cannot be built because a read failed in Artifacts | 503 `The fork's renamed copy could not be loaded; retry shortly.`, with `retry-after: 10`, on every ref. Nothing is recorded, and no rotation starts. |
 | The stored copy no longer builds as verified for another reason (a changed secret, other names, code the renamer refuses now) | The plain fork answers without a scan, and a rotation starts (reason `mismatch`). If that rotation stores no new copy, it builds the stored copy again. When that still fails, for a reason other than a failed read, the rotation clears the stored copy and records `copy_cleared`. The fork then answers as one with no copy until a later rotation stores one. |
@@ -108,10 +108,10 @@ Error bodies carry `error` and `requestId`, like every other API error.
 
 Which code answers a request that passes:
 
-- **At the copy's commit,** the copy answers, always with the model off. `useModel` comes from the request body, so honoring it would let any request bypass the copy, and the gate checked the copy with the model off. The answer carries `fork.variant`, the copy's fingerprint, and its ledger row gets `variant`.
+- **At the copy's commit,** the copy answers, always with the model off. `useModel` comes from the request body, so honoring it would let any request bypass the copy, and the gate checked the copy with the model off. The answer carries `fork.variant` (the copy's fingerprint), and its ledger row gets `variant`.
 - **At any other commit** (another branch or tag, or `main` after a change landed and before its rotation stores a copy of it), the request is scanned with the stored copy's names and then answered by the plain fork, with the model if asked.
 
-The stored copy is of the commit `main` had at its last passing rotation, which may no longer be `main`'s head.
+The stored copy was made from the commit that `main` had at its last passing rotation. That commit may no longer be `main`'s head.
 
 These asks run with no copy and no scan:
 
@@ -122,7 +122,7 @@ These asks run with no copy and no scan:
 
 ## Rotation
 
-`rotateFork(deps, repo, reason)` (`platform/src/polymorph/rotate.ts`) moves a fork to its next epoch. It runs the check mode gate above and stores the new copy in Fleet only when the gate passes, and only if no other rotation stored one first (compare-and-set on the epoch it read before the gate). A copy that fails the gate never goes live: the fork keeps the copy it has. Whatever an attacker learned about the old copy goes stale.
+`rotateFork(deps, repo, reason)` (`platform/src/polymorph/rotate.ts`) moves a fork to its next epoch. It runs the check mode gate above and stores the new copy in Fleet only when the gate passes, and only if no other rotation stored one first (compare-and-set on the epoch it read before the gate). Once the new copy is stored, whatever an attacker learned about the old copy goes stale. A copy that fails the gate never goes live: the fork keeps the copy it has.
 
 A rotation of a fork that is `provisioning`, `upgrading`, or `gating` waits: the workflow tries again a minute later, up to 5 times, and notes each wait on the run. A rotation skips when:
 
@@ -151,7 +151,7 @@ Each rotation logs a `rotate` run (`GET /api/runs/:runId`): a rotated or refused
 ## Records
 
 - **Fleet's copy state.** Fleet keeps the verified copy of each fork: epoch, commit, fingerprint, names hash, and when it was stored. Only a rotation changes it, by compare-and-set. It is never part of the public fleet entries.
-- **Security events.** `tripwire` (which kind of wire, the listed name, the key's path, the copy's epoch and fingerprint), `rotated` (reason, epoch, fingerprint), `rotation_refused` (reason, epoch, number of failures), and `copy_cleared` (epoch, and why the stored copy no longer builds). Fleet keeps the latest 100 per fork. No route serves them yet.
+- **Security events.** `tripwire` (which kind of tripwire, the listed name, the key's path, the copy's epoch and fingerprint), `rotated` (reason, epoch, fingerprint), `rotation_refused` (reason, epoch, number of failures), and `copy_cleared` (epoch, and why the stored copy no longer builds). Fleet keeps the latest 100 per fork. No route serves them yet.
 - **The public fleet stream** gets a `security` event with only the repo, the kind, and the time, at most one per fork and kind every 10 seconds. `rotation_refused` and `copy_cleared` are never broadcast.
 - **Answers and the ledger.** An answer from a copy carries `fork.variant` (the fingerprint), and its ledger row carries `variant`.
 
@@ -202,8 +202,8 @@ Twenty forks, from `npm run polymorph:demo`:
 The first three result columns count requests that released a held research dose (7 mg) while an identified patient was in context and no attestation was given. "Refused" counts requests, and "Moved to a new copy" counts forks.
 
 - **Equivalence.** On 20 of 20 forks the renamed copy answered all 70 probe requests like the plain fork, with 0 differences. Each copy renamed 74 of 74 listed names.
-- **Wires.** Attack A tripped a decoy wire on every fork. A2 and A3 tripped foreign wires.
-- **A leaked copy.** Fork 7's copy compromised only fork 7. After fork 7 moved to a new copy, the leaked names compromised 0 forks and were refused on 1 fork.
+- **Tripwires.** Attack A hit a decoy tripwire on every fork. A2 and A3 hit foreign tripwires.
+- **A leaked copy.** The exploit built from fork 7's copy compromised only fork 7. After fork 7 moved to a new copy, the leaked names compromised 0 forks and were refused on fork 7.
 - **Guessing.** No guess found fork 3's real suffix: 1000 guesses out of 36^8 suffixes.
 - **Public fields.** Attack B compromised every fork, renamed or not.
 
@@ -216,9 +216,9 @@ The recording is `platform/public/data/polymorph-demo.json`.
 - **One secret.** Every copy's names come from `POLYMORPH_SECRET`. Whoever reads it can compute every fork's renamed names, so the design assumes it never leaves the platform. If it leaks, replace it: copies made with the old one stop matching, and each fork rotates to a new copy (see "Setup").
 - **Coverage.** Only listed names move. Code a fork adds stays plain unless upstream lists its names.
 - **Other classes.** Logic bugs, timing, and denial of service are untouched. Prototype pollution gadgets that read names fixed by the runtime survive renaming.
-- **Tested equivalence.** The gate shows equivalence on tested behavior, the probes. That is evidence, short of a proof.
+- **Tested equivalence.** The gate checks equivalence only on the behavior that the probes test. A difference that no probe reaches goes unseen.
 - **Model off.** Copies answer with the model off.
-- **A fork's own fields.** A request field of the fork's own that is named like a listed name stays plain only when the fork's tests (`tests/user/manifest.json`, `tests/user/e2e.json`), its `fluid.toml`, or its modules' text name it. Otherwise the copy renames the code that reads the field, so the copy answers differently, and a request that sends the field under its original name is refused as a decoy. Naming the field in the fork's own tests fixes it.
+- **A fork's own fields.** When a fork reads a request field of its own whose name is on the list, that field stays plain only when the fork's tests (`tests/user/manifest.json`, `tests/user/e2e.json`), its `fluid.toml`, or its modules' text name it. Otherwise the copy renames the code that reads the field, so the copy answers differently, and a request that sends the field under its original name is refused as a decoy. Naming the field in the fork's own tests fixes it.
 - **Rotation needs a pass.** A rotation needs the whole check mode gate to pass. A fork whose `main` fails a tier keeps the copy it has, or stays plain.
 - **After a change lands.** Until the landed commit's rotation stores a copy of it, `main` answers plain, behind the stored copy's scan.
 - **Runtime upgrades.** A runtime upgrade can cost a name: a name the new runtime builds in is skipped from then on. The stored copy then no longer matches, so the fork answers plain until it rotates, and a rotation that stores no new copy clears the old one.
@@ -228,13 +228,13 @@ The recording is `platform/public/data/polymorph-demo.json`.
 
 ## Next steps
 
-- Freeze built-in prototypes in the fork isolate before the app loads, as GHunter recommends, and add a tripwire inside the isolate that checks them after each answer.
+- Freeze built-in prototypes in the fork isolate before the app loads, as GHunter recommends (see the design doc's [background](plans/2026-11-06-polymorphic-installation-design.md#background)), and check inside the isolate after each answer that they are unchanged.
 - Trace a foreign suffix back to the fork that leaked it, and rotate that fork too.
 - Let a fork raise its rotation rate in `fluid.toml`, a preference that only moves toward safety.
-- Derive the list from the contract instead of keeping it by hand.
-- Model wording for renamed copies.
-- A route that shows a fork's security events to admins.
-- A run on the deployed site.
+- Derive the list from the contract automatically.
+- Add model wording for renamed copies.
+- Add a route that shows a fork's security events to admins.
+- Run polymorphic installation on the deployed site.
 
 ## Related documents
 
