@@ -34,7 +34,7 @@ import { askLoaded, clearRuntimeCache, loadForkRuntime, storedCopy, type AnswerC
 import { ledgerStub } from "../src/stubs.ts";
 import type { RotateParams } from "../src/workflows/common.ts";
 // @ts-expect-error plain ES module from the static UI
-import { SCORE_COLUMNS, SCORE_NOTE, afterRotationLine, equivalenceLine, scoreRows, validateDemo } from "../public/js/polymorph-replay.js";
+import { SCORE_COLUMNS, SCORE_NOTE, afterRotationLine, equivalenceLine, renamedCounts, scoreRows, validateDemo } from "../public/js/polymorph-replay.js";
 import { zeroDayRelease } from "./fixtures/zero-day.ts";
 import { POLYMORPH_TEST_SECRET, PUBLISHED, TAG, polymorphPlatform, type PolymorphPlatform } from "./helpers/polymorph-platform.ts";
 import { fakeWorkflows } from "./helpers/workflows.ts";
@@ -101,8 +101,8 @@ interface Fork {
 	/** Probe requests sent to both the plain fork and the copy, and how many the two answered differently. */
 	compared: number;
 	mismatches: number;
-	/** Listed names the copy left as they are. */
-	skipped: number;
+	/** Listed names the copy renamed. */
+	renamed: number;
 	after: { epoch: number; fingerprint: string } | null;
 }
 
@@ -309,6 +309,9 @@ async function install(): Promise<Fork[]> {
 		const check = gate.polymorph;
 		if (!check || check.fingerprint !== installed.fingerprint || check.namesHash !== installed.namesHash) throw new Error(`${repo}: the equivalence check did not check the installed copy ${installed.fingerprint}`);
 		expect(gate.failures, `${repo}: failures of the installed copy's gate`).toEqual([]);
+		// What the docs say every copy did: it renamed every listed name and skipped none.
+		expect(check.skipped, `${repo}: listed names the copy skipped`).toEqual([]);
+		expect(check.renamed, `${repo}: the names the copy renamed`).toEqual([...LIST].sort());
 		// The check sent every probe request to both the plain fork and the copy, so the recording's probes count them all.
 		expect(check.compared, `${repo}: probe requests compared`).toBe(PROBE_REQUESTS);
 		const fork: Fork = {
@@ -316,7 +319,7 @@ async function install(): Promise<Fork[]> {
 			installed: { epoch: installed.epoch, sha: installed.sha, fingerprint: installed.fingerprint, namesHash: installed.namesHash, names: check.renamed },
 			compared: check.compared,
 			mismatches: check.mismatches,
-			skipped: check.skipped.length,
+			renamed: check.renamed.length,
 			after: null,
 		};
 		// A skipped name is neither renamed nor a tripwire, and every exploit here names the flag.
@@ -581,13 +584,12 @@ type ScoreRow = Record<string, string> & { id: string; label: string; detail: st
  */
 function scoreboard(forks: Fork[], recording: Recording): string {
 	const rows: ScoreRow[] = scoreRows(recording);
-	const renamed = [...new Set(forks.map((fork) => recording.listSize - fork.skipped))].join(" or ");
 	const table = [["", ...rows.map((row) => row.id)], ...(SCORE_COLUMNS as [string, string][]).map(([key, name]) => [name, ...rows.map((row) => row[key]!)])];
 	const widths = table[0]!.map((_, column) => Math.max(...table.map((cells) => cells[column]!.length)));
 	const line = (cells: string[]) => cells.map((cell, column) => cell.padEnd(widths[column]!)).join("  ").trimEnd();
 	return [
 		"Polymorphic installation against a planted zero-day",
-		`${plural(forks.length, "fork")} on release ${recording.release}; each copy renames ${renamed} of the ${recording.listSize} names on upstream's list.`,
+		`${plural(forks.length, "fork")} on release ${recording.release}; each copy renamed ${renamedCounts(recording)} of the ${recording.listSize} names on upstream's list.`,
 		"",
 		...rows.map((row) => `${row.id.padEnd(4)}${row.label}: ${row.detail}`),
 		"",
@@ -613,7 +615,7 @@ function recordingOf(forks: Fork[], runs: AttackRun[], afterRotation: AfterRotat
 		probes: compared[0]!,
 		forks: forks.map((fork) => {
 			const after = fork.after ?? fork.installed;
-			return { repo: fork.repo, before: fork.installed.fingerprint, after: after.fingerprint, epochBefore: fork.installed.epoch, epochAfter: after.epoch, mismatches: fork.mismatches };
+			return { repo: fork.repo, before: fork.installed.fingerprint, after: after.fingerprint, epochBefore: fork.installed.epoch, epochAfter: after.epoch, renamed: fork.renamed, mismatches: fork.mismatches };
 		}),
 		attacks: runs.map((run) => run.recorded),
 		afterRotation,

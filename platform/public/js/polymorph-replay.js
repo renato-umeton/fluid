@@ -37,14 +37,17 @@ export function validateDemo(data) {
   need(isIsoTime(data.recordedAt), "recordedAt must be an ISO time such as 2026-11-06T18:30:00.000Z");
   need(isText(data.release), "release must be a non-empty string");
   for (const key of ["listSize", "probes"]) need(isCount(data[key]), `${key} must be a whole number of 0 or more`);
-  const forks = checkForks(data.forks, need);
+  const forks = checkForks(data.forks, data.listSize, need);
   const ids = checkAttacks(data.attacks, forks, need);
   if (data.afterRotation !== undefined && data.afterRotation !== null) checkAfterRotation(data.afterRotation, ids, forks, need);
   return problems;
 }
 
-/** The forks by repo name, or null when there is no list to check other lists against. Epochs are not shown, so not checked. */
-function checkForks(forks, need) {
+/**
+ * The forks by repo name, or null when there is no list to check other lists against. Epochs are not shown, so not
+ * checked. Each fork's renamed count may not pass the size of the list.
+ */
+function checkForks(forks, listSize, need) {
   if (!need(Array.isArray(forks) && forks.length > 0, "forks must be a non-empty list")) return null;
   const byRepo = new Map();
   forks.forEach((fork, i) => {
@@ -55,6 +58,9 @@ function checkForks(forks, need) {
       byRepo.set(fork.repo, fork);
     }
     for (const key of ["before", "after"]) need(typeof fork[key] === "string" && FINGERPRINT.test(fork[key]), `${at}.${key} must be 8 lowercase hex characters`);
+    if (need(isCount(fork.renamed), `${at}.renamed must be a whole number of 0 or more`) && isCount(listSize)) {
+      need(fork.renamed <= listSize, `${at}.renamed is ${fork.renamed}, more than the ${listSize} names on the list`);
+    }
     need(isCount(fork.mismatches), `${at}.mismatches must be a whole number of 0 or more`);
   });
   return byRepo;
@@ -266,11 +272,16 @@ function recordedText(iso) {
   return `${at.slice(0, 10)} at ${at.slice(11, 16)} UTC`;
 }
 
-/** The three lines above the fleet: what it does, that this is a recorded run, and the limit. */
+/** How many listed names the copies renamed, each count once, most first: "74", or "74 or 73" when copies differ. */
+export function renamedCounts(data) {
+  return [...new Set(data.forks.map((f) => f.renamed))].sort((a, b) => b - a).join(" or ");
+}
+
+/** The three lines above the fleet: what it does and what the copies renamed, that this is a recorded run, and the limit. */
 export function introLines(data) {
   const hasB = data.attacks.some((a) => a.id === "B");
   return [
-    `Polymorphic installation renames the ${data.listSize} internal names on upstream's list with a secret seed for each fork.`,
+    `Polymorphic installation renames the internal names on upstream's list with a secret seed for each fork. In this run each copy renamed ${renamedCounts(data)} of the ${data.listSize} names on the list.`,
     `This page replays a recorded run of the end-to-end test: ${plural(data.forks.length, "fork")} on release ${data.release}, recorded ${recordedText(data.recordedAt)}.`,
     `Renaming cannot stop a bug that public fields alone can reach${hasB ? ", as attack B shows" : ""}.`,
   ];

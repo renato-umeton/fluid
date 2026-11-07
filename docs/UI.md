@@ -86,7 +86,7 @@ The recording is one JSON object:
 
 - `version` is 1, and `recordedAt` is when the run was recorded, as an ISO time.
 - `release` names the release the forks ran: "v1.1.0, a test fixture with two planted bugs". `listSize` is the number of names on upstream's list, and `probes` the number of probe requests each copy's equivalence check compared.
-- `forks` holds each fork's `repo`, the fingerprint of its copy `before` and `after` one rotation, `epochBefore`, `epochAfter`, and `mismatches`, the probe answers its copy gave differently from the plain fork.
+- `forks` holds each fork's `repo`, the fingerprint of its copy `before` and `after` one rotation, `epochBefore`, `epochAfter`, `renamed`, the listed names its copy renamed (no more than `listSize`), and `mismatches`, the probe answers its copy gave differently from the plain fork.
 - `attacks` holds each attack's `id` (A, A2, A3, or B), `label`, `detail`, and the forks it `targets`. Its `requests` count the requests `sent`, those that compromised a fork on the plain fleet (`plainCompromised`), on renamed copies with the platform scan bypassed (`directCompromised`), and through the platform (`platformCompromised`), and those the platform `refused`. The forks behind each count are in `plain.compromised`, `direct.compromised`, `platform.compromised`, and `platform.refused`, and the forks that moved to a new copy in `platform.rotated`.
 - `afterRotation` names the leaked copy's attack, `"A2"`, and holds the forks the leaked copy's names compromised, and those that refused them, once its fork moved to a new copy.
 

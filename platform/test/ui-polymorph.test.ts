@@ -24,9 +24,9 @@ function demo() {
 		listSize: 31,
 		probes: 71,
 		forks: [
-			{ repo: "user-01", before: "0a1b2c3d", after: "4e5f6a7b", epochBefore: 1, epochAfter: 2, mismatches: 0 },
-			{ repo: "user-02", before: "8c9d0e1f", after: "2a3b4c5d", epochBefore: 1, epochAfter: 2, mismatches: 0 },
-			{ repo: "user-03", before: "6e7f8091", after: "a2b3c4d5", epochBefore: 3, epochAfter: 4, mismatches: 0 },
+			{ repo: "user-01", before: "0a1b2c3d", after: "4e5f6a7b", epochBefore: 1, epochAfter: 2, renamed: 31, mismatches: 0 },
+			{ repo: "user-02", before: "8c9d0e1f", after: "2a3b4c5d", epochBefore: 1, epochAfter: 2, renamed: 31, mismatches: 0 },
+			{ repo: "user-03", before: "6e7f8091", after: "a2b3c4d5", epochBefore: 3, epochAfter: 4, renamed: 31, mismatches: 0 },
 		],
 		attacks: [
 			{
@@ -90,6 +90,7 @@ describe("validateDemo", () => {
 		["attacks[1].platform.rotated", (d) => Reflect.deleteProperty(d.attacks[1].platform, "rotated"), "attacks[1].platform.rotated must be a list of repo names"],
 		["attacks[2].requests", (d) => Reflect.deleteProperty(d.attacks[2], "requests"), "attacks[2].requests must be an object"],
 		["forks[2].mismatches", (d) => Reflect.deleteProperty(d.forks[2], "mismatches"), "forks[2].mismatches must be a whole number of 0 or more"],
+		["forks[1].renamed", (d) => Reflect.deleteProperty(d.forks[1], "renamed"), "forks[1].renamed must be a whole number of 0 or more"],
 	])("names the missing field %s", (_field, edit, problem) => {
 		expect(validateDemo(changed(edit))).toEqual([problem]);
 	});
@@ -98,6 +99,7 @@ describe("validateDemo", () => {
 		["version 2", (d) => Object.assign(d, { version: 2 }), ["version must be 1"]],
 		["probes written as text", (d) => Object.assign(d, { probes: "71" }), ["probes must be a whole number of 0 or more"]],
 		["a listSize that is not whole", (d) => Object.assign(d, { listSize: 2.5 }), ["listSize must be a whole number of 0 or more"]],
+		["a copy that renamed more names than the list holds", (d) => Object.assign(d.forks[0], { renamed: 32 }), ["forks[0].renamed is 32, more than the 31 names on the list"]],
 		["an uppercase fingerprint", (d) => Object.assign(d.forks[0], { before: "0A1B2C3D" }), ["forks[0].before must be 8 lowercase hex characters"]],
 		["a short fingerprint", (d) => Object.assign(d.forks[1], { after: "4e5f6a7" }), ["forks[1].after must be 8 lowercase hex characters"]],
 		["a negative count of requests sent", (d) => Object.assign(d.attacks[2].requests, { sent: -1 }), ["attacks[2].requests.sent must be a whole number of 0 or more"]],
@@ -430,9 +432,14 @@ describe("scoreRows", () => {
 describe("the lines around the fleet and the scoreboard", () => {
 	it("says what polymorphic installation does, that this is a recorded run, and its limit", () => {
 		const [what, replay, limit] = introLines(demo());
-		expect(what).toBe("Polymorphic installation renames the 31 internal names on upstream's list with a secret seed for each fork.");
+		expect(what).toBe("Polymorphic installation renames the internal names on upstream's list with a secret seed for each fork. In this run each copy renamed 31 of the 31 names on the list.");
 		expect(replay).toBe("This page replays a recorded run of the end-to-end test: 3 forks on release v1.15.0-zero-day, recorded 2026-11-06 at 18:30 UTC.");
 		expect(limit).toBe("Renaming cannot stop a bug that public fields alone can reach, as attack B shows.");
+	});
+
+	it("says what the copies renamed from the recording, each count once, when they differ", () => {
+		const fewer = changed((d) => Object.assign(d.forks[2], { renamed: 30 }));
+		expect(introLines(fewer)[0]).toBe("Polymorphic installation renames the internal names on upstream's list with a secret seed for each fork. In this run each copy renamed 31 or 30 of the 31 names on the list.");
 	});
 
 	it("states the limit without pointing at attack B when the recording has none", () => {
