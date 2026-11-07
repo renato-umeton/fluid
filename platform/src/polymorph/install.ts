@@ -155,10 +155,11 @@ export async function planCopy(env: Env, input: { repo: string; sha: string; epo
 	return plan;
 }
 
-/** Drops the plans and upstream lists this isolate keeps, as a new isolate starts (clearRuntimeCache). */
+/** Drops the plans and upstream lists this isolate keeps, and forgets that it reported a short secret, as a new isolate starts (clearRuntimeCache). */
 export function clearCopyCaches(): void {
 	plans.clear();
 	lists.clear();
+	reportedShortSecret = false;
 }
 
 /** The fork's own tests: the requests it sends itself. Read with fluid.toml as its contract. */

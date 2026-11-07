@@ -450,6 +450,34 @@ describe("polymorphSecret", () => {
 
 describe("clearRuntimeCache", () => {
 	it(
+		"also forgets what the loader read through and reported, as a new isolate would: stock tags, file contents, and the short secret",
+		async () => {
+			const warn = warnings();
+			const shortDeps: RuntimeDeps = { ...deps, env: { ...deps.env, POLYMORPH_SECRET: "too-short-03" } as unknown as Env };
+			const reported = () => warn.mock.calls.filter(([line]) => String(line).includes("shorter than 16 characters")).length;
+			// Reported by now, by this call or an earlier test's; it is reported once per isolate.
+			polymorphSecret(shortDeps.env);
+			const before = reported();
+			await loadForkRuntime(deps, "user-1", "main", { morph: { epoch: 52 } });
+			clearRuntimeCache();
+			const fetches = vi.fn(t.artifacts.fetch);
+			vi.stubGlobal("fetch", fetches);
+			try {
+				const blobs = vi.spyOn(t.artifacts.repos.get("user-1")!.git, "readBlob");
+				expect(copyOf(await loadForkRuntime(deps, "user-1", "main", { morph: { epoch: 52 } })).epoch).toBe(52);
+				// The pinned release's tag is resolved over the stock remote again, and the fork's files read again.
+				expect(fetches.mock.calls.map(([url]) => String(url))).toContainEqual(expect.stringContaining("/stock.git/info/refs"));
+				expect(blobs).toHaveBeenCalled();
+			} finally {
+				vi.stubGlobal("fetch", t.artifacts.fetch);
+			}
+			polymorphSecret(shortDeps.env);
+			expect(reported()).toBe(before + 1);
+		},
+		SLOW_MS,
+	);
+
+	it(
 		"drops every cache the loader keeps, so the next load plans, reads upstream's list, builds, and logs again",
 		async () => {
 			const warn = warnings();

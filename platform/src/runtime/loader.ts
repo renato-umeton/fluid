@@ -12,9 +12,10 @@ import { buildCopy, clearCopyCaches, planCopy, PolymorphOffError, PolymorphTrans
 import type { SkippedName } from "../polymorph/list.ts";
 import { unmorphText } from "../polymorph/morph.ts";
 import { PolymorphUnavailableError } from "../polymorph/tokens.ts";
+import { clearStockCaches } from "../stock/suite.ts";
 import { buildE2ERunnerModuleMap, buildModuleMap, buildRunnerModuleMap, isRuntimePath, RUNTIME_DIRS, type ModuleMap } from "./modules.ts";
 import { resolveCommit, shortRef } from "./refs.ts";
-import { openRepo, readCommitFiles } from "./repo-files.ts";
+import { clearBlobCache, openRepo, readCommitFiles } from "./repo-files.ts";
 
 export const RUNTIME_COMPATIBILITY_DATE = "2026-10-01";
 const MODULE_CACHE_LIMIT = 200;
@@ -450,13 +451,17 @@ export function loadE2ERunner(env: Env, key: string, stockFiles: Record<string, 
 }
 
 /**
- * Drops every cache the loader keeps, as a new isolate starts: module maps,
- * the names hash each copy built with, the fallback lines already logged, and
- * the copies' plans and upstream lists (tests and admin use).
+ * Starts the loader over as a new isolate would (tests and admin use): drops
+ * the module maps, the names hash each copy built with, and the fallback
+ * lines already logged; the copies' plans, upstream lists, and the short
+ * secret report (polymorph/install.ts); the stock suites and release tag
+ * commits (stock/suite.ts); and the file contents read (runtime/repo-files.ts).
  */
 export function clearRuntimeCache(): void {
 	builds.clear();
 	copyHashes.clear();
 	reportedFallbacks.clear();
 	clearCopyCaches();
+	clearStockCaches();
+	clearBlobCache();
 }
