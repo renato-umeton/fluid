@@ -30,14 +30,16 @@ only when it tags a demo release, so that release tightens the floor; stock
 passes those probes too (`tests/unit/demo-overlay.test.ts`).
 
 `polymorph.json` lists internal names of the runtime. The platform reads it
-from stock at a fork's pinned tag and can run each fork as a copy in which
-those identifiers carry a secret suffix, so an exploit written against this
-public source does not find them (the platform's `docs/POLYMORPH.md`).
-`tests/unit/polymorph-list.test.ts` checks three things for each listed
-name: it is a plain identifier used in runtime code; it appears nowhere as
-text (a string, template text, regular expression, runtime JSON, synthetic
-data, or a probe); and it is no part of a contract read by name. A name that
-leaves runtime code must leave the list too.
+from stock at a fork's pinned tag and can run each fork as a renamed copy, in
+which those identifiers carry a secret suffix. An exploit written against this
+public source then does not find them (see `docs/POLYMORPH.md` in the Fluid
+repository). `tests/unit/polymorph-list.test.ts` checks that the file is
+version 1 with a description and a sorted list without duplicates. It also
+checks each listed name: it is a plain identifier that is neither a keyword
+nor a global or a property of a standard built-in; it is used in runtime code;
+it appears nowhere as text (a string, template text, regular expression,
+runtime JSON, synthetic data, or a probe); and no contract reads it by name. A
+name that leaves runtime code must leave the list too.
 
 ## Runtime contract
 
