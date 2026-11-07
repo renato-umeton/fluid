@@ -95,7 +95,7 @@ export function polymorphSecret(env: Env): string | null {
 export interface CopyPlan {
 	readonly epoch: number;
 	readonly seed: string;
-	/** Eight hex characters naming the copy; safe to show. */
+	/** Eight hex characters naming the copy inside the platform (logs, isolate ids); answers show its random variant instead. */
 	readonly fingerprint: string;
 	/** Upstream's list at the fork's pinned tag. */
 	readonly list: readonly string[];

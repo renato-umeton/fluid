@@ -63,9 +63,12 @@ describe("rotateFork", () => {
 			expect(second).toEqual({ outcome: "rotated", repo: "user-1", reason: "tripwire", epoch: 2, sha: head, fingerprint: await printOf("user-1", 2), namesHash: hash });
 			// It keeps the names the copy renamed too, which guard the fork if the copy stops building.
 			expect(fleet.morphState("user-1")).toMatchObject({ epoch: 2, sha: head, fingerprint: await printOf("user-1", 2), namesHash: hash, names: [...LISTED].sort() });
+			// Each copy gets a random variant, which answers name it by, and which the event links to its epoch and fingerprint.
+			const variant = fleet.morphState("user-1")!.variant!;
+			expect(variant).toMatch(/^[0-9a-f]{8}$/);
 			expect(fleet.securityEvents("user-1").map((event) => [event.kind, event.detail])).toEqual([
-				["rotated", { reason: "tripwire", epoch: 2, fingerprint: await printOf("user-1", 2) }],
-				["rotated", { reason: "schedule", epoch: 1, fingerprint: await printOf("user-1", 1) }],
+				["rotated", { reason: "tripwire", epoch: 2, fingerprint: await printOf("user-1", 2), variant }],
+				["rotated", { reason: "schedule", epoch: 1, fingerprint: await printOf("user-1", 1), variant: expect.stringMatching(/^[0-9a-f]{8}$/) }],
 			]);
 			// What production loads from the stored state is the copy the gate checked.
 			const state = fleet.morphState("user-1")!;
@@ -154,7 +157,7 @@ describe("rotateFork", () => {
 		"refuses a copy that answers differently, keeping the fork's current copy",
 		async () => {
 			const fleet = p.t.fleet;
-			const current = { epoch: 1, sha: p.heads["user-reflective"]!, fingerprint: "a1b2c3d4", namesHash: "0badc0de", names: [...LISTED].sort() };
+			const current = { epoch: 1, sha: p.heads["user-reflective"]!, fingerprint: "a1b2c3d4", namesHash: "0badc0de", names: [...LISTED].sort(), variant: "5eed0001" };
 			fleet.setMorph("user-reflective", current, { from: null }, t0);
 			const result = await rotateFork(p.deps, "user-reflective", "tripwire");
 			if (result.outcome !== "refused") throw new Error(`expected a refusal, got ${result.outcome}`);
@@ -241,7 +244,7 @@ describe("rotateFork", () => {
 
 	/** The copy a rotation would have stored for a fork at epoch 1, stored as if a gate had verified it. */
 	async function storeVerified(repo: string) {
-		const state = { epoch: 1, sha: p.heads[repo]!, fingerprint: await printOf(repo, 1), namesHash: await namesHash(LISTED), names: [...LISTED].sort() };
+		const state = { epoch: 1, sha: p.heads[repo]!, fingerprint: await printOf(repo, 1), namesHash: await namesHash(LISTED), names: [...LISTED].sort(), variant: "5eed0001" };
 		if (!p.t.fleet.setMorph(repo, state, { from: null }, t0)) throw new Error(`${repo}: no copy stored`);
 		return state;
 	}

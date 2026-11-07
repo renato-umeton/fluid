@@ -35,7 +35,7 @@ seed   = HMAC-SHA256(POLYMORPH_SECRET, "polymorph:v1:<repo>:<sha>:<epoch>")
 suffix = 8 base36 characters from HMAC-SHA256(seed, name), one per listed name
 ```
 
-`researchNeedsAttestation` becomes `researchNeedsAttestation$` followed by its 8 characters. A suffix holds about 41 bits (36^8 is about 2.8 trillion). Each name gets its own suffix, so learning one renamed name tells nothing about the others. A public fingerprint of 8 hex characters, also derived from the seed, names the copy in answers and in the ledger without revealing the seed. A second 8 hex character hash names which listed names the copy renamed. A new commit or a new epoch gives a new copy. A fork's first copy is epoch 1. Each later copy is numbered one above the fork's latest epoch, which Fleet keeps even when it clears the copy (`Fleet.morphEpoch`). Fleet also keeps a deleted fork's latest epoch, and a fork created again under the same name starts from it. So a fork's epochs never repeat, and no retired copy comes back.
+`researchNeedsAttestation` becomes `researchNeedsAttestation$` followed by its 8 characters. A suffix holds about 41 bits (36^8 is about 2.8 trillion). Each name gets its own suffix, so learning one renamed name tells nothing about the others. A fingerprint of 8 hex characters, also derived from the seed, names the copy inside the platform: in its isolate id, in logs, and in security events. Answers and the ledger name the copy by its variant instead, 8 random hex characters drawn when a rotation stores the copy. Nothing derives the variant from the secret, so an answer gives no way to test a guess of the secret. A second 8 hex character hash names which listed names the copy renamed. A new commit or a new epoch gives a new copy. A fork's first copy is epoch 1. Each later copy is numbered one above the fork's latest epoch, which Fleet keeps even when it clears the copy (`Fleet.morphEpoch`). Fleet also keeps a deleted fork's latest epoch, and a fork created again under the same name starts from it. So a fork's epochs never repeat, and no retired copy comes back.
 
 ### The loader renames at load time
 
@@ -116,7 +116,7 @@ Error bodies carry `error` and `requestId`, like every other API error.
 
 Which code answers a request that passes:
 
-- **At the copy's commit,** the copy answers, always with the model off. `useModel` comes from the request body, so honoring it would let any request bypass the copy, and the gate checked the copy with the model off. The answer carries `fork.variant` (the copy's fingerprint), and its ledger row gets `variant`.
+- **At the copy's commit,** the copy answers, always with the model off. `useModel` comes from the request body, so honoring it would let any request bypass the copy, and the gate checked the copy with the model off. The answer carries `fork.variant` (the copy's random variant), and its ledger row gets `variant`.
 - **At any other commit,** the platform scans the request with the stored copy's names, and then the plain fork answers, with the model if asked. That covers another branch or tag, and `main` after a change lands and before its rotation stores a copy of it.
 
 The stored copy was made from the commit that `main` had at its last passing rotation. That commit may no longer be `main`'s head.
@@ -158,10 +158,10 @@ Each rotation logs a `rotate` run (`GET /api/runs/:runId`): a rotated or refused
 
 ## Records
 
-- **Fleet's copy state.** Fleet keeps the verified copy of each fork: epoch, commit, fingerprint, names hash, the listed names it renamed, and when it was stored. Only a rotation changes it, by compare-and-set. Clearing the copy keeps its epoch. Deleting the fork deletes all of it except the latest epoch, which a fork created again under the same name starts from. It is never part of the public fleet entries.
-- **Security events.** `tripwire` (which kind of tripwire, the listed name, the key's path, the copy's epoch and fingerprint), `rotated` (reason, epoch, fingerprint), `rotation_refused` (reason, epoch, number of failures), and `copy_cleared` (epoch, and why the stored copy no longer builds). Fleet keeps the latest 100 per fork. No route serves them yet.
+- **Fleet's copy state.** Fleet keeps the verified copy of each fork: epoch, commit, fingerprint, names hash, the listed names it renamed, its variant, and when it was stored. Only a rotation changes it, by compare-and-set. Clearing the copy keeps its epoch. Deleting the fork deletes all of it except the latest epoch, which a fork created again under the same name starts from. It is never part of the public fleet entries.
+- **Security events.** `tripwire` (which kind of tripwire, the listed name, the key's path, the copy's epoch and fingerprint), `rotated` (reason, epoch, fingerprint, variant), `rotation_refused` (reason, epoch, number of failures), and `copy_cleared` (epoch, and why the stored copy no longer builds). Fleet keeps the latest 100 per fork. No route serves them yet.
 - **The public fleet stream** gets a `security` event with only the repo, the kind, and the time, at most one per fork and kind every 10 seconds. `rotation_refused` and `copy_cleared` are never broadcast.
-- **Answers and the ledger.** An answer from a copy carries `fork.variant` (the fingerprint), and its ledger row carries `variant`.
+- **Answers and the ledger.** An answer from a copy carries `fork.variant` (the copy's random variant, never its fingerprint), and its ledger row carries `variant`. The `rotated` event links a variant to its epoch and fingerprint.
 
 ## Setup
 

@@ -164,7 +164,7 @@ export interface PlainLoad {
 /** The renamed copy a fork loaded as. */
 export interface LoadedCopy {
 	epoch: number;
-	/** Eight hex characters naming the copy; safe to show. */
+	/** Eight hex characters naming the copy inside the platform (logs, isolate ids); answers show its random variant instead. */
 	fingerprint: string;
 	/** namesHash of the names it renamed: with the fingerprint, what identifies a verified copy. */
 	namesHash: string;

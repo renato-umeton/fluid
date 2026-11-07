@@ -126,7 +126,7 @@ afterEach(() => {
 
 /** Stores a verified copy for a fork the way a rotation does, at main's commit unless told otherwise. */
 async function storeCopy(repo: string, epoch: number, sha = p.heads[repo]!) {
-	const state = { epoch, sha, fingerprint: await fingerprint(await deriveSeed(POLYMORPH_TEST_SECRET, repo, sha, epoch)), namesHash: await namesHash(LISTED), names: [...LISTED].sort() };
+	const state = { epoch, sha, fingerprint: await fingerprint(await deriveSeed(POLYMORPH_TEST_SECRET, repo, sha, epoch)), namesHash: await namesHash(LISTED), names: [...LISTED].sort(), variant: `c0ffee${String(epoch).padStart(2, "0")}` };
 	if (!p.t.fleet.setMorph(repo, state, { from: p.t.fleet.morphState(repo)?.epoch ?? null }, t0)) throw new Error(`${repo}: no copy stored`);
 	return state;
 }
@@ -171,22 +171,27 @@ const rotationsOf = (repo: string) => workflows.of("RotateWorkflow").filter((ins
 
 describe("serveAsk with a verified copy of main", () => {
 	it(
-		"answers from the copy: the plain fork's card, named by fork.variant, and recorded with the copy's variant",
+		"answers from the copy: the plain fork's card, named by fork.variant, and recorded with the copy's variant, never its fingerprint",
 		async () => {
 			const rotated = await rotateFork(p.deps, "user-1", "schedule");
 			if (rotated.outcome !== "rotated") throw new Error(`expected a rotation, got ${rotated.outcome}`);
+			// The variant is random, so an answer gives no way to test a guess of the secret, which the fingerprint comes from.
+			const variant = p.t.fleet.morphState("user-1")!.variant!;
+			expect(variant).toMatch(/^[0-9a-f]{8}$/);
+			expect(variant).not.toBe(rotated.fingerprint);
 			const plain = await loadForkRuntime(p.deps, "user-1", "main");
 			for (const request of Object.values(requests)) {
 				const served = await ask("user-1", request);
-				expect(served.fork).toEqual({ repo: "user-1", ref: "main", commit: p.heads["user-1"], variant: rotated.fingerprint });
+				expect(served.fork).toEqual({ repo: "user-1", ref: "main", commit: p.heads["user-1"], variant });
 				expect(cardDifferences(await askLoaded(plain, request), answered(served))).toEqual([]);
 				expect(JSON.stringify(served)).not.toMatch(RENAMED);
+				expect(JSON.stringify(served)).not.toContain(rotated.fingerprint);
 			}
 			const copyId = `user-1:${p.heads["user-1"]}:m${rotated.epoch}.${rotated.fingerprint}.${rotated.namesHash}`;
 			expect(p.loader.built).toContain(copyId);
 			const ledger = await ledgerOf("user-1");
 			expect(ledger).toHaveLength(Object.keys(requests).length);
-			expect(ledger.map((record) => record.variant)).toEqual(Object.keys(requests).map(() => rotated.fingerprint));
+			expect(ledger.map((record) => record.variant)).toEqual(Object.keys(requests).map(() => variant));
 		},
 		SLOW_MS,
 	);
@@ -197,7 +202,7 @@ describe("serveAsk with a verified copy of main", () => {
 			const state = await storeCopy("user-reask", 1);
 			const first = await ask("user-reask", requests.research);
 			const again = await ask("user-reask", { ...requests.research, attestation: true }, { reaskOf: first.answer_id });
-			expect(again.ledger).toMatchObject({ reask_of: first.answer_id, variant: state.fingerprint });
+			expect(again.ledger).toMatchObject({ reask_of: first.answer_id, variant: state.variant });
 		},
 		SLOW_MS,
 	);
@@ -208,7 +213,7 @@ describe("serveAsk with a verified copy of main", () => {
 			const state = await storeCopy("user-model", 1);
 			const calls = modelCalls.length;
 			const served = await ask("user-model", requests.administrative, { useModel: true });
-			expect(served.fork).toMatchObject({ variant: state.fingerprint });
+			expect(served.fork).toMatchObject({ variant: state.variant });
 			expect(served.signals).not.toContain(MODEL_WORDING);
 			expect(modelCalls.length).toBe(calls);
 			expect(p.loader.built.filter((id) => id.startsWith("user-model:") && id.endsWith(":llm"))).toEqual([]);
@@ -452,7 +457,7 @@ describe("serveAsk when main's verified copy does not load", () => {
 			expect(await ledgerOf("user-flaky")).toEqual([]);
 			expect(rotationsOf("user-flaky")).toEqual([]);
 			expect(p.t.fleet.securityEvents("user-flaky")).toEqual([]);
-			expect((await ask("user-flaky", requests.administrative)).fork).toMatchObject({ variant: state.fingerprint });
+			expect((await ask("user-flaky", requests.administrative)).fork).toMatchObject({ variant: state.variant });
 		},
 		SLOW_MS,
 	);
@@ -532,7 +537,7 @@ describe("serveAsk on another ref of a fork with a copy", () => {
 			const clean = await askRoute({ context: requests.research.context, ref: "work/old-change", useModel: true });
 			expect(clean.status).toBe(200);
 			const served = (await clean.json()) as ServedCard;
-			expect(served.fork).toEqual({ repo: "user-branchy", ref: "work/old-change", commit: p.heads["user-branchy"], variant: state.fingerprint });
+			expect(served.fork).toEqual({ repo: "user-branchy", ref: "work/old-change", commit: p.heads["user-branchy"], variant: state.variant });
 			expect(served.signals).not.toContain(MODEL_WORDING);
 		},
 		SLOW_MS,
@@ -646,7 +651,7 @@ describe("the live path at the HTTP layer", () => {
 			const response = await worker.fetch(post("/api/ask", { cookie: await cookieFor({ userId: "http-model" }) }, { ...requests.administrative, useModel: true }), p.t.env, workflows.ctx);
 			expect(response.status).toBe(200);
 			const served = (await response.json()) as ServedCard;
-			expect(served.fork).toMatchObject({ variant: state.fingerprint });
+			expect(served.fork).toMatchObject({ variant: state.variant });
 			expect(served.signals).not.toContain(MODEL_WORDING);
 			expect(modelCalls.length).toBe(calls);
 			expect(p.loader.built.filter((id) => id.startsWith("user-http-model:") && id.endsWith(":llm"))).toEqual([]);

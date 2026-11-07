@@ -65,7 +65,7 @@ export interface GateFailure {
 /** The renamed copy a gate compared with the plain fork (GateInput.morph). */
 export interface GatePolymorph {
 	epoch: number;
-	/** Eight hex characters naming the copy; safe to show. */
+	/** Eight hex characters naming the copy inside the platform (logs, isolate ids); answers show its random variant instead. */
 	fingerprint: string;
 	/** namesHash of the names the copy renamed. */
 	namesHash: string;

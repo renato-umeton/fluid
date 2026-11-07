@@ -33,9 +33,11 @@ export async function variantNames(seed: string, names: readonly string[]): Prom
 }
 
 /**
- * Eight hex characters that tell copies apart in logs and on screen. The
+ * Eight hex characters that tell copies apart in the platform's logs. The
  * message contains ":", which no listed name can, so the fingerprint is never
- * part of a suffix, and an HMAC output reveals nothing about its key.
+ * part of a suffix, and an HMAC output reveals nothing about its key. It
+ * still lets whoever sees it test a guess of the secret, so answers name a
+ * copy by a random variant instead (Fleet's MorphState).
  */
 export async function fingerprint(seed: string): Promise<string> {
 	return hex(await sign(await seedKey(seed), "polymorph:v1:fingerprint")).slice(0, 8);

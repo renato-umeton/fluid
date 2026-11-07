@@ -262,7 +262,7 @@ POST /api/admin/fleet/baseline      {offset?, limit?, concurrency?, record?} -> 
 GET  /api/harvest                   -> HarvestProposal[]
 ```
 
-The fleet view shows these fork statuses: `provisioning`, `pinned` (idle on its tag), `upgrading`, `gating`, `passed` (`pendingUpgrade` is set while the upgrade waits for approval), `failed`, and `repair_open`. `POST /api/ask` cards on a redirected fork carry `fork.servedBy` and `fork.safetyFallback`, and a card from a renamed copy carries `fork.variant`, the copy's fingerprint.
+The fleet view shows these fork statuses: `provisioning`, `pinned` (idle on its tag), `upgrading`, `gating`, `passed` (`pendingUpgrade` is set while the upgrade waits for approval), `failed`, and `repair_open`. `POST /api/ask` cards on a redirected fork carry `fork.servedBy` and `fork.safetyFallback`, and a card from a renamed copy carries `fork.variant`, the copy's random variant.
 
 ## Releases
 

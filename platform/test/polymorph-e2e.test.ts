@@ -322,7 +322,7 @@ async function install(): Promise<Fork[]> {
 		expect(check.compared, `${repo}: probe requests compared`).toBe(PROBE_REQUESTS);
 		const fork: Fork = {
 			repo,
-			installed: { epoch: installed.epoch, sha: installed.sha, fingerprint: installed.fingerprint, namesHash: installed.namesHash, names: check.renamed },
+			installed: { epoch: installed.epoch, sha: installed.sha, fingerprint: installed.fingerprint, namesHash: installed.namesHash, names: check.renamed, variant: platform.t.fleet.morphState(repo)!.variant },
 			compared: check.compared,
 			mismatches: check.mismatches,
 			renamed: check.renamed.length,
@@ -386,7 +386,7 @@ async function askPlatformOnce(deps: AskDeps, { repo, request }: Send): Promise<
 	try {
 		const served = await serveAsk(deps, { repo, ref: "main", request, useModel: false, userId: userIdFromForkRepo(repo)!, fallback: true });
 		// Only the fork's stored copy answers: neither the plain fork nor stock.
-		expect(served.fork, `${repo}: what answered`).toMatchObject({ repo, variant: platform.t.fleet.morphState(repo)!.fingerprint });
+		expect(served.fork, `${repo}: what answered`).toMatchObject({ repo, variant: platform.t.fleet.morphState(repo)!.variant });
 		return { platform: researchAnswer(served, `${repo}, through the platform`), hit: null };
 	} catch (error) {
 		if (!(error instanceof HttpError && error.status === 403 && error.message === TRIPWIRE_REFUSAL)) throw error;

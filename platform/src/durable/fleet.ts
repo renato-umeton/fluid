@@ -83,7 +83,7 @@ export interface MorphState {
 	epoch: number;
 	/** The commit the copy was verified at: only that commit runs renamed. */
 	sha: string;
-	/** Eight hex characters naming the copy. */
+	/** Eight hex characters naming the copy, derived from its seed: for the platform only (logs, isolate ids, security events). */
 	fingerprint: string;
 	/** namesHash of the names the verified copy renamed. */
 	namesHash: string;
@@ -93,6 +93,13 @@ export interface MorphState {
 	 * copy no longer builds. Empty for a copy stored before Fleet kept them.
 	 */
 	names: string[];
+	/**
+	 * Eight random hex characters drawn when the copy was stored: what answers
+	 * and the ledger name the copy by. Nothing derives it from the secret, so
+	 * unlike the fingerprint it gives no way to test a guess of the secret.
+	 * Null for a copy stored before Fleet kept one, whose answers name none.
+	 */
+	variant: string | null;
 	/** When it was stored. */
 	at: string;
 }
@@ -193,6 +200,7 @@ export class Fleet extends DurableObject<Env> {
 		if (!columns.includes("morph_names_hash")) sql.exec("ALTER TABLE forks ADD COLUMN morph_names_hash TEXT");
 		if (!columns.includes("morph_at")) sql.exec("ALTER TABLE forks ADD COLUMN morph_at TEXT");
 		if (!columns.includes("morph_names")) sql.exec("ALTER TABLE forks ADD COLUMN morph_names TEXT");
+		if (!columns.includes("morph_variant")) sql.exec("ALTER TABLE forks ADD COLUMN morph_variant TEXT");
 		sql.exec("CREATE TABLE IF NOT EXISTS health_history (seq INTEGER PRIMARY KEY AUTOINCREMENT, repo TEXT NOT NULL, event TEXT NOT NULL)");
 		sql.exec("CREATE INDEX IF NOT EXISTS health_history_repo ON health_history (repo, seq)");
 		sql.exec("CREATE TABLE IF NOT EXISTS security_events (seq INTEGER PRIMARY KEY AUTOINCREMENT, repo TEXT NOT NULL, event TEXT NOT NULL)");
@@ -348,11 +356,12 @@ export class Fleet extends DurableObject<Env> {
 
 	/** The verified renamed copy a fork serves, or null: then it runs plain. */
 	morphState(repo: string): MorphState | null {
-		const row = this.ctx.storage.sql.exec("SELECT morph_epoch, morph_sha, morph_fp, morph_names_hash, morph_names, morph_at FROM forks WHERE repo = ?", repo).toArray()[0];
+		const row = this.ctx.storage.sql.exec("SELECT morph_epoch, morph_sha, morph_fp, morph_names_hash, morph_names, morph_variant, morph_at FROM forks WHERE repo = ?", repo).toArray()[0];
 		// A cleared copy leaves its epoch behind (see setMorph), so the copy is there only while its commit is.
 		if (!row || row.morph_sha === null || row.morph_sha === undefined) return null;
 		const names = typeof row.morph_names === "string" ? (JSON.parse(row.morph_names) as string[]) : [];
-		return { epoch: row.morph_epoch as number, sha: row.morph_sha as string, fingerprint: row.morph_fp as string, namesHash: row.morph_names_hash as string, names, at: row.morph_at as string };
+		const variant = typeof row.morph_variant === "string" ? row.morph_variant : null;
+		return { epoch: row.morph_epoch as number, sha: row.morph_sha as string, fingerprint: row.morph_fp as string, namesHash: row.morph_names_hash as string, names, variant, at: row.morph_at as string };
 	}
 
 	/**
@@ -382,11 +391,11 @@ export class Fleet extends DurableObject<Env> {
 	setMorph(repo: string, state: Omit<MorphState, "at"> | null, expected: { from: number | null }, at = Date.now()): boolean {
 		const sql = this.ctx.storage.sql;
 		if (state === null) {
-			return sql.exec("UPDATE forks SET morph_sha = NULL, morph_fp = NULL, morph_names_hash = NULL, morph_names = NULL, morph_at = NULL WHERE repo = ? AND morph_epoch IS ? AND morph_sha IS NOT NULL RETURNING repo", repo, expected.from).toArray().length > 0;
+			return sql.exec("UPDATE forks SET morph_sha = NULL, morph_fp = NULL, morph_names_hash = NULL, morph_names = NULL, morph_variant = NULL, morph_at = NULL WHERE repo = ? AND morph_epoch IS ? AND morph_sha IS NOT NULL RETURNING repo", repo, expected.from).toArray().length > 0;
 		}
 		checkMorphState(state);
-		const values = [state.epoch, state.sha, state.fingerprint, state.namesHash, JSON.stringify(state.names), new Date(at).toISOString()];
-		return sql.exec("UPDATE forks SET morph_epoch = ?, morph_sha = ?, morph_fp = ?, morph_names_hash = ?, morph_names = ?, morph_at = ? WHERE repo = ? AND morph_epoch IS ? RETURNING repo", ...values, repo, expected.from).toArray().length > 0;
+		const values = [state.epoch, state.sha, state.fingerprint, state.namesHash, JSON.stringify(state.names), state.variant, new Date(at).toISOString()];
+		return sql.exec("UPDATE forks SET morph_epoch = ?, morph_sha = ?, morph_fp = ?, morph_names_hash = ?, morph_names = ?, morph_variant = ?, morph_at = ? WHERE repo = ? AND morph_epoch IS ? RETURNING repo", ...values, repo, expected.from).toArray().length > 0;
 	}
 
 	/**
@@ -750,6 +759,7 @@ function checkMorphState(state: Omit<MorphState, "at">): void {
 	if (typeof state.sha !== "string" || !COMMIT_ID.test(state.sha)) throw new Error(`setMorph: sha must be a full lowercase commit id, got ${JSON.stringify(state.sha)}`);
 	if (typeof state.fingerprint !== "string" || !HEX8.test(state.fingerprint)) throw new Error("setMorph: fingerprint must be eight lowercase hex characters");
 	if (typeof state.namesHash !== "string" || !HEX8.test(state.namesHash)) throw new Error("setMorph: namesHash must be eight lowercase hex characters");
+	if (typeof state.variant !== "string" || !HEX8.test(state.variant)) throw new Error("setMorph: variant must be eight lowercase hex characters");
 	const names = state.names as unknown;
 	if (!Array.isArray(names) || !names.every((name) => typeof name === "string" && LISTED_NAME.test(name)) || new Set(names).size !== names.length) {
 		throw new Error("setMorph: names must be a list of distinct plain identifiers, the names the copy renamed");

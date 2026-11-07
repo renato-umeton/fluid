@@ -106,11 +106,13 @@ async function nextCopy(deps: RuntimeDeps, repo: string, reason: RotationReason,
 	// A copy serves only the commit it is of. If main moved while the gate ran, the landed change gets a rotation of its own.
 	const head = await mainHead(deps.env, repo);
 	if (head !== gate.commit) return skipped(head === null ? "main could not be read after the gate" : "main moved during the rotation");
+	// What answers name the copy by: random, since the fingerprint comes from the secret and would let anyone test a guess of it.
+	const variant = randomVariant();
 	// Stored only over the epoch read before the gate: a rotation that finished first wins, and a retired copy stays retired.
-	if (!(await fleet.setMorph(repo, { epoch, sha: gate.commit, fingerprint, namesHash, names: renamed }, { from: epochBefore }))) {
+	if (!(await fleet.setMorph(repo, { epoch, sha: gate.commit, fingerprint, namesHash, names: renamed, variant }, { from: epochBefore }))) {
 		return skipped((await fleet.get(repo)) ? "another rotation moved the fork first" : "the fork left the fleet during the rotation");
 	}
-	await fleet.recordSecurityEvent(repo, { kind: "rotated", detail: { reason, epoch, fingerprint } });
+	await fleet.recordSecurityEvent(repo, { kind: "rotated", detail: { reason, epoch, fingerprint, variant } });
 	return { outcome: "rotated", repo, reason, epoch, sha: gate.commit, fingerprint, namesHash };
 }
 
@@ -121,6 +123,11 @@ function noCopyReason(gate: GateResult): string {
 	const first = gate.failures[0];
 	if (!first) return "the gate stopped before it loaded a copy";
 	return `${first.probe} failed: ${typeof first.actual === "string" ? first.actual : JSON.stringify(first.actual)}`;
+}
+
+/** Eight random lowercase hex characters. */
+function randomVariant(): string {
+	return [...crypto.getRandomValues(new Uint8Array(4))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 async function mainHead(env: Env, repo: string): Promise<string | null> {

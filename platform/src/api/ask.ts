@@ -56,7 +56,7 @@ interface Served {
 
 export type ServedCard = AnswerCardLike & { fork: Record<string, unknown> };
 
-/** A card and what answered it: the commit, the ref as asked, and the fingerprint of the renamed copy when one answered. */
+/** A card and what answered it: the commit, the ref as asked, and the variant of the renamed copy when one answered. */
 interface Answer {
 	card: AnswerCardLike;
 	sha: string;
@@ -116,7 +116,7 @@ async function deliver(deps: RuntimeDeps, input: Omit<ServeAskInput, "fallback">
 		served = { repo: STOCK_REPO, ref: pinned, fallback: null };
 	}
 	if (input.reaskOf) card = { ...card, ledger: { ...card.ledger, reask_of: input.reaskOf } };
-	// A copy's answer names the copy by its fingerprint, in the ledger as in the response.
+	// A copy's answer names the copy by its variant, in the ledger as in the response, never by its fingerprint.
 	if (result.variant) card = { ...card, ledger: { ...card.ledger, variant: result.variant } };
 	await ledgerStub(env, input.userId).append(input.userId, repo, card.ledger as unknown as RunTimeRecord);
 	return { ...card, fork: { repo, ref: result.ref, commit: result.sha, ...(result.variant ? { variant: result.variant } : {}), ...(served.repo !== repo ? { servedBy: { repo: served.repo, ref: served.ref } } : {}), ...(served.fallback ? { safetyFallback: served.fallback } : {}) } };
@@ -148,7 +148,8 @@ async function askOwnFork(deps: AskDeps, input: { repo: string; ref: string; req
 	const useModel = atCopy ? false : input.useModel;
 	const answering = loaded ?? (await loadForkRuntime(deps, repo, ref, { commit, useModel }));
 	const card = await withTimeout(askLoaded(answering, request, { useModel }), FORK_CALL_TIMEOUT_MS, `fork ${repo} did not answer`);
-	return { card, sha: answering.sha, ref: answering.ref, variant: answering.morph?.fingerprint ?? null };
+	// Only the stored copy loads with a copy (storedCopy), so the variant Fleet stored names it.
+	return { card, sha: answering.sha, ref: answering.ref, variant: answering.morph ? copy.variant : null };
 }
 
 /** The stored copy as a load at its commit made it: the copy, or why the plain fork loaded instead. */
