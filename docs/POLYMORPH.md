@@ -80,7 +80,7 @@ The fork then runs plain, and the loader logs one line: `polymorph: <repo>@<shor
 - a module that already uses one of the copy's renamed names;
 - a candidate change under validation (a build with extra files);
 - a stored copy that this load no longer makes as verified: another commit, another fingerprint (the secret changed), or another names hash (other names are skipped now);
-- a read of upstream's list or the fork's contract that failed in Artifacts.
+- a read of upstream's list (or its tag) or of the fork's own tests that failed in Artifacts.
 
 On the live path, a failed read of upstream's list or of the fork's own tests gets a 503 instead, and a stored copy that no longer builds as verified starts a `mismatch` rotation (see "Tripwires and refusals").
 
