@@ -19,6 +19,7 @@ tests/e2e/           end-to-end regression suite (manifest.json) and its pure sc
 tests/unit/          Vitest unit tests (development only)
 .intent/             build-time intent records
 fluid.toml           pinned stock tag, tau, preferences (harvest_opt_in defaults to false)
+polymorph.json       internal names that each fork's running copy renames with a secret suffix
 overlays/demo-release/  extra invariant probes added only when the platform tags a demo release
 scripts/build.mjs    bundles app/index.ts to dist/app.js
 ```
@@ -27,6 +28,16 @@ scripts/build.mjs    bundles app/index.ts to dist/app.js
 `overlays/demo-release/invariants.json` to `tests/invariants/manifest.json`
 only when it tags a demo release, so that release tightens the floor; stock
 passes those probes too (`tests/unit/demo-overlay.test.ts`).
+
+`polymorph.json` lists internal names of the runtime. The platform reads it
+from stock at a fork's pinned tag and can run each fork as a copy in which
+those identifiers carry a secret suffix, so an exploit written against this
+public source does not find them (the platform's `docs/POLYMORPH.md`).
+`tests/unit/polymorph-list.test.ts` checks three things for each listed
+name: it is a plain identifier used in runtime code; it appears nowhere as
+text (a string, template text, regular expression, runtime JSON, synthetic
+data, or a probe); and it is no part of a contract read by name. A name that
+leaves runtime code must leave the list too.
 
 ## Runtime contract
 
