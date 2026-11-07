@@ -47,6 +47,8 @@ const DEMO = process.env.POLYMORPH_DEMO === "1";
 const RECORD_PATH = process.env.POLYMORPH_DEMO_RECORD;
 /** The recording the deployed Polymorph view replays (polymorph:record writes it). */
 const COMMITTED_RECORDING = resolve(dirname(fileURLToPath(import.meta.url)), "../public/data/polymorph-demo.json");
+/** What a failed check of the committed recording tells the reader to do. */
+const RECORD_AGAIN = "record it again with npm run polymorph:record";
 /** A run takes about a second per fork on a quiet machine (about 20 seconds for 20 forks); this leaves room for a loaded one. */
 const EXPERIMENT_MS = FLEET * 30_000;
 /** The platform secret that seeds every copy. */
@@ -541,6 +543,21 @@ function expectedOutcome(repos: string[]) {
 	};
 }
 
+/** The committed recording, read fresh each time. */
+const readCommitted = () => JSON.parse(readFileSync(COMMITTED_RECORDING, "utf8")) as Recording;
+
+/**
+ * Checks the committed recording, which the deployed page replays, against
+ * this run: it passes the view's checks, has this run's release, list size,
+ * and probes, and shows the outcome every run must record for its fleet. Each
+ * failure says how to record it again.
+ */
+function expectCommittedRecording(committed: Recording, recording: Recording): void {
+	expect(validateDemo(committed), `problems in the committed recording; ${RECORD_AGAIN}`).toEqual([]);
+	expect([committed.release, committed.listSize, committed.probes], `the committed recording's release, list size, and probes, against this run's; ${RECORD_AGAIN}`).toEqual([recording.release, recording.listSize, recording.probes]);
+	expect(outcomeOf(committed), `the committed recording's outcome; ${RECORD_AGAIN}`).toEqual(expectedOutcome(committed.forks.map((fork) => fork.repo)));
+}
+
 /** A row of the Polymorph view's scoreboard (scoreRows): the attack, and a cell for each of SCORE_COLUMNS. */
 type ScoreRow = Record<string, string> & { id: string; label: string; detail: string };
 
@@ -678,12 +695,7 @@ describe(`a fleet of ${FLEET} forks on a release with a planted zero-day`, () =>
 			if (DEMO) console.log(scoreboard(forks, recording));
 			// The committed recording is what the deployed page replays: every run checks it still passes the view's checks
 			// and shows this outcome for its own fleet, unless this run is about to replace it.
-			if (RECORD_PATH === undefined || resolve(RECORD_PATH) !== COMMITTED_RECORDING) {
-				const committed = JSON.parse(readFileSync(COMMITTED_RECORDING, "utf8")) as Recording;
-				expect(validateDemo(committed), "problems in the committed recording").toEqual([]);
-				expect([committed.release, committed.listSize, committed.probes], "the committed recording's release, list size, and probes, against this run's").toEqual([recording.release, recording.listSize, recording.probes]);
-				expect(outcomeOf(committed), "the committed recording's outcome").toEqual(expectedOutcome(committed.forks.map((fork) => fork.repo)));
-			}
+			if (RECORD_PATH === undefined || resolve(RECORD_PATH) !== COMMITTED_RECORDING) expectCommittedRecording(readCommitted(), recording);
 			// A run with a failed check writes no recording, so the page never replays one.
 			if (RECORD_PATH && task.result?.state !== "fail") {
 				const path = resolve(RECORD_PATH);
@@ -693,4 +705,18 @@ describe(`a fleet of ${FLEET} forks on a release with a planted zero-day`, () =>
 		},
 		EXPERIMENT_MS,
 	);
+});
+
+describe("the check of the committed recording", () => {
+	it.each<[string, (recording: Recording) => unknown]>([
+		["fails the view's checks", (r) => Object.assign(r, { version: 2 })],
+		["names another release", (r) => Object.assign(r, { release: "v9.9.9, another test fixture" })],
+		["has a list of another size", (r) => Object.assign(r, { listSize: r.listSize + 1 })],
+		["compared another number of probes", (r) => Object.assign(r, { probes: r.probes + 1 })],
+		["shows another outcome", (r) => Object.assign(r.forks[0]!, { mismatches: 1 })],
+	])("tells the reader to record it again when it %s", (_what, edit) => {
+		const stale = readCommitted();
+		edit(stale);
+		expect(() => expectCommittedRecording(stale, readCommitted())).toThrow(/; record it again with npm run polymorph:record/);
+	});
 });
