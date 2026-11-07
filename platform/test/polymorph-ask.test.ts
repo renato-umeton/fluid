@@ -95,6 +95,10 @@ beforeAll(() => {
 		"user-renames": { ...PUBLISHED, "app/renames.ts": "export const renames = 1;\n" },
 		// More JavaScript in one module than the renamer reads: no copy of it can be built.
 		"user-unreadable": { ...PUBLISHED, "app/big.js": `// ${"x".repeat(SCAN_LIMITS.moduleChars)}\nexport const big = 1;\n` },
+		// Stale copies whose names must still guard the plain fork.
+		"user-stale-print": { ...PUBLISHED, "app/stale.ts": "export const stale = 1;\n" },
+		"user-stale-names": { ...PUBLISHED, "app/stale.ts": "export const stale = 2;\n" },
+		"user-stale-code": { ...PUBLISHED, "app/big.js": `// ${"x".repeat(SCAN_LIMITS.moduleChars)}\nexport const stale = 3;\n` },
 	});
 	p.heads["user-moved"] = p.t.artifacts.seed("user-moved", { commits: MOVED }).commits[1]!;
 	// A merged work branch still at main's commit, and a branch one commit ahead of main.
@@ -120,7 +124,7 @@ afterEach(() => {
 
 /** Stores a verified copy for a fork the way a rotation does, at main's commit unless told otherwise. */
 async function storeCopy(repo: string, epoch: number, sha = p.heads[repo]!) {
-	const state = { epoch, sha, fingerprint: await fingerprint(await deriveSeed(POLYMORPH_TEST_SECRET, repo, sha, epoch)), namesHash: await namesHash(LISTED) };
+	const state = { epoch, sha, fingerprint: await fingerprint(await deriveSeed(POLYMORPH_TEST_SECRET, repo, sha, epoch)), namesHash: await namesHash(LISTED), names: [...LISTED].sort() };
 	if (!p.t.fleet.setMorph(repo, state, { from: p.t.fleet.morphState(repo)?.epoch ?? null }, t0)) throw new Error(`${repo}: no copy stored`);
 	return state;
 }
@@ -443,6 +447,38 @@ describe("serveAsk when main's verified copy does not load", () => {
 		},
 		SLOW_MS,
 	);
+
+	const staleGuards: typeof stale = [
+		["the secret makes another fingerprint now", "user-stale-print", () => ({ fingerprint: "00000000" })],
+		["the copy would rename other names now", "user-stale-names", () => ({ namesHash: "00000000" })],
+		["no copy of the fork's code can be built now", "user-stale-code", () => ({})],
+	];
+
+	it.each(staleGuards)(
+		"still refuses a request with the stored copy's names, original or suffixed, before the plain fork sees it, when %s",
+		async (_case, repo, change) => {
+			vi.spyOn(console, "warn").mockImplementation(() => undefined);
+			const verified = await storeCopy(repo, 4);
+			p.t.fleet.setMorph(repo, { ...verified, ...change(verified) }, { from: 4 }, t0);
+			vi.spyOn(Date, "now").mockReturnValue(t0);
+			// The plain fork answers, so the stored copy's own renamed name is as foreign as any other suffix.
+			const own = (await variantNames(await deriveSeed(POLYMORPH_TEST_SECRET, repo, verified.sha, 4), LISTED)).get("researchNeedsAttestation")!;
+			for (const key of ["researchNeedsAttestation", own, await foreignName(repo, 4)]) {
+				expect(await refusal(ask(repo, naming(key)))).toEqual({ status: 403, message: TRIPWIRE_REFUSAL, extra: {}, headers: {} });
+			}
+			expect(p.t.fleet.securityEvents(repo).map((event) => [event.kind, event.detail?.hit, event.detail?.epoch])).toEqual([
+				["tripwire", "foreign", 4],
+				["tripwire", "foreign", 4],
+				["tripwire", "decoy", 4],
+			]);
+			expect(await ledgerOf(repo)).toEqual([]);
+			// The hits rotate this copy in this window, which the first request's mismatch rotation already does.
+			expect(rotationsOf(repo).map((instance) => (instance.params as { reason: string }).reason)).toEqual(["mismatch"]);
+			// A request that names none of them still gets the plain fork's answer.
+			expect((await ask(repo, requests.administrative)).fork).toEqual({ repo, ref: "main", commit: p.heads[repo] });
+		},
+		SLOW_MS,
+	);
 });
 
 describe("serveAsk on another ref of a fork with a copy", () => {
@@ -627,6 +663,9 @@ describe("serveAsk when the stored copy does not load, asked at another commit",
 			expect(served.signals).toContain(MODEL_WORDING);
 			const id = rotationId("user-m2", copyKey(stale, t0));
 			expect(rotationsOf("user-m2")).toEqual([{ workflow: "RotateWorkflow", id, params: { repo: "user-m2", reason: "mismatch", runId: `run_${id}` } }]);
+			// The stale copy's names still guard the other commit.
+			const named = serveAsk(deps, { repo: "user-m2", ref: "work/next", request: naming("researchNeedsAttestation"), useModel: false, userId: "m2", fallback: false });
+			expect((await refusal(named)).status).toBe(403);
 		},
 		SLOW_MS,
 	);

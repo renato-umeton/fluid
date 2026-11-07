@@ -49,7 +49,7 @@ describe("runGate with a renamed copy", () => {
 			const print = await fingerprint(await deriveSeed(POLYMORPH_TEST_SECRET, "user-1", p.heads["user-1"]!, 1));
 			expect(gate.failures).toEqual([]);
 			expect(gate.passed).toBe(true);
-			expect(gate.polymorph).toEqual({ epoch: 1, fingerprint: print, namesHash: await namesHash(LISTED), compared: expect.any(Number), mismatches: 0, skipped: [] });
+			expect(gate.polymorph).toEqual({ epoch: 1, fingerprint: print, namesHash: await namesHash(LISTED), renamed: [...LISTED].sort(), compared: expect.any(Number), mismatches: 0, skipped: [] });
 			const compared = gate.polymorph!.compared;
 			expect(compared).toBeGreaterThan(0);
 			expect(gate.tiers.invariant!.probes).toContainEqual({ id: "polymorph-equivalence", passed: true, samples: compared, passedSamples: compared });
@@ -166,7 +166,11 @@ describe("runGate with a renamed copy", () => {
 });
 
 describe("addEquivalence", () => {
-	const copy: LoadedCopy = { epoch: 3, fingerprint: "a1b2c3d4", namesHash: "87806eb6", names: new Map(), skipped: [{ name: "weightKg", reason: "appears in a key in tests/user/manifest.json" }] };
+	const names = new Map([
+		["researchNeedsAttestation", "researchNeedsAttestation$k3f9q2xa"],
+		["buildCard", "buildCard$0a1b2c3d"],
+	]);
+	const copy: LoadedCopy = { epoch: 3, fingerprint: "a1b2c3d4", namesHash: "87806eb6", names, skipped: [{ name: "weightKg", reason: "appears in a key in tests/user/manifest.json" }] };
 	const passingTiers = (): Record<TierName, TierSummary | null> => ({
 		invariant: { tier: "invariant", passed: true, total: 1, failed: 0, probes: [{ id: "inv-a", passed: true, samples: 1, passedSamples: 1 }] },
 		functional: { tier: "functional", passed: true, total: 1, failed: 0, probes: [{ id: "fn-a", passed: true, samples: 1, passedSamples: 1 }] },
@@ -191,7 +195,8 @@ describe("addEquivalence", () => {
 			],
 		});
 		expect(verdict(tiers, failures)).toBe(false);
-		expect(report).toEqual({ epoch: 3, fingerprint: "a1b2c3d4", namesHash: "87806eb6", compared: 0, mismatches: 0, skipped: copy.skipped });
+		// The names it renamed, sorted, and never what it renamed them to.
+		expect(report).toEqual({ epoch: 3, fingerprint: "a1b2c3d4", namesHash: "87806eb6", renamed: ["buildCard", "researchNeedsAttestation"], compared: 0, mismatches: 0, skipped: copy.skipped });
 	});
 
 	it("adds a passing probe and no failure when every compared request matched", () => {

@@ -10,7 +10,7 @@ import { PUBLISHED, TAG, polymorphPlatform, type PolymorphPlatform } from "./hel
 
 const fork = (repo: string) => ({ repo, userId: repo.replace(/^user-/, ""), persona: "p", pinnedTag: "v1.1.0" });
 const SHA = "0123456789abcdef0123456789abcdef01234567";
-const copy = { epoch: 1, sha: SHA, fingerprint: "a1b2c3d4", namesHash: "87806eb6" };
+const copy = { epoch: 1, sha: SHA, fingerprint: "a1b2c3d4", namesHash: "87806eb6", names: ["buildCard", "researchNeedsAttestation"] };
 const t0 = Date.parse("2026-11-06T10:00:00Z");
 const iso = (at: number) => new Date(at).toISOString();
 const hit = { hit: "decoy", name: "researchNeedsAttestation", path: "context.display.researchNeedsAttestation", fingerprint: copy.fingerprint, epoch: 1 };
@@ -79,7 +79,8 @@ describe("Fleet morph state", () => {
 
 	it("refuses a state that cannot name a copy", () => {
 		const fleet = fleetWith("user-a");
-		for (const bad of [{ epoch: -1 }, { epoch: 1.5 }, { sha: "main" }, { sha: SHA.toUpperCase() }, { fingerprint: "a1b2c3" }, { namesHash: "zzzzzzzz" }]) {
+		const badNames = [{ names: "buildCard" }, { names: ["build-card"] }, { names: ["buildCard", "buildCard"] }, { names: [7] }] as unknown as { names: string[] }[];
+		for (const bad of [{ epoch: -1 }, { epoch: 1.5 }, { sha: "main" }, { sha: SHA.toUpperCase() }, { fingerprint: "a1b2c3" }, { namesHash: "zzzzzzzz" }, ...badNames]) {
 			expect(() => fleet.setMorph("user-a", { ...copy, ...bad }, { from: null })).toThrow(/setMorph/);
 		}
 		expect(fleet.morphState("user-a")).toBeNull();
@@ -114,6 +115,18 @@ describe("Fleet morph state", () => {
 		expect(fleet.setMorph("user-old", copy, { from: null }, t0)).toBe(true);
 		expect(fleet.morphState("user-old")).toEqual({ ...copy, at: iso(t0) });
 		expect(fleet.get("user-old")).toMatchObject({ repo: "user-old", status: "pinned" });
+	});
+
+	it("reads a copy stored before it kept the renamed names as one with none, and clears the names with the copy", () => {
+		const { instance: fleet, state } = construct(Fleet);
+		fleet.register({ ...fork("user-a"), status: "pinned" });
+		fleet.setMorph("user-a", copy, { from: null }, t0);
+		state.storage.sql.exec("UPDATE forks SET morph_names = NULL WHERE repo = 'user-a'");
+		expect(fleet.morphState("user-a")).toEqual({ ...copy, names: [], at: iso(t0) });
+		fleet.setMorph("user-a", { ...copy, epoch: 2 }, { from: 1 }, t0);
+		expect(fleet.setMorph("user-a", null, { from: 2 })).toBe(true);
+		fleet.setMorph("user-a", { ...copy, epoch: 3, names: ["buildCard"] }, { from: 2 }, t0);
+		expect(fleet.morphState("user-a")?.names).toEqual(["buildCard"]);
 	});
 });
 

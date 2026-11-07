@@ -102,12 +102,12 @@ async function nextCopy(deps: RuntimeDeps, repo: string, reason: RotationReason,
 		await fleet.recordSecurityEvent(repo, { kind: "rotation_refused", detail: { reason, epoch, failures: gate.failures.length } });
 		return { outcome: "refused", repo, reason, epoch, sha: gate.commit, failures: gate.failures.slice(0, MAX_REFUSAL_FAILURES), more: Math.max(0, gate.failures.length - MAX_REFUSAL_FAILURES) };
 	}
-	const { fingerprint, namesHash } = gate.polymorph;
+	const { fingerprint, namesHash, renamed } = gate.polymorph;
 	// A copy serves only the commit it is of. If main moved while the gate ran, the landed change gets a rotation of its own.
 	const head = await mainHead(deps.env, repo);
 	if (head !== gate.commit) return skipped(head === null ? "main could not be read after the gate" : "main moved during the rotation");
 	// Stored only over the epoch read before the gate: a rotation that finished first wins, and a retired copy stays retired.
-	if (!(await fleet.setMorph(repo, { epoch, sha: gate.commit, fingerprint, namesHash }, { from: epochBefore }))) {
+	if (!(await fleet.setMorph(repo, { epoch, sha: gate.commit, fingerprint, namesHash, names: renamed }, { from: epochBefore }))) {
 		return skipped((await fleet.get(repo)) ? "another rotation moved the fork first" : "the fork left the fleet during the rotation");
 	}
 	await fleet.recordSecurityEvent(repo, { kind: "rotated", detail: { reason, epoch, fingerprint } });

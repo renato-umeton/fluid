@@ -319,7 +319,7 @@ export function addEquivalence(tiers: Record<TierName, TierSummary | null>, fail
 		? { ...t, passed: t.passed && probe.passed, total: t.total + 1, failed: t.failed + (probe.passed ? 0 : 1), probes: [...t.probes, probe] }
 		: { tier: "invariant", passed: probe.passed, total: 1, failed: probe.passed ? 0 : 1, probes: [probe] };
 	const skipped = copy.skipped.map(({ name, reason }) => ({ name, reason: String(clipValue(reason)) }));
-	return { epoch: copy.epoch, fingerprint: copy.fingerprint, namesHash: copy.namesHash, compared: report.compared, mismatches: report.mismatches, skipped };
+	return { epoch: copy.epoch, fingerprint: copy.fingerprint, namesHash: copy.namesHash, renamed: [...copy.names.keys()].sort(), compared: report.compared, mismatches: report.mismatches, skipped };
 }
 
 /** A request as a failure names it: its question, or its JSON when it has none, quoted and cut short. */

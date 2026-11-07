@@ -159,7 +159,7 @@ describe("RotateWorkflow with a repo", () => {
 	/** Stores a copy made under another secret, which the platform's seed no longer makes, and marks the fork busy. */
 	function staleCopyOnBusyFork(repo: string) {
 		vi.spyOn(console, "warn").mockImplementation(() => undefined);
-		if (!p.t.fleet.setMorph(repo, { epoch: 1, sha: p.heads[repo]!, fingerprint: "a1b2c3d4", namesHash: "0badc0de" }, { from: null })) throw new Error(`${repo}: no copy stored`);
+		if (!p.t.fleet.setMorph(repo, { epoch: 1, sha: p.heads[repo]!, fingerprint: "a1b2c3d4", namesHash: "0badc0de", names: ["researchNeedsAttestation"] }, { from: null })) throw new Error(`${repo}: no copy stored`);
 		p.t.fleet.update(repo, { status: "gating" });
 	}
 

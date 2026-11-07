@@ -302,7 +302,7 @@ async function install(): Promise<Fork[]> {
 		expect(gate.failures, `${repo}: failures of the installed copy's gate`).toEqual([]);
 		const fork: Fork = {
 			repo,
-			installed: { epoch: installed.epoch, sha: installed.sha, fingerprint: installed.fingerprint, namesHash: installed.namesHash },
+			installed: { epoch: installed.epoch, sha: installed.sha, fingerprint: installed.fingerprint, namesHash: installed.namesHash, names: check.renamed },
 			compared: check.compared,
 			mismatches: check.mismatches,
 			skipped: check.skipped.length,

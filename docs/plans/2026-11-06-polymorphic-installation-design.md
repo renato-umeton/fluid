@@ -113,7 +113,7 @@ So for this bug class the answer to the issue is yes: one exploit built from ups
 - **Model off.** A copy always answers with the model off: `useModel` comes from the request body, so honoring it would let any request bypass the copy.
 - **Reads fail closed.** When a read that the stored copy needs fails in Artifacts, the request gets a retryable 503, so the plain fork never answers it unscanned.
 - **When rotations start.** One rotation per copy in each 10-minute window after tripwire hits, and also for new forks, landed upgrades, one-tap approvals, yellow rollbacks, and stored copies that no longer build as verified.
-- **Stale copies.** A stored copy that no longer builds as verified starts a `mismatch` rotation. When that rotation stores no new copy and the old one still does not build, it clears the old one. Fleet keeps a cleared copy's epoch, and the next copy is numbered above it. So a fork's epochs never repeat, and no retired copy comes back.
+- **Stale copies.** A stored copy that no longer builds as verified starts a `mismatch` rotation. Until a new copy is stored, the plain fork answers behind a scan with the names Fleet stored for the old copy, in which every suffix is foreign. When that rotation stores no new copy and the old one still does not build, it clears the old one. Fleet keeps a cleared copy's epoch, and the next copy is numbered above it. So a fork's epochs never repeat, and no retired copy comes back.
 
 ## Limits and open questions
 

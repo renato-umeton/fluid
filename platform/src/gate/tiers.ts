@@ -69,6 +69,8 @@ export interface GatePolymorph {
 	fingerprint: string;
 	/** namesHash of the names the copy renamed. */
 	namesHash: string;
+	/** The listed names the copy renamed, sorted: what namesHash hashes. */
+	renamed: string[];
 	/** Probe requests sent to both the plain fork and the copy. */
 	compared: number;
 	/** Requests the two answered differently. */

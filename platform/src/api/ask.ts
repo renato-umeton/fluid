@@ -4,8 +4,9 @@
 // /api/ask) guards a fork with a verified renamed copy (see polymorph/) on
 // every ref: its copy's commit answers from the copy, behind the copy's
 // tripwires, and any other commit answers plain to a request those tripwires
-// let through. serveAskAsBuilt, the yellow soak's own entry point, asks a
-// commit exactly as built.
+// let through. A stored copy that no longer builds still guards with its
+// names. serveAskAsBuilt, the yellow soak's own entry point, asks a commit
+// exactly as built.
 import type { MorphState, SafetyFallback } from "../durable/fleet.ts";
 import { currentStockTag } from "../forks/provision.ts";
 import { STOCK_REPO } from "../lib/names.ts";
@@ -160,11 +161,13 @@ function fromLoaded(loaded: LoadedFork): StoredCopyResult {
  * What the live path does when a fork's stored copy did not load, by the
  * kind of reason. "retry": refuse the request as retryable, since the plain
  * fork answering unchecked would let a request reach the original names
- * whenever Artifacts errs. "rotate": let the plain fork answer and start one
- * rotation of the stored copy, for a reason that will not pass by itself (the
- * secret changed, the copy would rename other names, the renamer refuses the
- * code now). "plain": let the plain fork answer, for a fork the platform
- * makes no copy of, which no rotation changes.
+ * whenever Artifacts errs. "rotate": start one rotation of the stored copy,
+ * for a reason that will not pass by itself (the secret changed, the copy
+ * would rename other names, the renamer refuses the code now), and let the
+ * plain fork answer. "plain": let the plain fork answer, for a fork the
+ * platform makes no copy of, which no rotation changes. Either way the plain
+ * fork answers only a request that passes a scan with the stored copy's names
+ * (enforceGuard).
  */
 export function onCopyFailure(kind: PlainKind): "retry" | "rotate" | "plain" {
 	if (kind === "transient") return "retry";
@@ -174,25 +177,29 @@ export function onCopyFailure(kind: PlainKind): "retry" | "rotate" | "plain" {
 
 /**
  * Lets a request through to the fork only past the stored copy's guard: when
- * the copy was made, the request must pass its tripwires (checkTripwires);
- * when it was not, onCopyFailure says whether to refuse it as retryable, or to
- * let it through, after starting one rotation of the stored copy or not.
+ * the copy was made, the request must pass its tripwires (checkTripwires).
+ * When it was not, onCopyFailure says whether to refuse it as retryable, or to
+ * let it through, after starting one rotation of the stored copy or not. A
+ * request let through must still pass a scan with the names Fleet stored for
+ * the copy. The plain fork answers then, so each of those names is live in
+ * its original form, and none has an own suffix: every suffix is foreign.
  */
 async function enforceGuard(deps: AskDeps, repo: string, request: Record<string, unknown>, stored: MorphState, guard: StoredCopyResult): Promise<void> {
 	if (guard.copy) return checkTripwires(deps, repo, request, guard.copy);
 	const action = onCopyFailure(guard.plain.kind);
 	if (action === "retry") throw new HttpError(503, COPY_RETRY, {}, { "retry-after": String(COPY_RETRY_AFTER_SECONDS) });
 	if (action === "rotate") await startRotation(deps.env, deps.exports.RotateWorkflow, { repo, reason: "mismatch", key: copyKey(stored) });
+	await checkTripwires(deps, repo, request, { names: new Map(stored.names.map((name) => [name, ""])), epoch: stored.epoch, fingerprint: stored.fingerprint });
 }
 
 /**
- * Refuses, before the copy sees it, a request that names one of the copy's
+ * Refuses, before the fork sees it, a request that names one of the copy's
  * dead original names or another copy's renamed one (polymorph/tripwire.ts).
  * The hit is recorded as a security event and starts one rotation of this
  * copy, however many requests trip it; the fork keeps serving. A request too
  * deep or too wide to scan is refused too, and records and starts nothing.
  */
-async function checkTripwires(deps: AskDeps, repo: string, request: Record<string, unknown>, copy: LoadedCopy): Promise<void> {
+async function checkTripwires(deps: AskDeps, repo: string, request: Record<string, unknown>, copy: Pick<LoadedCopy, "names" | "epoch" | "fingerprint">): Promise<void> {
 	let hit: TripwireHit | null;
 	try {
 		hit = scanRequest(request, copy.names);

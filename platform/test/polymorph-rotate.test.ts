@@ -60,7 +60,8 @@ describe("rotateFork", () => {
 			expect(await rotateFork(p.deps, "user-1", "schedule")).toEqual({ outcome: "rotated", repo: "user-1", reason: "schedule", epoch: 1, sha: head, fingerprint: await printOf("user-1", 1), namesHash: hash });
 			const second = await rotateFork(p.deps, "user-1", "tripwire");
 			expect(second).toEqual({ outcome: "rotated", repo: "user-1", reason: "tripwire", epoch: 2, sha: head, fingerprint: await printOf("user-1", 2), namesHash: hash });
-			expect(fleet.morphState("user-1")).toMatchObject({ epoch: 2, sha: head, fingerprint: await printOf("user-1", 2), namesHash: hash });
+			// It keeps the names the copy renamed too, which guard the fork if the copy stops building.
+			expect(fleet.morphState("user-1")).toMatchObject({ epoch: 2, sha: head, fingerprint: await printOf("user-1", 2), namesHash: hash, names: [...LISTED].sort() });
 			expect(fleet.securityEvents("user-1").map((event) => [event.kind, event.detail])).toEqual([
 				["rotated", { reason: "tripwire", epoch: 2, fingerprint: await printOf("user-1", 2) }],
 				["rotated", { reason: "schedule", epoch: 1, fingerprint: await printOf("user-1", 1) }],
@@ -138,7 +139,7 @@ describe("rotateFork", () => {
 		"refuses a copy that answers differently, keeping the fork's current copy",
 		async () => {
 			const fleet = p.t.fleet;
-			const current = { epoch: 1, sha: p.heads["user-reflective"]!, fingerprint: "a1b2c3d4", namesHash: "0badc0de" };
+			const current = { epoch: 1, sha: p.heads["user-reflective"]!, fingerprint: "a1b2c3d4", namesHash: "0badc0de", names: [...LISTED].sort() };
 			fleet.setMorph("user-reflective", current, { from: null }, t0);
 			const result = await rotateFork(p.deps, "user-reflective", "tripwire");
 			if (result.outcome !== "refused") throw new Error(`expected a refusal, got ${result.outcome}`);
@@ -225,7 +226,7 @@ describe("rotateFork", () => {
 
 	/** The copy a rotation would have stored for a fork at epoch 1, stored as if a gate had verified it. */
 	async function storeVerified(repo: string) {
-		const state = { epoch: 1, sha: p.heads[repo]!, fingerprint: await printOf(repo, 1), namesHash: await namesHash(LISTED) };
+		const state = { epoch: 1, sha: p.heads[repo]!, fingerprint: await printOf(repo, 1), namesHash: await namesHash(LISTED), names: [...LISTED].sort() };
 		if (!p.t.fleet.setMorph(repo, state, { from: null }, t0)) throw new Error(`${repo}: no copy stored`);
 		return state;
 	}
