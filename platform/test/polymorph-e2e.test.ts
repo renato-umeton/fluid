@@ -325,15 +325,14 @@ function seeded(seed: number): () => number {
 	};
 }
 
-/** `count` random suffixes shaped like a renamed name's (8 base36 characters), none of them `own`, the copy's real one. */
-function blindGuesses(count: number, own: string): string[] {
+/**
+ * `count` random suffixes shaped like a renamed name's (8 base36 characters).
+ * Blind, as an attacker's would be: nothing leaves out the copy's real
+ * suffix, so a guess that found it would show in the counts.
+ */
+function blindGuesses(count: number): string[] {
 	const random = seeded(GUESS_SEED);
-	const guesses: string[] = [];
-	while (guesses.length < count) {
-		const suffix = Array.from({ length: 8 }, () => BASE36[Math.floor(random() * BASE36.length)]).join("");
-		if (suffix !== own) guesses.push(suffix);
-	}
-	return guesses;
+	return Array.from({ length: count }, () => Array.from({ length: 8 }, () => BASE36[Math.floor(random() * BASE36.length)]).join(""));
 }
 
 /** The scoreboard's numbers for one attack: requests sent, compromised, and refused, and forks moved to a new copy. */
@@ -451,14 +450,14 @@ describe(`a fleet of ${FLEET} forks on a release with a planted zero-day`, () =>
 			expect(realm(), "built-ins after the leaked copy's replay").toEqual(before);
 
 			const third = forks[2]!;
-			const own = (await installedNames(third)).get(FLAG)!.slice(FLAG.length + 1);
+			const guesses = blindGuesses(GUESSES);
 			const a3 = await attack(
 				forks,
 				{
 					id: "A3",
 					label: "Blind guessing",
 					detail: `Sends ${GUESSES} requests to ${third.repo}, each with the option under a random 8-character suffix.`,
-					sends: blindGuesses(GUESSES, own).map((suffix) => ({ repo: third.repo, request: showing({ [`${FLAG}$${suffix}`]: false }) })),
+					sends: guesses.map((suffix) => ({ repo: third.repo, request: showing({ [`${FLAG}$${suffix}`]: false }) })),
 				},
 				before,
 			);
@@ -481,6 +480,9 @@ describe(`a fleet of ${FLEET} forks on a release with a planted zero-day`, () =>
 			expect(hits(replay.outcomes)).toEqual({ foreign: 1 });
 			expect(numbers(a3)).toEqual({ sent: GUESSES, plain: 0, direct: 0, compromised: 0, refused: GUESSES, moved: 1 });
 			expect(hits(a3.outcomes)).toEqual({ foreign: GUESSES });
+			// Why no guess compromised the copy: one in 36^8 (about 2.8 trillion) guesses finds its real suffix, so 1000 find it about once in 2.8 billion runs.
+			const own = (await installedNames(third)).get(FLAG)!.slice(FLAG.length + 1);
+			expect(guesses, `no guess is ${third.repo}'s real suffix (odds of a hit: ${GUESSES} in 36^8)`).not.toContain(own);
 			expect(numbers(b)).toEqual({ sent: n, plain: n, direct: n, compromised: n, refused: 0, moved: 0 });
 
 			if (RECORD_PATH) {
