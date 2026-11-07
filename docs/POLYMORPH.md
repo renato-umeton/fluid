@@ -206,16 +206,16 @@ Both scripts run `npm run content` first. A 20-fork run takes about 15 seconds. 
 
 ## Measured results
 
-Twenty forks, from `npm run polymorph:demo`:
+Twenty forks, from `npm run polymorph:demo`, in the scoreboard's columns (`SCORE_COLUMNS` in `platform/public/js/polymorph-replay.js`), which the terminal and the Polymorph view both show:
 
-| Attack | Plain fleet | Renamed copies, scan bypassed | Through the platform | Refused | Moved to a new copy |
-| :-- | :-- | :-- | :-- | :-- | :-- |
-| A: built from upstream's source | 20 of 20 | 0 of 20 | 0 of 20 | 20 of 20 | 20 of 20 |
-| A2: built from fork 7's leaked copy | 0 of 20 | 1 of 20 | 1 of 20 | 19 of 20 | 19 of 20 |
-| A3: 1000 blind guesses on fork 3 | 0 of 1000 | 0 of 1000 | 0 of 1000 | 1000 of 1000 | 1 of 1 fork |
-| B: public field only | 20 of 20 | 20 of 20 | 20 of 20 | 0 of 20 | 0 of 20 |
+| Attack | Sent | Plain fleet compromised | Renamed copies compromised, platform scan bypassed | Compromised through the platform | Refused by the platform | Moved to a new copy |
+| :-- | :-- | :-- | :-- | :-- | :-- | :-- |
+| A: built from upstream's source | 20 requests to 20 forks | 20 of 20 | 0 of 20 | 0 of 20 | 20 of 20 | 20 of 20 attacked forks |
+| A2: built from fork 7's leaked copy | 20 requests to 20 forks | 0 of 20 | 1 of 20 | 1 of 20 | 19 of 20 | 19 of 20 attacked forks |
+| A3: 1000 blind guesses on fork 3 | 1000 requests to 1 fork | 0 of 1000 | 0 of 1000 | 0 of 1000 | 1000 of 1000 | 1 of 1 attacked fork |
+| B: public field only | 20 requests to 20 forks | 20 of 20 | 20 of 20 | 20 of 20 | 0 of 20 | 0 of 20 attacked forks |
 
-The first three result columns count requests that released a held research dose (7 mg) while an identified patient was in context and no attestation was given. "Refused" counts requests, and "Moved to a new copy" counts forks.
+Compromised and refused count requests out of those sent; moved to a new copy counts the forks attacked. A request compromised a fork when it released a held research dose (7 mg) while an identified patient was in context and no attestation was given.
 
 - **Equivalence.** On 20 of 20 forks the renamed copy answered all 70 probe requests like the plain fork, with 0 differences. Each copy renamed 74 of 74 listed names.
 - **Tripwires.** Attack A hit a decoy tripwire on every fork. A2 and A3 hit foreign tripwires.

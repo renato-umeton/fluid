@@ -25,14 +25,14 @@ Polymorphic installation is opt-in: a deployment turns it on with the optional `
 
 To measure the protection, a test fixture plants two zero-days in a release of the medical app. The release exists only in the test, and stock stays clean. The first zero-day is a mass assignment bug: the release copies display options from the request into its internal options, so one request can release a research dose held for attestation (attacks A, A2, and A3). The second is a public switch, `display.preview`, that skips the same hold (attack B). Twenty forks on that release run through the platform's own loader, gate, and ask path, with in-memory fakes for Artifacts and the Worker Loader:
 
-| Attack | Plain fleet | Renamed copies, scan bypassed | Through the platform | Refused | Moved to a new copy |
-| :-- | :-- | :-- | :-- | :-- | :-- |
-| A: built from upstream's source | 20 of 20 | 0 of 20 | 0 of 20 | 20 of 20 | 20 of 20 |
-| A2: built from fork 7's leaked copy | 0 of 20 | 1 of 20 | 1 of 20 | 19 of 20 | 19 of 20 |
-| A3: 1000 blind guesses on fork 3 | 0 of 1000 | 0 of 1000 | 0 of 1000 | 1000 of 1000 | 1 of 1 fork |
-| B: public field only | 20 of 20 | 20 of 20 | 20 of 20 | 0 of 20 | 0 of 20 |
+| Attack | Sent | Plain fleet compromised | Renamed copies compromised, platform scan bypassed | Compromised through the platform | Refused by the platform | Moved to a new copy |
+| :-- | :-- | :-- | :-- | :-- | :-- | :-- |
+| A: built from upstream's source | 20 requests to 20 forks | 20 of 20 | 0 of 20 | 0 of 20 | 20 of 20 | 20 of 20 attacked forks |
+| A2: built from fork 7's leaked copy | 20 requests to 20 forks | 0 of 20 | 1 of 20 | 1 of 20 | 19 of 20 | 19 of 20 attacked forks |
+| A3: 1000 blind guesses on fork 3 | 1000 requests to 1 fork | 0 of 1000 | 0 of 1000 | 0 of 1000 | 1000 of 1000 | 1 of 1 attacked fork |
+| B: public field only | 20 requests to 20 forks | 20 of 20 | 20 of 20 | 20 of 20 | 0 of 20 | 0 of 20 attacked forks |
 
-The first three result columns count requests that released a held research dose (7 mg) while an identified patient was in context and no attestation was given. The plain fleet's requests go straight to each fork's plain code, and the test checks that the platform with installation off answers every one of them the same way. The "scan bypassed" column sends each request straight to the fork's renamed copy, as if the tripwire scan were skipped. "Refused" counts requests, and "Moved to a new copy" counts forks. Every copy renamed all 74 names and answered all 70 test requests like the plain fork, with 0 differences. After fork 7 moved to a new copy, its leaked names were refused there too.
+Compromised and refused count requests out of those sent; moved to a new copy counts the forks attacked. A request compromised a fork when it released a held research dose (7 mg) while an identified patient was in context and no attestation was given. The plain fleet's requests go straight to each fork's plain code, and the test checks that the platform with installation off answers every one of them the same way. The "scan bypassed" column sends each request straight to the fork's renamed copy, as if the tripwire scan were skipped. Every copy renamed all 74 names and answered all 70 test requests like the plain fork, with 0 differences. After fork 7 moved to a new copy, its leaked names were refused there too.
 
 The limits, stated plainly: renaming cannot stop a bug that public fields alone reach, so attack B works on every copy. A leaked copy works on its own fork until that fork rotates (attack A2). These results come from tests; nothing has run on the deployed site yet.
 

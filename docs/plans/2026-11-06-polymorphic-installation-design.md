@@ -88,14 +88,14 @@ A fixture release changes one line in `app/cards.ts`: display options from `cont
 
 Twenty forks on the fixture release, run through the real loader, gate, and ask path with in-memory fakes for Artifacts and the Worker Loader. The test sends each request four ways: to each fork's plain code, through the ask path with installation off, to each renamed copy with nothing scanning the request, and through the ask path with the copies installed. Installation off must answer every request as the plain code did, so the plain fleet stands for it. The test measures what compromised a fork, what the platform refused, which rotations started, and the equivalence check of every copy. `npm run polymorph:demo` prints the scoreboard, and these are its results. The Polymorph view replays a recording of this experiment, `platform/public/data/polymorph-demo.json`.
 
-| Attack | Plain fleet | Renamed copies, scan bypassed | Through the platform | Refused | Moved to a new copy |
-| :-- | :-- | :-- | :-- | :-- | :-- |
-| A: built from upstream's source | 20 of 20 | 0 of 20 | 0 of 20 | 20 of 20 | 20 of 20 |
-| A2: built from fork 7's leaked copy | 0 of 20 | 1 of 20 | 1 of 20 | 19 of 20 | 19 of 20 |
-| A3: 1000 blind guesses on fork 3 | 0 of 1000 | 0 of 1000 | 0 of 1000 | 1000 of 1000 | 1 of 1 fork |
-| B: public field only | 20 of 20 | 20 of 20 | 20 of 20 | 0 of 20 | 0 of 20 |
+| Attack | Sent | Plain fleet compromised | Renamed copies compromised, platform scan bypassed | Compromised through the platform | Refused by the platform | Moved to a new copy |
+| :-- | :-- | :-- | :-- | :-- | :-- | :-- |
+| A: built from upstream's source | 20 requests to 20 forks | 20 of 20 | 0 of 20 | 0 of 20 | 20 of 20 | 20 of 20 attacked forks |
+| A2: built from fork 7's leaked copy | 20 requests to 20 forks | 0 of 20 | 1 of 20 | 1 of 20 | 19 of 20 | 19 of 20 attacked forks |
+| A3: 1000 blind guesses on fork 3 | 1000 requests to 1 fork | 0 of 1000 | 0 of 1000 | 0 of 1000 | 1000 of 1000 | 1 of 1 attacked fork |
+| B: public field only | 20 requests to 20 forks | 20 of 20 | 20 of 20 | 20 of 20 | 0 of 20 | 0 of 20 attacked forks |
 
-The first three result columns count requests that released a held research dose (7 mg) while an identified patient was in context and no attestation was given. "Refused" counts requests, and "Moved to a new copy" counts forks.
+Compromised and refused count requests out of those sent; moved to a new copy counts the forks attacked. A request compromised a fork when it released a held research dose (7 mg) while an identified patient was in context and no attestation was given.
 
 - **Equivalence.** Every copy renamed 74 of the 74 listed names. On 20 of 20 forks the copy answered all 70 probe requests like the plain fork, with 0 differences.
 - **A.** The exploit built from upstream's source compromised the whole plain fleet and no renamed copy. Every fork refused it as a decoy and moved to a new copy.
