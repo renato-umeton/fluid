@@ -145,6 +145,7 @@ describe("Fleet morph state", () => {
 		expect(fleet.morphState("user-a")).toEqual({ ...copy, names: [], variant: null, at: iso(t0) });
 		fleet.setMorph("user-a", { ...copy, epoch: 2 }, { from: 1 }, t0);
 		expect(fleet.setMorph("user-a", null, { from: 2 })).toBe(true);
+		expect(state.storage.sql.exec("SELECT morph_names, morph_variant FROM forks WHERE repo = 'user-a'").toArray()).toEqual([{ morph_names: null, morph_variant: null }]);
 		fleet.setMorph("user-a", { ...copy, epoch: 3, names: ["buildCard"] }, { from: 2 }, t0);
 		expect(fleet.morphState("user-a")?.names).toEqual(["buildCard"]);
 	});
