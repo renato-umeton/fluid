@@ -189,32 +189,46 @@ function researchAnswer(card: AnswerCardLike, where: string): ResearchAnswer {
 	throw new Error(`${where}: the research answer is neither held nor released: ${JSON.stringify({ mode: card.mode, research: research?.mode ?? null, computed_dose: dose, requires_attestation: research?.requires_attestation ?? null })}`);
 }
 
-/** Each built-in's own properties, names and symbols, by key, as their descriptors. */
+/** Own properties, names and symbols, as their descriptors, by object: "globalThis", a global's name, or "<name>.prototype". */
 type BuiltIns = Record<string, Map<PropertyKey, PropertyDescriptor>>;
 
+const ownProperties = (target: object) => new Map(Reflect.ownKeys(target).map((key) => [key, Object.getOwnPropertyDescriptor(target, key)!]));
+const isObject = (value: unknown): value is object => (typeof value === "object" || typeof value === "function") && value !== null;
+
 /**
- * The own properties of the built-ins that every fake isolate shares with the
- * platform and the test (helpers/fake-loader.ts): if an attack added,
- * removed, or replaced one, it could have reached forks it never asked, and
- * the counts would not hold.
+ * The own properties of the global object; of each object or function a
+ * global data property holds (Object, JSON, Math, String, ...); and of that
+ * value's prototype property (Object.prototype, Array.prototype,
+ * String.prototype, ...). Every fake isolate shares them with the platform
+ * and the test (helpers/fake-loader.ts), so an attack that added, removed, or
+ * replaced one could have reached forks it never asked, and the counts would
+ * not hold. Accessor globals (process, crypto, ...) are compared as their
+ * getters and setters and never read, so taking a snapshot changes nothing.
  */
 function builtInsSnapshot(): BuiltIns {
-	const own = (target: object) => new Map(Reflect.ownKeys(target).map((key) => [key, Object.getOwnPropertyDescriptor(target, key)!]));
-	return { "Object.prototype": own(Object.prototype), "Array.prototype": own(Array.prototype), "Function.prototype": own(Function.prototype), globalThis: own(globalThis) };
+	const snapshot: BuiltIns = { globalThis: ownProperties(globalThis) };
+	for (const [key, descriptor] of snapshot.globalThis!) {
+		if (!("value" in descriptor) || !isObject(descriptor.value)) continue;
+		snapshot[String(key)] = ownProperties(descriptor.value);
+		const prototype = Object.getOwnPropertyDescriptor(descriptor.value, "prototype");
+		if (prototype !== undefined && "value" in prototype && isObject(prototype.value)) snapshot[`${String(key)}.prototype`] = ownProperties(prototype.value);
+	}
+	return snapshot;
 }
 
 const DESCRIPTOR_FIELDS = ["value", "get", "set", "writable", "enumerable", "configurable"] as const;
 
 /**
- * The own properties added, removed, or changed since `before`: a value,
- * getter, or setter that is another object (compared by identity, so a
- * look-alike replacement counts), or other attributes.
+ * The own properties added, removed, or changed since `before`, on the
+ * objects `before` holds: a value, getter, or setter that is another object
+ * (compared by identity, so a look-alike replacement counts), or other
+ * attributes.
  */
 function builtInsChangedSince(before: BuiltIns): string[] {
 	const after = builtInsSnapshot();
 	const changes: string[] = [];
 	for (const [builtIn, properties] of Object.entries(before)) {
-		const now = after[builtIn]!;
+		const now = after[builtIn] ?? new Map<PropertyKey, PropertyDescriptor>();
 		for (const key of new Set([...properties.keys(), ...now.keys()])) {
 			const was = properties.get(key);
 			const is = now.get(key);
@@ -404,8 +418,8 @@ function recordRotation(fork: Fork, result: RotationResult): void {
 
 /**
  * Runs one attack from the installed fleet, then each rotation it started, as
- * the rotate workflow would. Built-ins must be as they were before the
- * experiment once it is done.
+ * the rotate workflow would. Once it is done, the built-ins must be as
+ * `before` (taken after the control) found them.
  */
 async function attack(forks: Fork[], plan: Attack, before: BuiltIns): Promise<AttackRun> {
 	restoreInstalled(forks);
@@ -531,7 +545,6 @@ describe(`a fleet of ${FLEET} forks on a release with a planted zero-day`, () =>
 	it(
 		"installs a renamed copy per fork, then measures four exploits on the plain fleet, on the copies, and through the platform",
 		async () => {
-			const before = builtInsSnapshot();
 			const forks = await install();
 			const everyFork = (request: Record<string, unknown>) => forks.map((fork) => ({ repo: fork.repo, request }));
 
@@ -545,6 +558,8 @@ describe(`a fleet of ${FLEET} forks on a release with a planted zero-day`, () =>
 					expect(researchAnswer(await askLoaded(loaded, attested), loaded.isolateId), `${loaded.isolateId}: attested answer`).toBe("released");
 				}
 			}
+			// Taken once the control has run every path, so what a first request sets up for good (a global made on first use) is in it.
+			const before = builtInsSnapshot();
 
 			const a = await attack(
 				forks,
