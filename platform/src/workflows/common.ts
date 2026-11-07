@@ -321,8 +321,15 @@ export function copyKey(copy: { epoch: number }, now = Date.now()): string {
 	return `c${copy.epoch}-t${Math.floor(now / LIVE_ROTATION_WINDOW_MS).toString(36)}`;
 }
 
-/** The key of a new fork's first rotation, which installs it as a renamed copy: one per fork. */
-export const INSTALL_KEY = "install";
+/**
+ * The key of a new fork's first rotation, which installs it as a renamed
+ * copy: one per fork, named by when the fleet registered it, so a fork
+ * deleted and created again under the same name installs again rather than
+ * find the earlier fork's rotation.
+ */
+export function installKey(fork: { createdAt: string }): string {
+	return `i${Date.parse(fork.createdAt).toString(36)}`;
+}
 
 /** The key of a commit that landed on main: one rotation per landing, however often its gate run is replayed. */
 export function landedKey(commit: string): string {

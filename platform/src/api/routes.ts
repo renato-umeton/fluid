@@ -32,7 +32,7 @@ import { headOf, isNotFound, openRepo, readTextFile } from "../runtime/repo-file
 import { parseUiPreferences, UI_PREFERENCES_PATH } from "../ui/preferences.ts";
 import { aggregateCharts, CHART_LIMITS } from "../ui/charts.ts";
 import { DEMO_OVERLAY, demoReleaseFiles, keepFloorTightening } from "../stock/releases.ts";
-import { appExports, ensureRun, INSTALL_KEY, landedKey, mainBeforePush, recordMainBeforePush, repoRemote, startGateInstance, startRotation, startYellowRun } from "../workflows/common.ts";
+import { appExports, ensureRun, installKey, landedKey, mainBeforePush, recordMainBeforePush, repoRemote, startGateInstance, startRotation, startYellowRun } from "../workflows/common.ts";
 import { rerunTargets, upgradeTargets } from "../workflows/upgrade.ts";
 import { decodeParam, HttpError, json, readJson, requireJsonPost, requireString } from "./http.ts";
 import { askRef, parsePreferences } from "./validate.ts";
@@ -261,7 +261,8 @@ route("POST", "/api/forks", async (rc) => {
 	const info = await provisionFork(rc.env, { userId: session.userId, persona, preferences, maxTotal: LIMITS.forksTotal });
 	forkInfoCache.delete(info.repo);
 	// A new fork installs as a renamed copy: its first rotation verifies one and stores it.
-	if (provisions && info.status === "pinned") await startRotation(rc.env, appExports(rc.ctx).RotateWorkflow, { repo: info.repo, reason: "install", key: INSTALL_KEY });
+	const fork = provisions ? await fleetStub(rc.env).get(info.repo) : null;
+	if (fork?.status === "pinned") await startRotation(rc.env, appExports(rc.ctx).RotateWorkflow, { repo: info.repo, reason: "install", key: installKey(fork) });
 	return json(info, 201);
 });
 

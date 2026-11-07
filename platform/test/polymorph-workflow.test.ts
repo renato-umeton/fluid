@@ -11,7 +11,7 @@ import * as entry from "../src/index.ts";
 import { forkRepoName } from "../src/lib/names.ts";
 import { runsStub } from "../src/stubs.ts";
 import { deriveSeed, fingerprint } from "../src/polymorph/names.ts";
-import { copyKey, GATE_STEP, INSTALL_KEY, LIVE_ROTATION_WINDOW_MS, rotationId, startRotation, type RotateParams } from "../src/workflows/common.ts";
+import { copyKey, GATE_STEP, installKey, LIVE_ROTATION_WINDOW_MS, rotationId, startRotation, type RotateParams } from "../src/workflows/common.ts";
 import { SeedForkWorkflow } from "../src/workflows/fleet.ts";
 import { GateWorkflow } from "../src/workflows/gate.ts";
 import { RotateWorkflow } from "../src/workflows/rotate.ts";
@@ -112,8 +112,8 @@ describe("RotateWorkflow with a repo", () => {
 		"keeps the copy's fingerprint out of what anyone reading the run by its id sees, even when the gate refused the copy",
 		async () => {
 			const repo = "user-reflective";
-			// An install rotation's run id is rot-<fork hash>-install: anyone who knows the fork's name can work it out.
-			const runId = `run_${rotationId(repo, INSTALL_KEY)}`;
+			// An install rotation's run id is rot-<fork hash>-i<registration time>: anyone who knows the fork can work it out.
+			const runId = `run_${rotationId(repo, installKey(p.t.fleet.get(repo)!))}`;
 			const epoch = (p.t.fleet.morphState(repo)?.epoch ?? 0) + 1;
 			const refused = await fingerprint(await deriveSeed(POLYMORPH_TEST_SECRET, repo, p.heads[repo]!, epoch));
 			const { output } = await runRotate(p.t.env, { repo, reason: "install", runId }, runId.slice("run_".length));
@@ -393,12 +393,26 @@ describe("a new fork", () => {
 		const { workflows, statuses } = watched();
 		const cookie = await cookieFor({ userId: "s-new1" });
 		expect((await worker.fetch(post("/api/forks", { cookie }), p.t.env, workflows.ctx)).status).toBe(201);
-		const id = rotationId("user-s-new1", "install");
+		const id = rotationId("user-s-new1", installKey(p.t.fleet.get("user-s-new1")!));
 		expect(workflows.of("RotateWorkflow")).toEqual([{ workflow: "RotateWorkflow", id, params: { repo: "user-s-new1", reason: "install", runId: `run_${id}` } }]);
 		expect(statuses).toEqual(["pinned"]);
 		// Asking again for the fork the session already has provisions nothing, and starts nothing.
 		expect((await worker.fetch(post("/api/forks", { cookie }), p.t.env, workflows.ctx)).status).toBe(201);
 		expect(workflows.of("RotateWorkflow")).toHaveLength(1);
+	});
+
+	it("installs a fork deleted and created again under the same name as a renamed copy again", async () => {
+		const { workflows } = watched();
+		const cookie = await cookieFor({ userId: "s-again" });
+		const now = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-06T10:00:00Z"));
+		await worker.fetch(post("/api/forks", { cookie }), p.t.env, workflows.ctx);
+		const first = installKey(p.t.fleet.get("user-s-again")!);
+		p.t.fleet.remove("user-s-again");
+		now.mockReturnValue(Date.parse("2026-11-06T11:00:00Z"));
+		await worker.fetch(post("/api/forks", { cookie }), p.t.env, workflows.ctx);
+		const second = installKey(p.t.fleet.get("user-s-again")!);
+		expect(second).not.toBe(first);
+		expect(workflows.of("RotateWorkflow").map((instance) => instance.id)).toEqual([rotationId("user-s-again", first), rotationId("user-s-again", second)]);
 	});
 
 	it("installs as a renamed copy when the seed workflow has provisioned it and pinned it", async () => {
@@ -410,7 +424,7 @@ describe("a new fork", () => {
 		const steps = fakeSteps();
 		await seed.run({ payload: { batch: "poly", index: spec.index, count: 40, stockTag: TAG }, timestamp: new Date(), instanceId: `seed-poly-${spec.index}`, workflowName: "fluid-seed-fork" } as never, steps.step as never);
 		const repo = forkRepoName(spec.userId);
-		const id = rotationId(repo, "install");
+		const id = rotationId(repo, installKey(p.t.fleet.get(repo)!));
 		expect(workflows.of("RotateWorkflow")).toEqual([{ workflow: "RotateWorkflow", id, params: { repo, reason: "install", runId: `run_${id}` } }]);
 		expect(statuses).toEqual(["pinned"]);
 		expect(steps.names()).toEqual(["provision", "ready", "rotate the new fork"]);
