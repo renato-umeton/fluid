@@ -54,8 +54,12 @@ export function fakeWorkflows(extra: Record<string, unknown> = {}, options: { on
 	};
 }
 
-/** A workflow step stand-in that runs every step at once, records its name and config, and copies its result as the engine stores it. */
-export function fakeSteps() {
+/**
+ * A workflow step stand-in that runs every step at once, records its name and
+ * config, and copies its result as the engine stores it. A sleep returns at
+ * once, after onSleep (what the world does meanwhile) has run.
+ */
+export function fakeSteps(options: { onSleep?: (name: string) => void } = {}) {
 	const done: { name: string; config?: unknown }[] = [];
 	const slept: string[] = [];
 	const step = {
@@ -63,7 +67,10 @@ export function fakeSteps() {
 			done.push({ name, ...(rest.length > 1 ? { config: rest[0] } : {}) });
 			return structuredClone(await (rest.at(-1) as () => Promise<unknown>)());
 		},
-		sleep: async (name: string) => void slept.push(name),
+		sleep: async (name: string) => {
+			slept.push(name);
+			options.onSleep?.(name);
+		},
 		waitForEvent: async () => {
 			throw new Error("these tests send no events");
 		},

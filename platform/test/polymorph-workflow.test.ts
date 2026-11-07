@@ -54,6 +54,8 @@ beforeAll(() => {
 		"user-reflective": REFLECTIVE,
 		"user-landed": { ...PUBLISHED, "app/landed.ts": "export const landed = 1;\n" },
 		"user-unmoved": { ...PUBLISHED, "app/unmoved.ts": "export const unmoved = 1;\n" },
+		"user-waits": { ...PUBLISHED, "app/waits.ts": "export const waits = 1;\n" },
+		"user-always-busy": { ...PUBLISHED, "app/busy.ts": "export const busy = 1;\n" },
 	});
 	for (const repo of Object.keys(p.heads)) p.t.fleet.register({ repo, userId: repo.replace(/^user-/, ""), persona: "p", pinnedTag: TAG, status: "pinned" });
 });
@@ -65,9 +67,8 @@ afterEach(() => {
 });
 
 /** Runs one RotateWorkflow instance to its end; a scheduled instance has no payload. */
-async function runRotate(env: Env, payload: RotateParams | undefined, instanceId = "rot-test", workflows = fakeWorkflows(NO_MODEL)) {
+async function runRotate(env: Env, payload: RotateParams | undefined, instanceId = "rot-test", workflows = fakeWorkflows(NO_MODEL), steps = fakeSteps()) {
 	const workflow = Object.assign(new RotateWorkflow(), { env, ctx: workflows.ctx });
-	const steps = fakeSteps();
 	const event = { payload, timestamp: new Date(), instanceId, workflowName: "fluid-rotate", ...(payload === undefined ? { schedule: { cron: "0 */6 * * *", scheduledTime: Date.now() } } : {}) };
 	const output = await workflow.run(event as never, steps.step as never);
 	return { output, workflows, steps };
@@ -125,6 +126,33 @@ describe("RotateWorkflow with a repo", () => {
 		},
 		SLOW_MS,
 	);
+
+	it(
+		"waits for a fork that is busy, a minute at a time, and rotates it once it is free",
+		async () => {
+			p.t.fleet.update("user-waits", { status: "gating" });
+			// The fork's gate finishes while the workflow sleeps.
+			const steps = fakeSteps({ onSleep: () => p.t.fleet.update("user-waits", { status: "pinned" }) });
+			const { output } = await runRotate(p.t.env, { repo: "user-waits", reason: "landed", runId: "run_rotate_waits" }, "rot-waits", fakeWorkflows(NO_MODEL), steps);
+			expect(output).toMatchObject({ outcome: "rotated", repo: "user-waits", reason: "landed", epoch: 1 });
+			expect(steps.slept).toEqual(["wait while busy 1"]);
+			expect(steps.done.filter((entry) => entry.name.startsWith("rotate"))).toEqual([
+				{ name: "rotate", config: GATE_STEP },
+				{ name: "rotate 1", config: GATE_STEP },
+			]);
+			expect(await runsStub(p.t.env, "run_rotate_waits").get()).toMatchObject({ status: "passed", outcome: "rotated" });
+		},
+		SLOW_MS,
+	);
+
+	it("gives up to the schedule after five waits for a fork that stays busy", async () => {
+		p.t.fleet.update("user-always-busy", { status: "gating" });
+		const steps = fakeSteps();
+		const { output } = await runRotate(p.t.env, { repo: "user-always-busy", reason: "install", runId: "run_rotate_busy" }, "rot-busy", fakeWorkflows(NO_MODEL), steps);
+		expect(output).toEqual({ outcome: "skipped", repo: "user-always-busy", reason: "install", why: "the fork is gating", busy: true });
+		expect(steps.slept).toEqual(["wait while busy 1", "wait while busy 2", "wait while busy 3", "wait while busy 4", "wait while busy 5"]);
+		expect(await runsStub(p.t.env, "run_rotate_busy").get()).toMatchObject({ status: "cancelled", cancelReason: "the fork is gating" });
+	});
 
 	it("logs a skipped rotation as cancelled, saying why", async () => {
 		const runId = "run_rotate_skipped";

@@ -167,7 +167,7 @@ describe("rotateFork", () => {
 	it.each(["provisioning", "upgrading", "gating"] as const)("skips a fork that is %s, without running a gate", async (status) => {
 		p.t.fleet.update("user-busy", { status });
 		const built = p.loader.built.length;
-		expect(await rotateFork(p.deps, "user-busy", "schedule")).toEqual({ outcome: "skipped", repo: "user-busy", reason: "schedule", why: `the fork is ${status}` });
+		expect(await rotateFork(p.deps, "user-busy", "schedule")).toEqual({ outcome: "skipped", repo: "user-busy", reason: "schedule", why: `the fork is ${status}`, busy: true });
 		expect(p.loader.built.length).toBe(built);
 		expect(p.t.fleet.morphState("user-busy")).toBeNull();
 	});

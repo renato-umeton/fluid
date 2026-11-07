@@ -29,8 +29,12 @@ export type RotationResult =
 	 * cleared: the stored copy no longer builds, so it was cleared instead.
 	 */
 	| { outcome: "refused"; repo: string; reason: RotationReason; epoch: number; sha: string; failures: GateFailure[]; more: number; cleared?: true }
-	/** Nothing ran or nothing changed, and why. cleared: the stored copy no longer builds, so it was cleared. */
-	| { outcome: "skipped"; repo: string; reason: RotationReason; why: string; cleared?: true };
+	/**
+	 * Nothing ran or nothing changed, and why. busy: the fork was being
+	 * provisioned, upgraded, or gated, so a later try may rotate it. cleared:
+	 * the stored copy no longer builds, so it was cleared.
+	 */
+	| { outcome: "skipped"; repo: string; reason: RotationReason; why: string; busy?: true; cleared?: true };
 
 /** Statuses whose main is about to change or whose gate is running: a rotation now would check the wrong code or race it. */
 const BUSY: ReadonlySet<string> = new Set(["provisioning", "upgrading", "gating"]);
@@ -56,7 +60,7 @@ export async function rotateFork(deps: RuntimeDeps, repo: string, reason: Rotati
 	const fork = await fleet.get(repo);
 	if (!fork) return skipped("the fork is not in the fleet");
 	const current = await fleet.morphState(repo);
-	const result = BUSY.has(fork.status) ? skipped(`the fork is ${fork.status}`) : await nextCopy(deps, repo, reason, current);
+	const result: RotationResult = BUSY.has(fork.status) ? { outcome: "skipped", repo, reason, why: `the fork is ${fork.status}`, busy: true } : await nextCopy(deps, repo, reason, current);
 	if (reason !== "mismatch" || result.outcome === "rotated" || current === null) return result;
 	return (await clearUnbuildable(deps, repo, current)) ? { ...result, cleared: true } : result;
 }

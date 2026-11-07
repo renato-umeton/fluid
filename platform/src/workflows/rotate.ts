@@ -19,6 +19,14 @@ import { FAN_OUT } from "./upgrade.ts";
 const ROTATE_STEP = "Rotate to the next renamed copy";
 const FLEET_STEP = "Rotate every fork";
 const NO_SECRET = "POLYMORPH_SECRET is not set or is shorter than 16 characters";
+/**
+ * How many times, and how long apart, a rotation of one fork waits for the
+ * fork to stop being busy (a gate, an upgrade, provisioning) before it leaves
+ * the fork to the schedule: a landed or install rotation would otherwise be
+ * lost whenever another gate happened to run.
+ */
+export const BUSY_RETRIES = 5;
+const BUSY_WAIT = "1 minute";
 
 export class RotateWorkflow extends WorkflowEntrypoint<Env, RotateParams> {
 	async run(event: Readonly<WorkflowEvent<RotateParams>>, workflowStep: WorkflowStep) {
@@ -39,7 +47,17 @@ export class RotateWorkflow extends WorkflowEntrypoint<Env, RotateParams> {
 			return true;
 		});
 		// rotateFork throws, like runGate, when Artifacts fails, so this step retries rather than skip.
-		const result = await step.do("rotate", GATE_STEP, () => rotateFork({ env: this.env, exports: appExports(this.ctx) }, repo, reason));
+		const rotate = () => rotateFork({ env: this.env, exports: appExports(this.ctx) }, repo, reason);
+		let result = await step.do("rotate", GATE_STEP, rotate);
+		for (let attempt = 1; attempt <= BUSY_RETRIES && result.outcome === "skipped" && result.busy; attempt++) {
+			const why = result.why;
+			await step.do(`note busy ${attempt}`, async () => {
+				await log.step(ROTATE_STEP, "running", `${why[0]!.toUpperCase()}${why.slice(1)}; trying again in a minute (${attempt} of ${BUSY_RETRIES})`);
+				return true;
+			});
+			await step.sleep(`wait while busy ${attempt}`, BUSY_WAIT);
+			result = await step.do(`rotate ${attempt}`, GATE_STEP, rotate);
+		}
 		await step.do("finish", async () => {
 			const shown = runOutcome(result);
 			await log.step(ROTATE_STEP, shown.step, shown.detail);
