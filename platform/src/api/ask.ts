@@ -124,10 +124,12 @@ async function deliver(deps: RuntimeDeps, input: Omit<ServeAskInput, "fallback">
  * copy's guard (enforceGuard). At the copy's commit the copy itself answers,
  * with the model off: useModel comes from the request, so serving the plain
  * fork for it would let any request bypass the copy, and the gate verified
- * the copy with the model off. At any other commit (another branch or tag, or
- * main before the rotation of the commit it moved to stores a copy) the plain
- * fork answers as before, model and all. A fork with no copy, or a platform
- * without a secret, answers plain as before.
+ * the copy with the model off. The model stays off there when the copy did
+ * not load and the guard lets the plain fork answer instead. At any other
+ * commit (another branch or tag, or main before the rotation of the commit
+ * it moved to stores a copy) the plain fork answers as before, model and
+ * all. A fork with no copy, or a platform without a secret, answers plain as
+ * before.
  */
 async function askOwnFork(deps: AskDeps, input: { repo: string; ref: string; request: Record<string, unknown>; useModel: boolean; copy: MorphState | null }): Promise<Answer> {
 	const { repo, ref, request, copy } = input;
