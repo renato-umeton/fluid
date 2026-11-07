@@ -11,7 +11,7 @@ import { STOCK_REPO } from "../lib/names.ts";
 import { polymorphSecret } from "../polymorph/install.ts";
 import { scanRequest, type TripwireHit } from "../polymorph/tripwire.ts";
 import { askFork, askLoaded, buildStoredCopy, FORK_CALL_TIMEOUT_MS, loadForkRuntime, storedCopy, withTimeout, type AnswerCardLike, type LoadedCopy, type PlainLoad, type RuntimeDeps } from "../runtime/loader.ts";
-import { resolveCommit, shortRef } from "../runtime/refs.ts";
+import { resolveCommit } from "../runtime/refs.ts";
 import { openRepo } from "../runtime/repo-files.ts";
 import type { RunTimeRecord } from "../durable/user-ledger.ts";
 import { fleetStub, ledgerStub } from "../stubs.ts";
@@ -110,21 +110,22 @@ export async function serveAsk(deps: AskDeps, input: ServeAskInput): Promise<Ser
 async function askOwnFork(deps: AskDeps, input: { repo: string; ref: string; request: Record<string, unknown>; useModel: boolean; copy: MorphState | null }): Promise<Answer> {
 	const { repo, ref, request, copy } = input;
 	if (copy === null || polymorphSecret(deps.env) === null) return { ...(await askFork(deps, { repo, ref, request, useModel: input.useModel })), variant: null };
+	// Resolved once: both loads below take this commit, so a push landing now cannot slip another commit under the check.
 	const commit = await commitOf(deps.env, repo, ref);
 	if (commit === copy.sha) {
-		// Loaded at the commit just checked, so a push landing now cannot slip another commit under the copy.
-		const loaded = await loadForkRuntime(deps, repo, copy.sha, { useModel: false, morph: storedCopy(copy) });
+		const loaded = await loadForkRuntime(deps, repo, ref, { commit, useModel: false, morph: storedCopy(copy) });
 		if (loaded.morph) await checkTripwires(deps, repo, request, loaded.morph);
 		else await copyDidNotLoad(deps, repo, copy, loaded.plain);
 		const card = await withTimeout(askLoaded(loaded, request, { useModel: false }), FORK_CALL_TIMEOUT_MS, `fork ${repo} did not answer`);
-		return { card, sha: loaded.sha, ref: shortRef(ref), variant: loaded.morph?.fingerprint ?? null };
+		return { card, sha: loaded.sha, ref: loaded.ref, variant: loaded.morph?.fingerprint ?? null };
 	}
 	// The stored copy is made (from the cache once made) but never started: only its names are needed here.
 	const stored = await buildStoredCopy(deps, repo, copy);
 	if (stored.copy) await checkTripwires(deps, repo, request, stored.copy);
 	else await copyDidNotLoad(deps, repo, copy, stored.plain);
-	// Asked at the commit just checked, but answered under the ref as asked.
-	return { ...(await askFork(deps, { repo, ref: commit, request, useModel: input.useModel })), ref: shortRef(ref), variant: null };
+	const loaded = await loadForkRuntime(deps, repo, ref, { commit, useModel: input.useModel });
+	const card = await withTimeout(askLoaded(loaded, request, { useModel: input.useModel }), FORK_CALL_TIMEOUT_MS, `fork ${repo} did not answer`);
+	return { card, sha: loaded.sha, ref: loaded.ref, variant: null };
 }
 
 /**

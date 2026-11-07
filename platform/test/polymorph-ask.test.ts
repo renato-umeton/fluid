@@ -79,6 +79,7 @@ beforeAll(() => {
 	const ahead = p.t.artifacts.seed("user-ahead", { commits: [{ ...PUBLISHED, "app/ahead.ts": "export const ahead = 1;\n" }, { ...PUBLISHED, "app/ahead.ts": "export const ahead = 2;\n" }], branches: { main: 0, "work/next": 1 } });
 	p.heads["user-ahead"] = ahead.commits[0]!;
 	aheadCommit = ahead.commits[1]!;
+	p.heads["user-reads"] = p.t.artifacts.seed("user-reads", { commits: [{ ...PUBLISHED, "app/reads.ts": "export const reads = 1;\n" }, { ...PUBLISHED, "app/reads.ts": "export const reads = 2;\n" }], branches: { main: 0, "work/next": 1 } }).commits[0]!;
 	for (const repo of Object.keys(p.heads)) p.t.fleet.register({ repo, userId: repo.slice(5), persona: "p", pinnedTag: TAG, status: "pinned" });
 	deps = { env: p.t.env, exports: workflows.exports as never };
 });
@@ -458,6 +459,22 @@ describe("serveAsk on another ref of a fork with a copy", () => {
 			expect(card.fork).toEqual({ repo: "user-asbuilt", ref: p.heads["user-asbuilt"], commit: p.heads["user-asbuilt"] });
 			expect(p.t.fleet.securityEvents("user-asbuilt")).toEqual([]);
 			expect(rotationsOf("user-asbuilt")).toEqual([]);
+		},
+		SLOW_MS,
+	);
+});
+
+describe("the live path's reads", () => {
+	it(
+		"resolves the ref once for an ask on a fork with a copy, at the copy's commit and at another",
+		async () => {
+			await storeCopy("user-reads", 1);
+			const log = vi.spyOn(p.t.artifacts.repos.get("user-reads")!.git, "log");
+			await ask("user-reads", requests.administrative);
+			expect(log).toHaveBeenCalledTimes(1);
+			log.mockClear();
+			await serveAsk(deps, { repo: "user-reads", ref: "work/next", request: requests.administrative, useModel: false, userId: "reads", fallback: false });
+			expect(log).toHaveBeenCalledTimes(1);
 		},
 		SLOW_MS,
 	);

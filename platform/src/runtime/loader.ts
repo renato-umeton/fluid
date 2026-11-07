@@ -14,7 +14,7 @@ import type { SkippedName } from "../polymorph/list.ts";
 import { unmorphText } from "../polymorph/morph.ts";
 import { clearStockCaches } from "../stock/suite.ts";
 import { buildE2ERunnerModuleMap, buildModuleMap, buildRunnerModuleMap, isRuntimePath, RUNTIME_DIRS, type ModuleMap } from "./modules.ts";
-import { resolveCommit, shortRef } from "./refs.ts";
+import { isSha, resolveCommit, shortRef } from "./refs.ts";
 import { clearBlobCache, openRepo, readCommitFiles } from "./repo-files.ts";
 
 export const RUNTIME_COMPATIBILITY_DATE = "2026-10-01";
@@ -132,6 +132,12 @@ export interface LoadOptions {
 	 * fails a load.
 	 */
 	morph?: { epoch: number; onlyAt?: string; fingerprint?: string; namesHash?: string };
+	/**
+	 * The commit ref is at, when the caller has just resolved it: the loader
+	 * loads it without resolving ref again, which saves a round trip to
+	 * Artifacts on the live path. LoadedFork.ref is still ref as asked.
+	 */
+	commit?: string;
 }
 
 /**
@@ -322,9 +328,11 @@ export async function buildStoredCopy(deps: RuntimeDeps, repoName: string, state
 /** Resolves `ref` (branch, tag, or SHA) in `repoName` and returns an RPC handle to its runtime. */
 export async function loadForkRuntime(deps: RuntimeDeps, repoName: string, ref = "main", options: LoadOptions = {}): Promise<LoadedFork> {
 	if (options.extraFiles && !options.variant) throw new Error("loadForkRuntime: extraFiles requires a variant");
+	if (options.commit !== undefined && !isSha(options.commit)) throw new Error(`loadForkRuntime: commit must be a full commit id, got ${JSON.stringify(options.commit)}`);
 	const short = shortRef(ref);
 	let sha: string;
-	{
+	if (options.commit !== undefined) sha = options.commit;
+	else {
 		using repo = await openRepo(deps.env.ARTIFACTS, repoName);
 		sha = await resolveCommit(repo, short);
 	}

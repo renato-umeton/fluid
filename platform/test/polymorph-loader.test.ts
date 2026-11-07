@@ -652,3 +652,16 @@ describe("buildStoredCopy", () => {
 		expect(warn).toHaveBeenCalledTimes(1);
 	});
 });
+
+describe("loadForkRuntime with a commit the caller resolved", () => {
+	it("loads that commit without resolving the ref again, and keeps the ref as asked", async () => {
+		const log = vi.spyOn(t.artifacts.repos.get("user-1")!.git, "log");
+		const loaded = await loadForkRuntime(deps, "user-1", "main", { commit: heads["user-1"]! });
+		expect([loaded.ref, loaded.sha, loaded.isolateId]).toEqual(["main", heads["user-1"], `user-1:${heads["user-1"]}`]);
+		expect(log).not.toHaveBeenCalled();
+	});
+
+	it("refuses a commit that is not a full commit id", async () => {
+		await expect(loadForkRuntime(deps, "user-1", "main", { commit: "main" })).rejects.toThrow(/commit must be a full commit id/);
+	});
+});
