@@ -19,7 +19,7 @@ import { copyKey, errorText, startRotation, type RotateParams, type WorkflowBind
 import { HttpError } from "./http.ts";
 import { hasClinicalDose, markSafety, SAFETY_SIGNALS } from "./safety.ts";
 
-/** The runtime, plus on production main the rotate workflow that a request tripping a copy's wire starts. */
+/** The runtime, plus the rotate workflow, which a request tripping a fork's copy (on any ref) or a copy that no longer loads starts. */
 export interface AskDeps extends RuntimeDeps {
 	exports: RuntimeDeps["exports"] & { RotateWorkflow?: WorkflowBinding<RotateParams> };
 }
