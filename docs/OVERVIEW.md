@@ -51,7 +51,7 @@ Releases are `vMAJOR.MINOR.PATCH` tags. The platform writes `releases/<tag>.json
 - **Forks.** Provisioning from an upstream tag, sessions, and quotas.
 - **Runtime.** One Worker Loader isolate per fork commit, keyed by repo and sha, with no network. The gate's test runner runs in a separate isolate built only from upstream files and reaches the fork through one `ask` RPC. The soak's runner reaches the live fork through a small set of platform calls.
 - **Gate.** The three tiers, published pins only, pins that only move forward, append-only intent records, and `main` that only fast-forwards.
-- **Polymorphic installation.** Each fork can run its own copy of upstream's code, with the names upstream lists renamed by a secret seed per fork, commit, and epoch. A check mode gate shows that the copy answers every probe like the plain fork before it goes live. Requests that use an original name are refused, and copies rotate every 6 hours and after changes land. It needs the optional `POLYMORPH_SECRET`. See [POLYMORPH.md](POLYMORPH.md).
+- **Polymorphic installation.** Each fork can run its own copy of upstream's code, with the names upstream lists renamed by a secret seed per fork, commit, and epoch. Before a copy goes live, a check mode gate shows that it answers every probe like the plain fork. A request whose keys use an original name is refused, and copies rotate every 6 hours and after changes land. It needs the optional `POLYMORPH_SECRET`. See [POLYMORPH.md](POLYMORPH.md).
 - **Yellow soak.** End-to-end runs against the live fork, browser checks, rollback by revert commit, and repair.
 - **Agents.** Customize (recipes or a model plan, checked before anything runs), the test suggester, merge, repair, intent replay, and harvest. Models run on Workers AI behind AI Gateway. Every decision about what merges is plain code.
 - **Outside agents.** A one hour token for a per-fork inbox repo. The platform imports `work/*` branches into the fork, and the gate decides.
@@ -76,7 +76,7 @@ These parts of the platform code assume the medical app. A second tenant would n
 - **Demo release.** `platform/src/stock/releases.ts` rewords a line in `app/cards.ts` and adds research cross-check invariants.
 - **Platform end-to-end scenarios and browser checks.** `PLATFORM_SCENARIOS` in `platform/src/yellow/tiers.ts` and the checks in `platform/src/yellow/browser.ts` ask the bedside dosing question and expect a clinical card with no dose.
 - **UI.** `platform/public/` renders medical answer cards, the context simulator, and charts by mode.
-- **Polymorph list (already in upstream).** Which internal names move is tenant-specific, so the list lives in upstream's `polymorph.json`, and a second tenant brings its own. The platform's polymorph code works with any list. Only the experiment's fixture release and its exploits are medical (`platform/test/fixtures/zero-day.ts`).
+- **Polymorph list (already in upstream).** Which internal names move is tenant-specific, so the list lives in upstream's `polymorph.json`, and a second tenant brings its own. The platform's polymorph code works with any list. Only the experiment's fixture release and its exploits are medical (`platform/test/fixtures/zero-day.ts`, `platform/test/polymorph-e2e.test.ts`, and `platform/test/helpers/polymorph-platform.ts`).
 
 ## Not built yet
 
