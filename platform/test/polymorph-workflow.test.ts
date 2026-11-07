@@ -73,7 +73,7 @@ afterEach(() => {
 
 /** Runs one RotateWorkflow instance to its end; a scheduled instance has no payload. */
 async function runRotate(env: Env, payload: RotateParams | undefined, instanceId = "rot-test", workflows = fakeWorkflows(NO_MODEL), steps = fakeSteps()) {
-	const workflow = Object.assign(new RotateWorkflow(), { env, ctx: workflows.ctx });
+	const workflow = new RotateWorkflow(workflows.ctx, env);
 	const event = { payload, timestamp: new Date(), instanceId, workflowName: "fluid-rotate", ...(payload === undefined ? { schedule: { cron: "0 */6 * * *", scheduledTime: Date.now() } } : {}) };
 	const output = await workflow.run(event as never, steps.step as never);
 	return { output, workflows, steps };
@@ -417,7 +417,7 @@ describe("the gate workflow after a merge mode pass", () => {
 	 * what it decided given; the tiers run for real.
 	 */
 	async function mergeGate(repo: string, workflows: ReturnType<typeof fakeWorkflows>, moved: Record<string, unknown>) {
-		const gate = Object.assign(new GateWorkflow(), { env: p.t.env, ctx: workflows.ctx });
+		const gate = new GateWorkflow(workflows.ctx, p.t.env);
 		Object.assign(gate, { checkChange: async () => ({ status: "ok", appendOnly: [], platformClaims: [] }), advanceMain: async () => moved });
 		const payload = { repo, branch: "work/change", commit: p.heads[repo]!, mode: "merge", source: "customize", runId: `run_gate_${repo}` };
 		const steps = fakeSteps();
@@ -502,7 +502,7 @@ describe("a new fork", () => {
 		// A seeded fork with no customization: provisioned, then pinned.
 		const spec = seedPlan("poly", 40).find((candidate) => candidate.kinds.join() === "none");
 		if (!spec) throw new Error("the seed plan has no fork without customizations");
-		const seed = Object.assign(new SeedForkWorkflow(), { env: p.t.env, ctx: workflows.ctx });
+		const seed = new SeedForkWorkflow(workflows.ctx, p.t.env);
 		const steps = fakeSteps();
 		await seed.run({ payload: { batch: "poly", index: spec.index, count: 40, stockTag: TAG }, timestamp: new Date(), instanceId: `seed-poly-${spec.index}`, workflowName: "fluid-seed-fork" } as never, steps.step as never);
 		const repo = forkRepoName(spec.userId);

@@ -67,7 +67,7 @@ describe("an auto upgrade", () => {
 	async function gateAndLand(applied: Record<string, unknown>) {
 		const setUp = setup(repo);
 		await runsStub(setUp.t.env, runId).create({ id: runId, kind: "upgrade", repo, status: "running" });
-		const upgrade = Object.assign(new UpgradeWorkflow(), { env: setUp.t.env, ctx: setUp.workflows.ctx });
+		const upgrade = new UpgradeWorkflow(setUp.workflows.ctx, setUp.t.env);
 		const { step, names } = stepsWith({ gate: passed, apply: applied });
 		const params = { runId, repo, tag: TAG, safety: false, graceUntil: null };
 		const outcome = await (upgrade as unknown as { gateAndLand: (s: unknown, p: unknown, i: unknown) => Promise<unknown> }).gateAndLand(step, params, { branch: `upgrade/${TAG}`, commit, autoUpgrade: true, prefix: "", tiersPrefix: "", extra: {} });
@@ -130,7 +130,7 @@ describe("a yellow rollback", () => {
 	async function fail(rolledBack: Record<string, unknown>) {
 		const setUp = setup(repo);
 		await runsStub(setUp.t.env, runId).create({ id: runId, kind: "yellow", repo, status: "running" });
-		const workflow = Object.assign(new YellowWorkflow(), { env: setUp.t.env, ctx: setUp.workflows.ctx });
+		const workflow = new YellowWorkflow(setUp.workflows.ctx, setUp.t.env);
 		const { step, names } = stepsWith({ "roll back": rolledBack });
 		await (workflow as unknown as { fail: (s: unknown, p: unknown, r: unknown, b: unknown) => Promise<unknown> }).fail(step, params, errorResult(params, "a scenario failed"), null);
 		return { ...setUp, names };
