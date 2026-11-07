@@ -437,8 +437,8 @@ describe("the lines around the fleet and the scoreboard", () => {
 		expect(limit).toBe("Renaming cannot stop a bug that public fields alone can reach, as attack B shows.");
 	});
 
-	it("says what the copies renamed from the recording, each count once, when they differ", () => {
-		const fewer = changed((d) => Object.assign(d.forks[2], { renamed: 30 }));
+	it("says what the copies renamed from the recording, each count once and the largest first, when they differ", () => {
+		const fewer = changed((d) => Object.assign(d.forks[0], { renamed: 30 }));
 		expect(introLines(fewer)[0]).toBe("Polymorphic installation renames the internal names on upstream's list with a secret seed for each fork. In this run each copy renamed 31 or 30 of the 31 names on the list.");
 	});
 
