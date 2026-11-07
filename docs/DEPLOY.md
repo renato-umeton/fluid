@@ -94,7 +94,7 @@ umask 077
 
 The first deploy of a new Worker fails until its secrets exist, so pass the file to the first deploy. Later deploys keep the secrets.
 
-One more secret is optional. `POLYMORPH_SECRET` turns on polymorphic installation: each fork runs its own copy of upstream's code with upstream's internal names renamed, seeded by this secret (see `docs/POLYMORPH.md`). It must be at least 16 characters. It is deliberately not declared in `platform/cloudflare.config.ts`, because a declared secret must exist at deploy time, and Fluid runs without this one. To turn it on, add it to the same file:
+One more secret is optional. `POLYMORPH_SECRET` turns on polymorphic installation: each fork runs its own renamed copy of upstream's code, and this secret seeds the new names (see `docs/POLYMORPH.md`). It must be at least 16 characters. It is deliberately not declared in `platform/cloudflare.config.ts`, because a declared secret must exist at deploy time, and Fluid runs without this one. To turn it on, add it to the same file:
 
 ```sh
 umask 077
@@ -105,7 +105,7 @@ Then pass the file to the next deploy (step 7). The deploy uploads every secret 
 
 Each rotation is a check mode gate that asks every probe twice, and the schedule runs one per fork every 6 hours. A 200-fork fleet adds 800 gate runs a day.
 
-Without `POLYMORPH_SECRET`, or with one shorter than 16 characters, every fork runs plain: no renamed copies, no tripwire scan, and no rotation. The `fluid-rotate` schedule still starts an instance every 6 hours, which records a rotate run marked `cancelled` ("Skipped: POLYMORPH_SECRET is not set or is shorter than 16 characters"), and `POST /api/admin/fleet/rotate` starts runs that skip the same way. A secret that is set but too short also logs one warning per isolate.
+Without `POLYMORPH_SECRET`, or with one shorter than 16 characters, every fork runs plain: no renamed copies, no tripwire scan, and no rotation. The `fluid-rotate` schedule still starts an instance every 6 hours, which records a rotate run marked `cancelled` ("Skipped: POLYMORPH_SECRET is not set or is shorter than 16 characters"). `POST /api/admin/fleet/rotate` still starts runs, which skip the same way. A secret that is set but too short also logs one warning per isolate.
 
 ## 7. Deploy
 
@@ -115,7 +115,7 @@ FLUID_PUBLIC_ORIGIN=https://fluid.<your-subdomain>.workers.dev \
 npx cf deploy --secrets-file ~/.config/fluid/secrets.env
 ```
 
-`npm run content` regenerates the bundled stock and synthetic content in `src/generated/`. `FLUID_PUBLIC_ORIGIN` becomes the Worker's `PUBLIC_ORIGIN` text binding: the URL users reach, where the yellow soak's browser checks load the app. Set it on every deploy (the value is part of the deployed configuration). Without it the browser tier reports `unavailable` and the API tiers decide alone. The deploy creates the Worker `fluid`, its four Durable Object classes (`UserLedger`, `Fleet`, `Runs`, `Quota`), its thirteen Workflows (`fluid-gate`, `fluid-customize`, `fluid-contest`, `fluid-repair`, `fluid-upgrade`, `fluid-release`, `fluid-seed-fleet`, `fluid-seed-fork`, `fluid-harvest`, `fluid-yellow`, `fluid-import`, `fluid-inbox-cleanup`, and `fluid-rotate`, which also runs on a schedule every 6 hours, `0 */6 * * *`), the Browser Rendering binding `BROWSER` for the yellow soak's browser checks, and the queue consumer. It prints the Worker URL. A new version can take a few seconds to reach every request.
+`npm run content` regenerates the bundled stock and synthetic content in `src/generated/`. `FLUID_PUBLIC_ORIGIN` becomes the Worker's `PUBLIC_ORIGIN` text binding: the URL users reach, where the yellow soak's browser checks load the app. Set it on every deploy (the value is part of the deployed configuration). Without it the browser tier reports `unavailable` and the API tiers decide alone. The deploy creates the Worker `fluid`, its four Durable Object classes (`UserLedger`, `Fleet`, `Runs`, `Quota`), its thirteen Workflows (`fluid-gate`, `fluid-customize`, `fluid-contest`, `fluid-repair`, `fluid-upgrade`, `fluid-release`, `fluid-seed-fleet`, `fluid-seed-fork`, `fluid-harvest`, `fluid-yellow`, `fluid-import`, `fluid-inbox-cleanup`, and `fluid-rotate`), the Browser Rendering binding `BROWSER` for the yellow soak's browser checks, and the queue consumer. `fluid-rotate` also runs on a schedule, every 6 hours (`0 */6 * * *`). The deploy prints the Worker URL. A new version can take a few seconds to reach every request.
 
 Check it:
 
@@ -249,6 +249,7 @@ Notes:
 - Pushes made from local dev also reach a deployed consumer on the same account. Purge `fluid-events` (step 5) before a first deploy that follows local testing.
 - The UI works with no backend at all: serve `platform/public/` and open `/?mock=1`.
 - The yellow soak's browser checks need a public https URL that Browser Rendering can reach, so under `cf dev` the browser tier reports `unavailable` and the API tiers decide.
+- Polymorphic installation stays off under `cf dev`. The dev server passes only the secrets that `platform/cloudflare.config.ts` declares to the Worker, and `POLYMORPH_SECRET` is not declared. To see it locally, run the experiment with `npm run polymorph:demo` (`docs/POLYMORPH.md`, "Run the experiment").
 
 Tests:
 
