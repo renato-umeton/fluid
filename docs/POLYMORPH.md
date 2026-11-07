@@ -203,7 +203,7 @@ npm run polymorph:record   # writes public/data/polymorph-demo.json after checki
 npm test                   # the regular suite runs the same 20-fork test and checks the recording against it
 ```
 
-Both scripts run `npm run content` first. A 20-fork run takes about 15 seconds. A copy's seed names the fork's commit, which holds the stock files the platform bundles. So a change to any of them, even `stock/README.md`, gives every copy a new fingerprint, and the regular suite fails until the run is recorded again. The view at `/?mock=1#polymorph` replays the recording (see [UI.md](UI.md#polymorphic-installation)).
+Both scripts run `npm run content` first. A 20-fork run takes about 15 seconds. A copy's seed names the fork's commit, which holds the stock files the platform bundles. So a change to any of them, even `stock/README.md`, gives every copy a new fingerprint, and the regular suite fails until the run is recorded again. The content step reads stock from `git HEAD`. So to commit such a change with its recording, record first with `FLUID_CONTENT_SOURCE=worktree npm run polymorph:record`, then commit both. The view at `/?mock=1#polymorph` replays the recording (see [UI.md](UI.md#polymorphic-installation)).
 
 ## Measured results
 
