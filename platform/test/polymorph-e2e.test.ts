@@ -68,6 +68,10 @@ const RELEASE = zeroDayRelease(PUBLISHED, ZERO_DAY_TAG);
 const RELEASE_LABEL = `${ZERO_DAY_TAG}, a test fixture with two planted bugs`;
 /** Upstream's list at the fixture release. */
 const LIST = parsePolymorphList(RELEASE[POLYMORPH_LIST_PATH]!);
+/** The requests the fixture release's suites send at one sample each: one per tier 1 and tier 2 probe that has a request. */
+const PROBE_REQUESTS = ["tests/invariants/manifest.json", "tests/functional/manifest.json"]
+	.flatMap((path) => (JSON.parse(RELEASE[path]!) as { probes: Record<string, unknown>[] }).probes)
+	.filter((probe) => "request" in probe).length;
 /** The internal flag that bug A lets a request set, by its name in upstream's source. */
 const FLAG = "researchNeedsAttestation";
 /** user-01, user-02, ...: a fork's repo is named after its user (src/lib/names.ts). */
@@ -300,6 +304,8 @@ async function install(): Promise<Fork[]> {
 		const check = gate.polymorph;
 		if (!check || check.fingerprint !== installed.fingerprint || check.namesHash !== installed.namesHash) throw new Error(`${repo}: the equivalence check did not check the installed copy ${installed.fingerprint}`);
 		expect(gate.failures, `${repo}: failures of the installed copy's gate`).toEqual([]);
+		// The check sent every probe request to both the plain fork and the copy, so the recording's probes count them all.
+		expect(check.compared, `${repo}: probe requests compared`).toBe(PROBE_REQUESTS);
 		const fork: Fork = {
 			repo,
 			installed: { epoch: installed.epoch, sha: installed.sha, fingerprint: installed.fingerprint, namesHash: installed.namesHash, names: check.renamed },

@@ -13,6 +13,10 @@ import { BUILD_CARD, LISTED, POLYMORPH_TEST_SECRET, PUBLISHED, REFLECTIVE, patch
 
 const SLOW_MS = 120_000;
 const RENAMED = /\$[0-9a-z]{8}/;
+/** The requests stock's suites send at one sample each: one per tier 1 and tier 2 probe that has a request. */
+const PROBE_REQUESTS = ["tests/invariants/manifest.json", "tests/functional/manifest.json"]
+	.flatMap((path) => (JSON.parse(PUBLISHED[path]!) as { probes: Record<string, unknown>[] }).probes)
+	.filter((probe) => "request" in probe).length;
 
 // Throws an error naming the decision's keys, several of them listed names, for one question its own test asks.
 const WHICH = "Which decision fields are set?";
@@ -49,10 +53,9 @@ describe("runGate with a renamed copy", () => {
 			const print = await fingerprint(await deriveSeed(POLYMORPH_TEST_SECRET, "user-1", p.heads["user-1"]!, 1));
 			expect(gate.failures).toEqual([]);
 			expect(gate.passed).toBe(true);
-			expect(gate.polymorph).toEqual({ epoch: 1, fingerprint: print, namesHash: await namesHash(LISTED), renamed: [...LISTED].sort(), compared: expect.any(Number), mismatches: 0, skipped: [] });
-			const compared = gate.polymorph!.compared;
-			expect(compared).toBeGreaterThan(0);
-			expect(gate.tiers.invariant!.probes).toContainEqual({ id: "polymorph-equivalence", passed: true, samples: compared, passedSamples: compared });
+			// Every probe request went to both the plain fork and the copy.
+			expect(gate.polymorph).toEqual({ epoch: 1, fingerprint: print, namesHash: await namesHash(LISTED), renamed: [...LISTED].sort(), compared: PROBE_REQUESTS, mismatches: 0, skipped: [] });
+			expect(gate.tiers.invariant!.probes).toContainEqual({ id: "polymorph-equivalence", passed: true, samples: PROBE_REQUESTS, passedSamples: PROBE_REQUESTS });
 			// The copy ran in the gate's own variant, next to the plain fork's.
 			expect(p.loader.built).toContainEqual(expect.stringMatching(new RegExp(`^user-1:${p.heads["user-1"]}:gate-[0-9a-f]{8}:m1\\.${print}\\.${await namesHash(LISTED)}$`)));
 			expect(p.loader.built).toContainEqual(expect.stringMatching(new RegExp(`^user-1:${p.heads["user-1"]}:gate-[0-9a-f]{8}$`)));
