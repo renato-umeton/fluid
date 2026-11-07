@@ -17,7 +17,7 @@
 // secret is fixed, so every run makes the same copies.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { serveAsk, TRIPWIRE_REFUSAL, type AskDeps } from "../src/api/ask.ts";
 import { HttpError } from "../src/api/http.ts";
 import type { MorphState } from "../src/durable/fleet.ts";
@@ -250,20 +250,28 @@ async function send(sends: Send[]): Promise<{ outcomes: Outcome[]; rotations: Ro
 	const rowsBefore = new Map<string, number>();
 	for (const repo of targets) rowsBefore.set(repo, await ledgerRows(repo));
 	const outcomes: Outcome[] = [];
-	for (const [i, { repo, request }] of sends.entries()) {
-		let platform: Outcome["platform"];
-		let hit: string | null = null;
-		try {
-			const served = await serveAsk(deps, { repo, ref: "main", request, useModel: false, userId: userIdFromForkRepo(repo)!, fallback: true });
-			// Only the fork's stored copy answers: neither the plain fork nor stock.
-			expect(served.fork, `${repo}: what answered`).toMatchObject({ repo, variant: p.t.fleet.morphState(repo)!.fingerprint });
-			platform = compromised(served) ? "compromised" : "answered";
-		} catch (error) {
-			if (!(error instanceof HttpError && error.status === 403 && error.message === TRIPWIRE_REFUSAL)) throw error;
-			platform = "refused";
-			hit = trippedBy(repo, request);
+	// The live path starts one rotation per copy in each ten-minute window (copyKey), so the clock stands still while
+	// the requests go out: a batch that ran across a window's end would otherwise start a second rotation of a copy.
+	const now = Date.now();
+	const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+	try {
+		for (const [i, { repo, request }] of sends.entries()) {
+			let platform: Outcome["platform"];
+			let hit: string | null = null;
+			try {
+				const served = await serveAsk(deps, { repo, ref: "main", request, useModel: false, userId: userIdFromForkRepo(repo)!, fallback: true });
+				// Only the fork's stored copy answers: neither the plain fork nor stock.
+				expect(served.fork, `${repo}: what answered`).toMatchObject({ repo, variant: p.t.fleet.morphState(repo)!.fingerprint });
+				platform = compromised(served) ? "compromised" : "answered";
+			} catch (error) {
+				if (!(error instanceof HttpError && error.status === 403 && error.message === TRIPWIRE_REFUSAL)) throw error;
+				platform = "refused";
+				hit = trippedBy(repo, request);
+			}
+			outcomes.push({ repo, ...bare[i]!, platform, hit });
 		}
-		outcomes.push({ repo, ...bare[i]!, platform, hit });
+	} finally {
+		clock.mockRestore();
 	}
 	// A refused request writes no ledger row; an answered one writes one.
 	for (const repo of targets) {
