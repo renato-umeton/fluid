@@ -5,16 +5,35 @@
 // room for a loaded machine.
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import config from "../cloudflare.config.ts";
+import { seedPlan } from "../src/fleet/seed-catalog.ts";
 import worker from "../src/index.ts";
 import * as entry from "../src/index.ts";
+import { forkRepoName } from "../src/lib/names.ts";
 import { runsStub } from "../src/stubs.ts";
 import { GATE_STEP, rotationId, startRotation, type RotateParams } from "../src/workflows/common.ts";
+import { SeedForkWorkflow } from "../src/workflows/fleet.ts";
 import { GateWorkflow } from "../src/workflows/gate.ts";
 import { RotateWorkflow } from "../src/workflows/rotate.ts";
 import { FAN_OUT } from "../src/workflows/upgrade.ts";
-import { apiEnv, post } from "./helpers/api-env.ts";
+import { apiEnv, cookieFor, post } from "./helpers/api-env.ts";
 import { POLYMORPH_TEST_SECRET, PUBLISHED, REFLECTIVE, TAG, polymorphPlatform, type PolymorphPlatform } from "./helpers/polymorph-platform.ts";
 import { fakeSteps, fakeWorkflows } from "./helpers/workflows.ts";
+
+// Provisioning forks stock and pushes over git, which these tests do not run. A stand-in claims the fork
+// and pins it in Fleet as provisionFork does, so what the route and the seed workflow do after it shows.
+vi.mock("../src/forks/provision.ts", async (importOriginal) => {
+	const real = await importOriginal<typeof import("../src/forks/provision.ts")>();
+	return {
+		...real,
+		provisionFork: async (env: Env, input: { userId: string; persona: { id: string }; seeded?: boolean; resume?: boolean; stockTag?: string; maxTotal?: number }) => {
+			const repo = `user-${input.userId}`;
+			const fleet = real.fleetStub(env);
+			const claim = await fleet.claimProvisioning({ repo, userId: input.userId, persona: input.persona.id, pinnedTag: input.stockTag ?? "v1.0.0", seeded: input.seeded, maxTotal: input.maxTotal, resume: input.resume });
+			if (claim.outcome === "claimed") await fleet.update(repo, { status: "pinned" });
+			return { repo, status: (await fleet.get(repo))?.status ?? null };
+		},
+	};
+});
 
 const SLOW_MS = 120_000;
 const NO_MODEL = {
@@ -271,6 +290,46 @@ describe("the gate workflow after a merge mode pass", () => {
 		},
 		SLOW_MS,
 	);
+});
+
+describe("a new fork", () => {
+	/** Records each rotation created, with the fork's status at that moment. */
+	function watched() {
+		const statuses: string[] = [];
+		const workflows = fakeWorkflows(NO_MODEL, {
+			onCreate: (instance) => {
+				if (instance.workflow === "RotateWorkflow") statuses.push(p.t.fleet.get((instance.params as RotateParams).repo!)!.status);
+			},
+		});
+		return { workflows, statuses };
+	}
+
+	it("installs as a renamed copy when POST /api/forks provisions it: one install rotation, started once the fork is pinned", async () => {
+		const { workflows, statuses } = watched();
+		const cookie = await cookieFor({ userId: "s-new1" });
+		expect((await worker.fetch(post("/api/forks", { cookie }), p.t.env, workflows.ctx)).status).toBe(201);
+		const id = rotationId("user-s-new1", "install");
+		expect(workflows.of("RotateWorkflow")).toEqual([{ workflow: "RotateWorkflow", id, params: { repo: "user-s-new1", reason: "install", runId: `run_${id}` } }]);
+		expect(statuses).toEqual(["pinned"]);
+		// Asking again for the fork the session already has provisions nothing, and starts nothing.
+		expect((await worker.fetch(post("/api/forks", { cookie }), p.t.env, workflows.ctx)).status).toBe(201);
+		expect(workflows.of("RotateWorkflow")).toHaveLength(1);
+	});
+
+	it("installs as a renamed copy when the seed workflow has provisioned it and pinned it", async () => {
+		const { workflows, statuses } = watched();
+		// A seeded fork with no customization: provisioned, then pinned.
+		const spec = seedPlan("poly", 40).find((candidate) => candidate.kinds.join() === "none");
+		if (!spec) throw new Error("the seed plan has no fork without customizations");
+		const seed = Object.assign(new SeedForkWorkflow(), { env: p.t.env, ctx: workflows.ctx });
+		const steps = fakeSteps();
+		await seed.run({ payload: { batch: "poly", index: spec.index, count: 40, stockTag: TAG }, timestamp: new Date(), instanceId: `seed-poly-${spec.index}`, workflowName: "fluid-seed-fork" } as never, steps.step as never);
+		const repo = forkRepoName(spec.userId);
+		const id = rotationId(repo, "install");
+		expect(workflows.of("RotateWorkflow")).toEqual([{ workflow: "RotateWorkflow", id, params: { repo, reason: "install", runId: `run_${id}` } }]);
+		expect(statuses).toEqual(["pinned"]);
+		expect(steps.names()).toEqual(["provision", "ready", "rotate the new fork"]);
+	});
 });
 
 describe("fluid-rotate in the platform's config", () => {

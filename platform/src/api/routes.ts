@@ -32,7 +32,7 @@ import { headOf, isNotFound, openRepo, readTextFile } from "../runtime/repo-file
 import { parseUiPreferences, UI_PREFERENCES_PATH } from "../ui/preferences.ts";
 import { aggregateCharts, CHART_LIMITS } from "../ui/charts.ts";
 import { DEMO_OVERLAY, demoReleaseFiles, keepFloorTightening } from "../stock/releases.ts";
-import { appExports, ensureRun, mainBeforePush, recordMainBeforePush, repoRemote, startGateInstance, startYellowRun } from "../workflows/common.ts";
+import { appExports, ensureRun, INSTALL_KEY, mainBeforePush, recordMainBeforePush, repoRemote, startGateInstance, startRotation, startYellowRun } from "../workflows/common.ts";
 import { rerunTargets, upgradeTargets } from "../workflows/upgrade.ts";
 import { decodeParam, HttpError, json, readJson, requireJsonPost, requireString } from "./http.ts";
 import { askRef, parsePreferences } from "./validate.ts";
@@ -256,8 +256,12 @@ route("POST", "/api/forks", async (rc) => {
 		await takeClientQuota(rc, "fork", LIMITS.forksPerClientPerHour, 3600);
 		await takeQuota(rc.env, "global", "fork", LIMITS.forksGlobalPerHour, 3600);
 	}
+	// None yet, a failed attempt, or an abandoned claim: this request provisions the fork.
+	const provisions = !existing || existing.status === "failed" || existing.status === "provisioning";
 	const info = await provisionFork(rc.env, { userId: session.userId, persona, preferences, maxTotal: LIMITS.forksTotal });
 	forkInfoCache.delete(info.repo);
+	// A new fork installs as a renamed copy: its first rotation verifies one and stores it.
+	if (provisions && info.status === "pinned") await startRotation(rc.env, appExports(rc.ctx).RotateWorkflow, { repo: info.repo, reason: "install", key: INSTALL_KEY });
 	return json(info, 201);
 });
 

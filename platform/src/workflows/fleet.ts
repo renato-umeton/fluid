@@ -23,7 +23,7 @@ import { isReleaseTag } from "../gate/pins.ts";
 import { hasDemoTightening, pinnedTagOf } from "../stock/releases.ts";
 import { fleetStub } from "../stubs.ts";
 import { requestFor, seedChange, seedPlan, seedTarget, type SeedKind } from "../fleet/seed-catalog.ts";
-import { appExports, ensureRun, errorText, GIT_STEP, repoRemote, runLog, setFleet, startGateInstance, startInstance, guarded, steps, type HarvestParams, type SeedFleetParams, type SeedForkParams } from "./common.ts";
+import { appExports, ensureRun, errorText, GIT_STEP, INSTALL_KEY, repoRemote, runLog, setFleet, startGateInstance, startInstance, startRotation, guarded, steps, type HarvestParams, type SeedFleetParams, type SeedForkParams } from "./common.ts";
 import { FAN_OUT } from "./upgrade.ts";
 
 export const HARVEST_KEY = "harvest";
@@ -131,6 +131,13 @@ export class SeedForkWorkflow extends WorkflowEntrypoint<Env, SeedForkParams> {
 		if (work) {
 			await step.do("gate the work branch", async () => {
 				await startGateInstance(appExports(this.ctx).GateWorkflow, gateInstanceId(repo, work.branch, work.commit), { repo, branch: work.branch, commit: work.commit, mode: "merge", source: "seed" });
+				return true;
+			});
+		} else {
+			// Pinned with its customizations on main: it installs as a renamed copy. A fork whose change is
+			// still gating would only skip; the schedule rotates it.
+			await step.do("rotate the new fork", async () => {
+				await startRotation(this.env, appExports(this.ctx).RotateWorkflow, { repo, reason: "install", key: INSTALL_KEY });
 				return true;
 			});
 		}

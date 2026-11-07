@@ -310,6 +310,9 @@ export function copyKey(copy: { epoch: number; fingerprint: string }): string {
 	return `c${copy.epoch}-${copy.fingerprint}`;
 }
 
+/** The key of a new fork's first rotation, which installs it as a renamed copy: one per fork. */
+export const INSTALL_KEY = "install";
+
 /** The key of a commit that landed on main: one rotation per landing, however often its gate run is replayed. */
 export function landedKey(commit: string): string {
 	return `l${commit.slice(0, 16)}`;
