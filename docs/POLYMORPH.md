@@ -56,7 +56,7 @@ A built copy is cached in the platform isolate under its own isolate id, so each
 repo:sha[:variant][:m<epoch>.<fingerprint>.<namesHash>][:llm]
 ```
 
-Without a copy, the id has no `:m<epoch>.<fingerprint>.<namesHash>` part.
+Without a copy, the id has no `:m<epoch>.<fingerprint>.<namesHash>` part. The `variant` part gives a gate run (`gate-<nonce>`), or a check of a candidate change, an isolate of its own. The copy's random variant, which answers show, is a separate value and never part of an isolate id.
 
 ### What a copy skips, and why
 
