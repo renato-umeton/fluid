@@ -516,6 +516,8 @@ describe("serveAsk when main's verified copy does not load", () => {
 			]);
 			expect(await ledgerOf(repo)).toEqual([]);
 			expect(rotationsOf(repo).map((instance) => (instance.params as { reason: string }).reason)).toEqual(["mismatch", "tripwire"]);
+			// Nothing was asked: an isolate starts on the first call into it.
+			expect(p.loader.built.filter((id) => id.startsWith(`${repo}:`))).toEqual([]);
 			// A request that names none of them still gets the plain fork's answer.
 			expect((await ask(repo, requests.administrative)).fork).toEqual({ repo, ref: "main", commit: p.heads[repo] });
 		},
