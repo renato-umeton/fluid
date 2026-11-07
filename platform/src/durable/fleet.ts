@@ -90,7 +90,9 @@ export interface MorphState {
 	/**
 	 * The listed names the verified copy renamed: what namesHash hashes, and as
 	 * public as upstream's list. The live path scans requests with them when the
-	 * copy no longer builds. Empty for a copy stored before Fleet kept them.
+	 * copy no longer builds, until a rotation clears the copy or replaces it.
+	 * Empty for a copy stored before Fleet kept them, so such a copy, once
+	 * stale, guards nothing.
 	 */
 	names: string[];
 	/**
