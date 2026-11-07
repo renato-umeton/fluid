@@ -79,7 +79,7 @@ npx cf queues purge status "$QUEUE_ID"
 The Worker needs two secrets:
 
 - `SESSION_SECRET` signs the demo session cookies.
-- `ADMIN_TOKEN` guards the admin routes (publish, release, seed, harvest). Clients send it as the `x-fluid-admin` header.
+- `ADMIN_TOKEN` guards the admin routes (publish, release, seed, harvest, rotate). Clients send it as the `x-fluid-admin` header.
 
 Keep the file **outside the repository**:
 
@@ -94,6 +94,17 @@ umask 077
 
 The first deploy of a new Worker fails until its secrets exist, so pass the file to the first deploy. Later deploys keep the secrets.
 
+One more secret is optional. `POLYMORPH_SECRET` turns on polymorphic installation: each fork runs its own copy of upstream's code with upstream's internal names renamed, seeded by this secret (see `docs/POLYMORPH.md`). It must be at least 16 characters. It is deliberately not declared in `platform/cloudflare.config.ts`, because a declared secret must exist at deploy time, and Fluid runs without this one. To turn it on, add it to the same file:
+
+```sh
+umask 077
+echo "POLYMORPH_SECRET=$(openssl rand -hex 32)" >> ~/.config/fluid/secrets.env
+```
+
+Then pass the file to the next deploy (step 7). The deploy uploads every secret in the file, declared or not, and later deploys keep it. Each fork gets its first renamed copy at its next rotation. To start one for every fork at once, `POST /api/admin/fleet/rotate` with body `{}` and the admin header.
+
+Without `POLYMORPH_SECRET`, or with one shorter than 16 characters, every fork runs plain: no renamed copies, no tripwire scan, and no rotation. The `fluid-rotate` schedule still starts an instance every 6 hours, which records a rotate run marked `cancelled` ("Skipped: POLYMORPH_SECRET is not set or is shorter than 16 characters"), and `POST /api/admin/fleet/rotate` starts runs that skip the same way. A secret that is set but too short also logs one warning per isolate.
+
 ## 7. Deploy
 
 ```sh
@@ -102,7 +113,7 @@ FLUID_PUBLIC_ORIGIN=https://fluid.<your-subdomain>.workers.dev \
 npx cf deploy --secrets-file ~/.config/fluid/secrets.env
 ```
 
-`npm run content` regenerates the bundled stock and synthetic content in `src/generated/`. `FLUID_PUBLIC_ORIGIN` becomes the Worker's `PUBLIC_ORIGIN` text binding: the URL users reach, where the yellow soak's browser checks load the app. Set it on every deploy (the value is part of the deployed configuration). Without it the browser tier reports `unavailable` and the API tiers decide alone. The deploy creates the Worker `fluid`, its four Durable Object classes (`UserLedger`, `Fleet`, `Runs`, `Quota`), its twelve Workflows (`fluid-gate`, `fluid-customize`, `fluid-contest`, `fluid-repair`, `fluid-upgrade`, `fluid-release`, `fluid-seed-fleet`, `fluid-seed-fork`, `fluid-harvest`, `fluid-yellow`, `fluid-import`, `fluid-inbox-cleanup`), the Browser Rendering binding `BROWSER` for the yellow soak's browser checks, and the queue consumer. It prints the Worker URL. A new version can take a few seconds to reach every request.
+`npm run content` regenerates the bundled stock and synthetic content in `src/generated/`. `FLUID_PUBLIC_ORIGIN` becomes the Worker's `PUBLIC_ORIGIN` text binding: the URL users reach, where the yellow soak's browser checks load the app. Set it on every deploy (the value is part of the deployed configuration). Without it the browser tier reports `unavailable` and the API tiers decide alone. The deploy creates the Worker `fluid`, its four Durable Object classes (`UserLedger`, `Fleet`, `Runs`, `Quota`), its thirteen Workflows (`fluid-gate`, `fluid-customize`, `fluid-contest`, `fluid-repair`, `fluid-upgrade`, `fluid-release`, `fluid-seed-fleet`, `fluid-seed-fork`, `fluid-harvest`, `fluid-yellow`, `fluid-import`, `fluid-inbox-cleanup`, and `fluid-rotate`, which also runs on a schedule every 6 hours, `0 */6 * * *`), the Browser Rendering binding `BROWSER` for the yellow soak's browser checks, and the queue consumer. It prints the Worker URL. A new version can take a few seconds to reach every request.
 
 Check it:
 
@@ -231,8 +242,8 @@ npx cf queues delete "$QUEUE_ID"
 # 2. Worker (its Durable Objects go with it)
 npx cf workers delete fluid
 
-# 3. Workflows
-for wf in fluid-gate fluid-customize fluid-repair fluid-upgrade fluid-release fluid-seed-fleet fluid-seed-fork fluid-harvest fluid-yellow; do
+# 3. Workflows (all thirteen)
+for wf in fluid-gate fluid-customize fluid-contest fluid-repair fluid-upgrade fluid-release fluid-seed-fleet fluid-seed-fork fluid-harvest fluid-yellow fluid-import fluid-inbox-cleanup fluid-rotate; do
   npx cf workflows delete "$wf"
 done
 
